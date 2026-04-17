@@ -34,9 +34,9 @@ class DeletionStatus(str, enum.Enum):
 
 
 class InterventionType(str, enum.Enum):
-    crisis = "crisis"      # 系统硬底线触发的三级接管
-    redline = "redline"    # 家长红线触发的三级接管
-    guided = "guided"      # 二级注入提醒后的回复
+    crisis = "crisis"  # 系统硬底线触发的三级接管
+    redline = "redline"  # 家长红线触发的三级接管
+    guided = "guided"  # 二级注入提醒后的回复
 
 
 class Gender(str, enum.Enum):
@@ -51,6 +51,6 @@ class DevicePlatform(str, enum.Enum):
 
 
 class DailyStatus(str, enum.Enum):
-    stable = "stable"          # 平稳：无明显风险信号
-    attention = "attention"    # 关注：出现需留意的观察
-    alert = "alert"            # 警示：触发危机/红线或连续高分维度
+    stable = "stable"  # 平稳：无明显风险信号
+    attention = "attention"  # 关注：出现需留意的观察
+    alert = "alert"  # 警示：触发危机/红线或连续高分维度
