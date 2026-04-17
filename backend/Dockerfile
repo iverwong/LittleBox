@@ -12,7 +12,8 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 COPY pyproject.toml .
 
 # Install dependencies
-# TODO 生产环境换源: 改 UV_SYSTEM_PYPI_MIRROR 为 https://pypi.tuna.tsinghua.edu.cn/simple
+# TODO 国内开发用清华 PyPI 镜像加速。
+# 生产/海外部署请去掉 UV_SYSTEM_PYPI_MIRROR 或改为 https://pypi.org/simple
 RUN --mount=type=cache,target=/root/.cache/uv \
     UV_SYSTEM_PYPI_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple \
     uv pip install --system -r pyproject.toml
