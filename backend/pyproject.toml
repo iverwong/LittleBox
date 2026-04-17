@@ -10,6 +10,9 @@ dependencies = [
     "alembic",
     "redis[hiredis]",
     "pydantic-settings",
+    "langchain>=0.3.0",
+    "langgraph>=0.2.0",
+    "dashscope>=1.25.2",
 ]
 
 [project.optional-dependencies]
@@ -18,8 +21,11 @@ dev = [
     "pytest-asyncio",
     "httpx",
     "ruff",
-    "mypy",
+    "basedpyright",
 ]
+
+[tool.pytest.ini_options]
+markers = ["live: needs real LLM API"]
 
 [tool.ruff]
 line-length = 100
@@ -30,7 +36,3 @@ select = ["E", "F", "I", "N", "W"]
 [tool.basedpyright]
 typeCheckingMode = "standard"
 pythonVersion = "3.14"
-
-[tool.mypy]
-python_version = "3.14"
-strict = true

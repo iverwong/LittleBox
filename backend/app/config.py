@@ -1,3 +1,4 @@
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings
 
 
@@ -9,6 +10,7 @@ class Settings(BaseSettings):
     app_name: str = "LittleBox"
     debug: bool = False
     cors_origins: list[str] = ["*"]
+    dashscope_api_key: SecretStr = SecretStr("")
 
     model_config = {"env_prefix": "LB_", "env_file": ".env"}
 
