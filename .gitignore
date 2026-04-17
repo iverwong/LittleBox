@@ -69,3 +69,6 @@ htmlcov/
 
 # PostgreSQL data
 pgdata/
+
+# Claude Code
+.claude/
