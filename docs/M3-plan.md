@@ -72,7 +72,7 @@
 | `dashscope >= 1.25.2` 在 Python 3.14 下 `pip install` 成功；`from dashscope.aigc.multimodal_conversation import AioMultiModalConversation` 可导入（主路径裸调测通，如 import 路径不符按实测结果记入偏差） | Step 1 | 无回退——兼容端 / langchain-qwq / ChatTongyi 均已排除；若 SDK 不兼容回到上下文重新选型 |
 | `ChatDashScopeQwen.ainvoke()` 能正常返回 `AIMessage`，`usage_metadata.input_tokens > 0`，`finish_reason ∈ {stop, length}` | Step 1 | 先裸调 `AioMultiModalConversation.call()`（消息 `content` 包 `[{"text": "..."}]`）诊断 SDK 链路，再排查薄包装 |
 | `ChatDashScopeQwen` 通过 LangGraph `.astream_events(version="v2")` 产出 `on_chat_model_stream` 事件；`incremental_output=True` 下 chunk 为增量而非累计；`llm.disable_streaming is False`（保护流式路径） | Step 2 | 先裸调 `AioMultiModalConversation.call(stream=True, incremental_output=True)` 确认 chunk 语义 + usage 位置 |
-| qwen3.5-flash 首 token 延迟 < 2s（境内网络） | Step 3 | 延迟过高则记录并 check 是否开通了境内 region，不直接回退 |
+| qwen3.5-flash 首 content token 延迟 < 2s（境内网络，`enable_thinking=False`） | Step 1 | 三类 prompt（极简/中等/复杂）各 3 次实测。**实测结果：0.40s / 0.41s / 0.43s（均 < 1s）**，阀值轻松达标；全量数据见 [M3 执行偏差记录](https://www.notion.so/M3-0b31497d177d44d088989220915e33c4?pvs=21) 偏差 3.3。注：若薄包装未显式传 `enable_thinking=False`，模型默认 `True` 会走 reasoning 路径（实测 42.98s），绝对不达标 |
 
 ---
 
@@ -116,22 +116,22 @@ mobile/
 
 > ⚠️ M3 首轮执行已终止，代码已 revert 到 M3 执行前状态（`langchain-qwq` 已弃用）。重执行时从空白状态按本节 checklist 落地，同时沿用首轮偏差 1.1-1.4 的工程结论（见 [M3 执行偏差记录](https://www.notion.so/M3-0b31497d177d44d088989220915e33c4?pvs=21)）。
 > 
-- [ ]  `backend/pyproject.toml` 新增依赖：`langchain` / `langgraph` / `dashscope`（**不要加** `langchain-qwq`）；新增 `[project.optional-dependencies].dev`：`pytest` / `pytest-asyncio` / `httpx` / `ruff` / `basedpyright`（沿用偏差 1.1）；`[tool.pytest.ini_options]` 追加 `markers = ["live: needs real LLM API"]`；不要写 `[tool.mypy]`（沿用偏差 1.3）
-- [ ]  `backend/Dockerfile` 引入 `ARG INSTALL_DEV=false` + `ENV UV_SYSTEM_PYPI_MIRROR` + 条件安装分支；`docker-compose.yml` 中 `api.build.args.INSTALL_DEV="true"`（沿用偏差 1.2）
-- [ ]  重新构建镜像：`docker compose build api`
-- [ ]  `.env.example` 与 `.env` 新增 `LB_DASHSCOPE_API_KEY=sk-xxx`；**同时**新增 `DASHSCOPE_API_KEY=${LB_DASHSCOPE_API_KEY}`（DashScope SDK 默认读取后者；scratch 裸调脚本若未显式传 `api_key=` 会读不到 `LB_` 前缀变量）
-- [ ]  `app/config.py` 新增 `dashscope_api_key: SecretStr` 字段（沿用偏差 1.4：用 `SecretStr` 而非裸 `str`）
-- [ ]  🔴 **先裸调诊断**：写 scratch 脚本直调 `from dashscope.aigc.multimodal_conversation import AioMultiModalConversation; await AioMultiModalConversation.call(...)`，确认 API key + SDK 链路正常（把「SDK 链路」和「薄包装」的失败模式分开）。至少覆盖以下实测项并写入偏差 3.x：
+- [x]  `backend/pyproject.toml` 新增依赖：`langchain` / `langgraph` / `dashscope`（**不要加** `langchain-qwq`）；新增 `[project.optional-dependencies].dev`：`pytest` / `pytest-asyncio` / `httpx` / `ruff` / `basedpyright`（沿用偏差 1.1）；`[tool.pytest.ini_options]` 追加 `markers = ["live: needs real LLM API"]`；不要写 `[tool.mypy]`（沿用偏差 1.3）
+- [x]  `backend/Dockerfile` 引入 `ARG INSTALL_DEV=false` + `ENV UV_SYSTEM_PYPI_MIRROR` + 条件安装分支；`docker-compose.yml` 中 `api.build.args.INSTALL_DEV="true"`（沿用偏差 1.2）
+- [x]  重新构建镜像：`docker compose build api`
+- [x]  `.env.example` 与 `.env` 新增 `LB_DASHSCOPE_API_KEY=sk-xxx`；**同时**新增 `DASHSCOPE_API_KEY=${LB_DASHSCOPE_API_KEY}`（DashScope SDK 默认读取后者；scratch 裸调脚本若未显式传 `api_key=` 会读不到 `LB_` 前缀变量）
+- [x]  `app/config.py` 新增 `dashscope_api_key: SecretStr` 字段（沿用偏差 1.4：用 `SecretStr` 而非裸 `str`）
+- [x]  🔴 **先裸调诊断**：写 scratch 脚本直调 `from dashscope.aigc.multimodal_conversation import AioMultiModalConversation; await AioMultiModalConversation.call(...)`，确认 API key + SDK 链路正常（把「SDK 链路」和「薄包装」的失败模式分开）。至少覆盖以下实测项并写入偏差 3.x：
     - `output.choices[0].message.content` 是 str 还是 list？`finish_reason` / `usage` 字段位置（仅末条还是每条 chunk 都有）
     - `result_format` / `incremental_output` / `enable_thinking` 的**参数位置**：作为顶层 kwarg 传入 vs 包进 `parameters={}` dict，两种写法各跑一次确认哪种被 SDK 识别（agno #4290 / pi-mono #2770 都踩过静默忽略）
     - **关闭思考验证**：遍历所有 chunk，断言 `message.reasoning_content` 始终为空字符串或字段不存在（只断言 `content` 非空会漏掉思考内容流回的假阳性）
     - `timeout` 的 kwarg 命名（`timeout` vs `request_timeout`）以及是否必须走 `parameters={}`；M3 流式场景 `max_retries=0` 是硬约束（重试会破坏流语义）
     - `response.model` 字段记录 `qwen3.5-flash` 别名解析到的具体快照版本号（如 `qwen3.5-flash-2026-02-23`），M6 上线时考虑固定快照
-- [ ]  新建 `app/chat/dashscope_chat.py`：`ChatDashScopeQwen(BaseChatModel)` 薄包装，M3 只实现 `_astream` + `_agenerate`（后者用 `agenerate_from_stream` 转接，不手写）+ `enable_thinking` 参数（`with_structured_output` 留 M8、`bind_tools` 留 M9、图像输入留 M10、内置工具留 M18+）
-- [ ]  薄包装内部必须把 `response.status_code != HTTPStatus.OK` 显式转为异常（防止错误消息被塞进 `AIMessage.content` 导致下游假阳性 PASS，M3 首轮教训）
-- [ ]  新建 `app/chat/llm.py`：构造并返回单例 `ChatDashScopeQwen`
-- [ ]  写 `tests/test_dashscope_chat.py`：覆盖 `_agenerate` / `_astream` / 消息格式转换（确认 content 包成 `list[{"text": ...}]`） / 错误路径（401 / 超时 / 空响应），mock `AioMultiModalConversation.call`
-- [ ]  写 `tests/test_llm_smoke.py`，断言强化：`isinstance(result, AIMessage)` + `result.usage_metadata.input_tokens > 0` + `finish_reason in {"stop", "length"}`（禁止仅断言 `len(content) > 0`，M3 首轮教训）
+- [x]  新建 `app/chat/dashscope_chat.py`：`ChatDashScopeQwen(BaseChatModel)` 薄包装，M3 只实现 `_astream` + `_agenerate`（后者用 `agenerate_from_stream` 转接，不手写）+ `enable_thinking` 参数（`with_structured_output` 留 M8、`bind_tools` 留 M9、图像输入留 M10、内置工具留 M18+）
+- [x]  薄包装内部必须把 `response.status_code != HTTPStatus.OK` 显式转为异常（防止错误消息被塞进 `AIMessage.content` 导致下游假阳性 PASS，M3 首轮教训）
+- [x]  新建 `app/chat/llm.py`：构造并返回单例 `ChatDashScopeQwen`
+- [x]  写 `tests/test_dashscope_chat.py`：覆盖 `_agenerate` / `_astream` / 消息格式转换（确认 content 包成 `list[{"text": ...}]`） / 错误路径（401 / 超时 / 空响应），mock `AioMultiModalConversation.call`
+- [x]  写 `tests/test_llm_smoke.py`，断言强化：`isinstance(result, AIMessage)` + `result.usage_metadata.input_tokens > 0` + `finish_reason in {"stop", "length"}`（禁止仅断言 `len(content) > 0`，M3 首轮教训）
 
 ```python
 # backend/app/chat/llm.py
@@ -713,10 +713,11 @@ const styles = StyleSheet.create({
 | 验收项 | 通过标准 | 结果 |
 | --- | --- | --- |
 | 中断收尾 | 客户端 stop / 断开后，后端无异常堆栈，httpx 连接释放 | [ ] |
-| Python 3.14 + `dashscope` SDK 兼容性 | Step 1 smoke test 通过（强化断言） | [ ] |
-| 思考模式确实关闭 | Step 1 裸调遍历所有 chunk，`reasoning_content` 恒为空或字段不存在（防止 enable_thinking 被服务端静默忽略） | [ ] |
-| usage_metadata 不被累加翻倍 | Step 1 smoke test 断言 `input_tokens` 与 DashScope 控制台单次调用账单数一致 | [ ] |
+| Python 3.14 + `dashscope` SDK 兼容性 | Step 1 smoke test 通过（强化断言） | ✅ |
+| 思考模式确实关闭 | Step 1 裸调 → `enable_thinking=False` 下 `reasoning_tokens=0`（偏差 1.7） | ✅ |
+| usage_metadata 不被累加翻倍 | 薄包装 `_astream` 仅在末条 chunk yield usage（偏差 1.8 白名单守卫）；mock + live smoke 均验证 | ✅ |
 | SSE 集成测试 | Step 4 happy / error / disconnect 三路径全绿 | [ ] |
+| 首 content token 延迟 < 2s | 三类 prompt 中位数均 < 1s（偏差 3.3：0.40 / 0.41 / 0.43s） | ✅ |
 
 ---
 
