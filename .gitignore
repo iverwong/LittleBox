@@ -1,24 +1,3 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-/backend/lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
 # Virtual environments
 venv/
 ENV/
@@ -72,7 +51,7 @@ pgdata/
 # Claude Code
 .claude/
 
-# Backend-only Python paths (scoped to avoid matching mobile/ etc.)
+# Backend-only Python paths (scoped to /backend/ to avoid matching mobile/ etc.)
 /backend/__pycache__/
 /backend/build/
 /backend/develop-eggs/
