@@ -1,0 +1,85 @@
+import { useRef, useState } from 'react'
+import { Button, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+
+import { ChatSseHandle, openChatStream } from '../lib/sseClient'
+
+type Status = 'idle' | 'streaming' | 'done' | 'error'
+
+// 开发地址：Android 模拟器用 10.0.2.2，iOS 模拟器 / web 用 localhost，真机用电脑局域网 IP。
+// 生产走 EXPO_PUBLIC_API_BASE 环境变量；M7 清理时此常量一并删除。
+const API_BASE =
+	process.env.EXPO_PUBLIC_API_BASE ??
+	(Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://localhost:8000')
+
+export default function DevChat() {
+	const [input, setInput] = useState('')
+	const [reply, setReply] = useState('')
+	const [status, setStatus] = useState<Status>('idle')
+	const [errMsg, setErrMsg] = useState<string | null>(null)
+	const handleRef = useRef<ChatSseHandle | null>(null)
+
+	const send = () => {
+		if (!input.trim() || status === 'streaming') return
+		setReply('')
+		setErrMsg(null)
+		setStatus('streaming')
+
+		handleRef.current = openChatStream(API_BASE, input, {
+			onEvent: (e) => {
+				switch (e.type) {
+					case 'delta':
+						setReply((prev) => prev + e.content)
+						break
+					case 'end':
+						setStatus('done')
+						break
+					case 'error':
+						setErrMsg(e.message)
+						setStatus('error')
+						break
+				}
+			},
+			onTransportError: (err) => {
+				setErrMsg(String(err))
+				setStatus('error')
+			},
+		})
+	}
+
+	const stop = () => {
+		handleRef.current?.close()
+		setStatus('done')
+	}
+
+	return (
+		<View style={styles.container}>
+			<Text style={styles.title}>M3 Streaming Demo（M7 后删除）</Text>
+			<TextInput
+				style={styles.input}
+				value={input}
+				onChangeText={setInput}
+				placeholder="输入一条消息"
+				editable={status !== 'streaming'}
+			/>
+			<View style={styles.row}>
+				<Button title="发送" onPress={send} disabled={status === 'streaming'} />
+				<Button title="停止" onPress={stop} disabled={status !== 'streaming'} />
+			</View>
+			<Text style={styles.status}>状态：{status}</Text>
+			<ScrollView style={styles.replyBox}>
+				<Text>{reply}</Text>
+				{errMsg && <Text style={styles.err}>错误：{errMsg}</Text>}
+			</ScrollView>
+		</View>
+	)
+}
+
+const styles = StyleSheet.create({
+	container: { flex: 1, padding: 16, gap: 12 },
+	title: { fontSize: 16, fontWeight: '600' },
+	input: { borderWidth: 1, borderColor: '#ccc', borderRadius: 8, padding: 8 },
+	row: { flexDirection: 'row', gap: 12 },
+	status: { color: '#666' },
+	replyBox: { flex: 1, borderWidth: 1, borderColor: '#eee', borderRadius: 8, padding: 8 },
+	err: { color: 'red', marginTop: 8 },
+})
