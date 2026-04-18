@@ -7,6 +7,7 @@ from typing import Any
 
 import anyio
 from langchain_core.messages import HumanMessage
+from starlette.requests import ClientDisconnect
 
 from app.chat.graph import build_chat_graph
 
@@ -37,9 +38,10 @@ async def stream_chat(user_message: str, session_id: str) -> AsyncIterator[str]:
                 chunk = event["data"].get("chunk")
                 if chunk is not None and chunk.content:
                     yield _sse_pack("delta", content=chunk.content)
-    except (asyncio.CancelledError, anyio.ClientDisconnected):
-        # 客户端断开：不发 error 事件（连接已关，写入会回爆堆栈），
-        # 让 Starlette 按正常取消流程清理上游 httpx 连接。
+    except (asyncio.CancelledError, ClientDisconnect, anyio.BrokenResourceError):
+        # 客户端断开：asyncio.CancelledError 由 Starlette StreamingResponse 传播；
+        # BrokenResourceError 为防御性捕获（anyio 写失败时触发）。
+        # 不发 error 事件（连接已关，写入会回爆堆栈）。
         raise
     except Exception as exc:  # noqa: BLE001 —— SSE 错误透传需要兜住所有上游真实异常
         yield _sse_pack("error", message=str(exc), code=type(exc).__name__)
