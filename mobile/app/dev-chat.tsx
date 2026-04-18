@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { Button, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Button, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 
 import { ChatSseHandle, openChatStream } from '../lib/sseClient'
 
@@ -7,9 +7,7 @@ type Status = 'idle' | 'streaming' | 'done' | 'error'
 
 // 开发地址：Android 模拟器用 10.0.2.2，iOS 模拟器 / web 用 localhost，真机用电脑局域网 IP。
 // 生产走 EXPO_PUBLIC_API_BASE 环境变量；M7 清理时此常量一并删除。
-const API_BASE =
-	process.env.EXPO_PUBLIC_API_BASE ??
-	(Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://localhost:8000')
+const API_BASE = 'http://192.168.0.229:8000'
 
 export default function DevChat() {
 	const [input, setInput] = useState('')
@@ -40,7 +38,8 @@ export default function DevChat() {
 				}
 			},
 			onTransportError: (err) => {
-				setErrMsg(String(err))
+				const msg = (err as { message?: string }).message ?? (err instanceof Error ? err.message : String(err))
+				setErrMsg(msg)
 				setStatus('error')
 			},
 		})
@@ -67,7 +66,7 @@ export default function DevChat() {
 			</View>
 			<Text style={styles.status}>状态：{status}</Text>
 			<ScrollView style={styles.replyBox}>
-				<Text>{reply}</Text>
+				<Text style={styles.replyText}>{reply}</Text>
 				{errMsg && <Text style={styles.err}>错误：{errMsg}</Text>}
 			</ScrollView>
 		</View>
@@ -75,11 +74,12 @@ export default function DevChat() {
 }
 
 const styles = StyleSheet.create({
-	container: { flex: 1, padding: 16, gap: 12 },
-	title: { fontSize: 16, fontWeight: '600' },
-	input: { borderWidth: 1, borderColor: '#ccc', borderRadius: 8, padding: 8 },
+	container: { flex: 1, padding: 16, gap: 12, backgroundColor: '#ffffff' },
+	title: { fontSize: 18, fontWeight: '700', color: '#111111', marginBottom: 4 },
+	input: { borderWidth: 1, borderColor: '#333333', borderRadius: 8, padding: 12, fontSize: 16, color: '#111111', backgroundColor: '#ffffff' },
 	row: { flexDirection: 'row', gap: 12 },
-	status: { color: '#666' },
-	replyBox: { flex: 1, borderWidth: 1, borderColor: '#eee', borderRadius: 8, padding: 8 },
-	err: { color: 'red', marginTop: 8 },
+	status: { color: '#333333', fontSize: 14 },
+	replyBox: { flex: 1, borderWidth: 1, borderColor: '#cccccc', borderRadius: 8, padding: 12, backgroundColor: '#fafafa' },
+	replyText: { fontSize: 16, color: '#111111', lineHeight: 24 },
+	err: { color: '#cc0000', marginTop: 8, fontSize: 14 },
 })
