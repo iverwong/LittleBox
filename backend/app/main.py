@@ -1,7 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.config import settings
+
+from app.api.dev_chat import router as dev_chat_router
 from app.api.health import router as health_router
+from app.config import settings
 
 
 def create_app() -> FastAPI:
@@ -19,6 +21,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     application.include_router(health_router)
+    application.include_router(dev_chat_router)
     return application
 
 
