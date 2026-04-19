@@ -22,9 +22,12 @@ dev = [
     "httpx",
     "ruff",
     "basedpyright",
+    "fakeredis>=2.20.0",
 ]
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
 markers = ["live: needs real LLM API"]
 
 [tool.ruff]
