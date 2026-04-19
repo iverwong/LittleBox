@@ -18,8 +18,11 @@ target_metadata = Base.metadata
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
+    # 优先级：cfg 参数（测试场景） > settings.database_url（生产/开发）
+    url = config.get_main_option("sqlalchemy.url") or settings.database_url
+    config.set_main_option("sqlalchemy.url", url)
     context.configure(
-        url=settings.database_url,
+        url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -38,9 +41,9 @@ def do_run_migrations(connection):
 
 async def run_async_migrations():
     """Run migrations in 'online' mode with async engine."""
-    # Inject database_url from settings into config, so that
-    # async_engine_from_config can find it via the sqlalchemy.url key.
-    config.set_main_option("sqlalchemy.url", settings.database_url)
+    # 优先级：cfg 参数（测试场景） > settings.database_url（生产/开发）
+    url = config.get_main_option("sqlalchemy.url") or settings.database_url
+    config.set_main_option("sqlalchemy.url", url)
 
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
