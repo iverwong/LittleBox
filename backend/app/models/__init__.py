@@ -1,4 +1,4 @@
-from app.models.accounts import AuthToken, ChildProfile, DeviceToken, Family, User
+from app.models.accounts import AuthToken, ChildProfile, DeviceToken, Family, FamilyMember, User
 from app.models.audit import AuditRecord, RollingSummary
 from app.models.base import Base
 from app.models.chat import Message, Session
@@ -19,6 +19,7 @@ from app.models.parent import DailyReport, DataDeletionRequest, Notification
 __all__ = [
     "Base",
     "Family",
+    "FamilyMember",
     "User",
     "ChildProfile",
     "AuthToken",

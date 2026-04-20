@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, ForeignKey, String, Text, func, text
+from sqlalchemy import Boolean, Date, ForeignKey, Index, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -55,6 +55,24 @@ class User(BaseMixin, Base):
         String(50),
         nullable=True,
         comment="同意的隐私政策版本",
+    )
+    password_hash: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="argon2id 哈希，CLI / 登录时写入",
+    )
+    admin_note: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="运维备注，CLI --note 写入",
+    )
+
+    __table_args__ = (
+        Index(
+            "idx_users_phone_parent_active",
+            "phone",
+            postgresql_where=text("role = 'parent' AND is_active = true"),
+        ),
     )
 
     # relationships
@@ -134,7 +152,12 @@ class AuthToken(BaseMixin, Base):
         nullable=True,
         comment="父账号解绑时写入",
     )
-    device_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    device_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    device_info: Mapped[Optional[dict]] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="审计用：{ua, ip, platform}",
+    )
 
 
 class DeviceToken(BaseMixin, Base):
@@ -153,5 +176,28 @@ class DeviceToken(BaseMixin, Base):
         TIMESTAMP(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class FamilyMember(BaseMixin, Base):
+    """家庭成员关联表。MVP 同时维护 users.family_id 冗余字段；此表承接「一家 N 父」扩展。"""
+
+    __tablename__ = "family_members"
+
+    family_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("families.id"),
+        nullable=False,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=False,
+    )
+    role: Mapped[UserRole] = mapped_column(nullable=False)
+    joined_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
         nullable=False,
     )
