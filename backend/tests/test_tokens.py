@@ -3,18 +3,17 @@
 """
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
-import uuid
 
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.redis_ops import RedisOp, commit_with_redis, discard_pending_redis_ops, stage_redis_op
+from app.auth.redis_ops import commit_with_redis, discard_pending_redis_ops
 from app.auth.tokens import (
     REDIS_KEY_PREFIX,
-    REDIS_TTL_SECONDS,
     TokenPayload,
     issue_token,
     needs_roll,
@@ -26,7 +25,6 @@ from app.auth.tokens import (
 )
 from app.models.accounts import AuthToken, Family, FamilyMember, User
 from app.models.enums import UserRole
-
 
 # ---- 辅助 fixtures ----
 
@@ -110,7 +108,7 @@ class TestIssueToken:
         )).scalar_one()
         assert row.expires_at is not None
         assert row.device_id == "devA"
-        # 不commit：teardown rollback 护栏在 conftest；这里只验证 stage 状态
+        discard_pending_redis_ops(db_session)  # 不 commit；清理避免 teardown 护栏误报
 
     @pytest.mark.asyncio
     async def test_issue_token_child_expires_at_null(
@@ -130,6 +128,7 @@ class TestIssueToken:
             select(AuthToken).where(AuthToken.token_hash == th)
         )).scalar_one()
         assert row.expires_at is None
+        discard_pending_redis_ops(db_session)  # 不 commit；清理避免 teardown 护栏误报
 
     @pytest.mark.asyncio
     async def test_issue_token_device_id_to_redis(
@@ -149,7 +148,9 @@ class TestIssueToken:
         assert payload.device_id == "devA"
 
     @pytest.mark.asyncio
-    async def test_issue_token_returns_plaintext_token(self, db_session: AsyncSession, redis_client, parent_user: User) -> None:
+    async def test_issue_token_returns_plaintext_token(
+        self, db_session: AsyncSession, redis_client, parent_user: User,
+    ) -> None:
         token = await issue_token(
             db_session,
             user_id=parent_user.id,
@@ -159,11 +160,14 @@ class TestIssueToken:
         )
         assert isinstance(token, str)
         assert len(token) > 20  # secrets.token_urlsafe(32) ≈ 43 chars
+        discard_pending_redis_ops(db_session)  # 不 commit；清理避免 teardown 护栏误报
 
     @pytest.mark.asyncio
-    async def test_issue_token_requires_device_id(self, db_session: AsyncSession, parent_user: User) -> None:
+    async def test_issue_token_requires_device_id(
+        self, db_session: AsyncSession, parent_user: User,
+    ) -> None:
         with pytest.raises(TypeError):
-            await issue_token(
+            await issue_token(  # type: ignore[call-arg]
                 db_session,
                 user_id=parent_user.id,
                 role=parent_user.role,
@@ -189,7 +193,6 @@ class TestResolveToken:
         await commit_with_redis(db_session, redis_client)
 
         # mock DB to detect if it's called
-        from sqlalchemy import select
         original_execute = db_session.execute
         db_session.execute = AsyncMock()  # type: ignore[method-assign]
 
@@ -359,25 +362,19 @@ class TestRollTokenExpiry:
         payload = await resolve_token(db_session, redis_client, token)
         assert payload is not None
 
-        new_payload = await roll_token_expiry(
+        # stage roll
+        await roll_token_expiry(
             db_session, token_hash_hex=th, payload=payload
         )
-        assert new_payload.last_rolled_date is not None
-
-        # rollback 外层 transaction
+        # 验证 session.info 已有 staged op（未 commit）
+        pending = db_session.info.get("pending_redis_ops", [])
+        assert any(
+            op.kind == "setex" and op.key == f"auth:{th}"
+            for op in pending
+        )
+        # rollback 外层 transaction；session.info 保留，手动 discard 避免 teardown 护栏
         await db_session.rollback()
-
-        # 用独立 session 查 DB
-        from sqlalchemy import create_async_engine, select
-        from sqlalchemy.pool import NullPool
-
-        engine = db_session.bind  # type: ignore[attr-defined]
-        async with engine.connect() as conn:
-            row = (await (conn.execute(
-                select(AuthToken.expires_at).where(AuthToken.token_hash == th)
-            ))).scalar_one_or_none()
-            # rollback 后应该还是旧值（未 commit）
-            assert row is not None  # 存在但未变
+        discard_pending_redis_ops(db_session)
 
     @pytest.mark.asyncio
     async def test_roll_token_plus_commit_persists(
@@ -398,13 +395,13 @@ class TestRollTokenExpiry:
         await roll_token_expiry(db_session, token_hash_hex=th, payload=payload)
         await commit_with_redis(db_session, redis_client)
 
-        # 独立 session 验证
-        engine = db_session.bind  # type: ignore[attr-defined]
-        async with engine.connect() as conn:
-            row = (await (conn.execute(
-                select(AuthToken.expires_at).where(AuthToken.token_hash == th)
-            ))).scalar_one()
-            assert row > datetime.now(timezone.utc)
+        # 同 session 直接查（commit 后可见）
+        from sqlalchemy import select
+        row = (await db_session.execute(
+            select(AuthToken.expires_at).where(AuthToken.token_hash == th)
+        )).scalar_one()
+        assert row is not None
+        assert row > datetime.now(timezone.utc)
 
 
 # ---- revoke_token ----

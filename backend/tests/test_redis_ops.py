@@ -4,7 +4,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
-import pytest_asyncio
 
 from app.auth.redis_ops import (
     RedisOp,
@@ -96,7 +95,9 @@ class TestRedisOpsStaging:
     async def test_discard_clears_without_commit(
         self, db_session, redis_client
     ) -> None:
-        stage_redis_op(db_session, RedisOp(kind="setex", key="discarded", ttl_seconds=60, value="v"))
+        stage_redis_op(
+            db_session, RedisOp(kind="setex", key="discarded", ttl_seconds=60, value="v")
+        )
         discard_pending_redis_ops(db_session)
 
         # session rollback 时不会触发 teardown 护栏
