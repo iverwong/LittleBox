@@ -1,10 +1,22 @@
+"""FastAPI app factory."""
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.dev_chat import router as dev_chat_router
 from app.api.health import router as health_router
 from app.api.me import router as me_router
+from app.auth.redis_client import redis_lifespan
 from app.config import settings
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """合并 lifespan：Redis 连接池。"""
+    async with redis_lifespan():
+        yield
 
 
 def create_app() -> FastAPI:
@@ -13,6 +25,7 @@ def create_app() -> FastAPI:
         title=settings.app_name,
         docs_url="/docs" if settings.debug else None,
         redoc_url="/redoc" if settings.debug else None,
+        lifespan=lifespan,
     )
     application.add_middleware(
         CORSMiddleware,
