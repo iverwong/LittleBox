@@ -1,4 +1,4 @@
-"""auth 路由：login / logout。"""
+"""auth 路由：login / logout / redeem-bind-token。"""
 from __future__ import annotations
 
 from typing import Annotated
@@ -8,7 +8,13 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.bind import (
+    peek_bind_token,
+    stage_consume_bind_token,
+    stage_record_bind_result,
+)
 from app.auth.deps import require_parent
+from app.schemas.accounts import CurrentAccount
 from app.auth.password import verify_password
 from app.auth.redis_client import get_redis
 from app.auth.redis_ops import RedisOp, commit_with_redis, stage_redis_op
@@ -20,7 +26,12 @@ from app.auth.tokens import (
 from app.db import get_db
 from app.models.accounts import User
 from app.models.enums import UserRole
-from app.schemas.accounts import AccountOut, LoginRequest, LoginResponse
+from app.schemas.accounts import (
+    AccountOut,
+    LoginRequest,
+    LoginResponse,
+    RedeemBindTokenRequest,
+)
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -106,7 +117,7 @@ async def login(
 @router.post("/logout", status_code=204)
 async def logout(
     authorization: Annotated[str, Header()],
-    current: Annotated[object, Depends(require_parent)],
+    current: Annotated[CurrentAccount, Depends(require_parent)],
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> None:
@@ -114,3 +125,47 @@ async def logout(
     token = authorization.split(" ", 1)[1].strip()
     await revoke_token(db, token)
     await commit_with_redis(db, redis)
+
+
+@router.post("/redeem-bind-token", response_model=LoginResponse)
+async def redeem_bind_token_endpoint(
+    payload: RedeemBindTokenRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> LoginResponse:
+    """子端扫码后换取永久 child token；同时吊销该 child 所有老 token。"""
+    # peek 不删；DB 写入成功后 stage_consume_bind_token 入 staging，
+    # 由 commit_with_redis 统一 flush（DB 回滚则 bind_token 保留，5min TTL 内可重试）
+    peeked = await peek_bind_token(redis, payload.bind_token)
+    if peeked is None:
+        raise HTTPException(400, "bind token invalid or expired")
+    _parent_id, child_id = peeked
+    child = await db.get(User, child_id)
+    if child is None or not child.is_active or child.role != UserRole.child:
+        raise HTTPException(400, "child account unavailable")
+
+    # 新设备扫码吊销该 child 所有活跃 token（与 /auth/login 对齐）
+    await revoke_all_active_tokens(db, child.id)
+    token = await issue_token(
+        db,
+        user_id=child.id,
+        role=child.role,
+        family_id=child.family_id,
+        ttl_days=None,  # 永不过期
+        device_id=payload.device_id,
+        device_info=payload.device_info,
+    )
+    stage_consume_bind_token(db, payload.bind_token)
+    # 同时 stage 一条 bind_result 供父端轮询端点读；DB 回滚则两条同时丢，父端保持看到 pending
+    stage_record_bind_result(db, payload.bind_token, child.id)
+    await commit_with_redis(db, redis)
+    return LoginResponse(
+        token=token,
+        account=AccountOut(
+            id=child.id,
+            role=child.role,
+            family_id=child.family_id,
+            phone=None,
+            is_active=True,
+        ),
+    )
