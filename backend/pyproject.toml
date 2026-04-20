@@ -13,6 +13,7 @@ dependencies = [
     "langchain>=0.3.0",
     "langgraph>=0.2.0",
     "dashscope>=1.25.2",
+    "argon2-cffi>=23.1.0",
 ]
 
 [project.optional-dependencies]
