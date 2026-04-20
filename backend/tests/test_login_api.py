@@ -1,18 +1,15 @@
 """auth login / logout 端点 TDD：Phase A 骨架 → Phase B 实现。"""
 from __future__ import annotations
 
-import uuid
-
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.password import generate_password, generate_phone, hash_password
-from app.auth.tokens import REDIS_KEY_PREFIX, issue_token, revoke_all_active_tokens, token_hash
 from app.auth.redis_ops import commit_with_redis
+from app.auth.tokens import REDIS_KEY_PREFIX, issue_token, token_hash
 from app.models.accounts import Family, FamilyMember, User
 from app.models.enums import UserRole
-
 
 # ---- 辅助 fixtures ----
 
@@ -134,6 +131,7 @@ class TestLoginEndpoint:
         th = token_hash(token)
 
         from sqlalchemy import select
+
         from app.models.accounts import AuthToken
         row = (await db_session.execute(
             select(AuthToken.device_id).where(AuthToken.token_hash == th)
@@ -281,6 +279,7 @@ class TestLoginEndpoint:
 
         # DB revoked_at 已写入
         from sqlalchemy import select
+
         from app.models.accounts import AuthToken
         revoked_at = (await db_session.execute(
             select(AuthToken.revoked_at).where(AuthToken.token_hash == th_a)
@@ -324,6 +323,126 @@ class TestLoginEndpoint:
         assert revoked_resp.status_code == 401
 
 
+# ---- Login Rate Limit 测试 ----
+
+class TestLoginRateLimit:
+    @pytest.mark.asyncio
+    async def test_phone_rate_limit_5_failures_6th_429(
+        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+    ) -> None:
+        """同 phone 连续错密码 5 次 → 第 6 次返 429。"""
+        user, _pw = parent_with_password
+        device_id = "dev_rate_A"
+
+        # 5 次错密码
+        for i in range(5):
+            resp = await api_client.post(
+                "/api/v1/auth/login",
+                json={"phone": user.phone, "password": f"wrongpw{i}", "device_id": device_id},
+            )
+            assert resp.status_code == 401, f"attempt {i+1}: {resp.status_code}"
+
+        # 第 6 次 → 429
+        resp6 = await api_client.post(
+            "/api/v1/auth/login",
+            json={"phone": user.phone, "password": "wrongpw_final", "device_id": device_id},
+        )
+        assert resp6.status_code == 429
+        assert resp6.json()["detail"] == "too many attempts; try again later"
+
+    @pytest.mark.asyncio
+    async def test_phone_rate_limit_correct_password_also_429_when_limited(
+        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+    ) -> None:
+        """同 phone 连续错密码 5 次后，即使正确密码也返回 429。"""
+        user, pw = parent_with_password
+        device_id = "dev_rate_B"
+
+        for i in range(5):
+            await api_client.post(
+                "/api/v1/auth/login",
+                json={"phone": user.phone, "password": f"wrongpw{i}", "device_id": device_id},
+            )
+
+        # 正确密码也被 429
+        resp = await api_client.post(
+            "/api/v1/auth/login",
+            json={"phone": user.phone, "password": pw, "device_id": device_id},
+        )
+        assert resp.status_code == 429
+
+    @pytest.mark.asyncio
+    async def test_ip_rate_limit_20_failures_21st_429(
+        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+    ) -> None:
+        """同 IP（跨 phone）连续 20 次错密码 → 第 21 次返 429。"""
+        user, _pw = parent_with_password
+        device_id = "dev_rate_C"
+
+        # 用不同 phone 模拟跨账号 IP 级别攻击
+        for i in range(20):
+            fake_phone = f"99900000{i:04d}"
+            resp = await api_client.post(
+                "/api/v1/auth/login",
+                json={"phone": fake_phone, "password": f"wrongpw{i}", "device_id": device_id},
+            )
+            assert resp.status_code == 401, f"attempt {i+1}: {resp.status_code}"
+
+        # 第 21 次 → 429
+        resp21 = await api_client.post(
+            "/api/v1/auth/login",
+            json={"phone": "999999990000", "password": "wrongpw_final", "device_id": device_id},
+        )
+        assert resp21.status_code == 429
+
+    @pytest.mark.asyncio
+    async def test_expire_nx_does_not_refresh_ttl(
+        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+    ) -> None:
+        """连续 INCR 5 次后，TTL 应 ≤ 60 且 ≠ -1（nx=True 不重置过期）。"""
+        user, _pw = parent_with_password
+        device_id = "dev_rate_D"
+
+        for i in range(5):
+            await api_client.post(
+                "/api/v1/auth/login",
+                json={"phone": user.phone, "password": f"wrongpw{i}", "device_id": device_id},
+            )
+
+        phone_key = f"login_fail:phone:{user.phone}"
+        ttl = await redis_client.ttl(phone_key)
+        assert ttl > 0 and ttl <= 60, f"TTL={ttl}, expected 0 < TTL <= 60 (nx=True)"
+
+    @pytest.mark.asyncio
+    async def test_success_clears_counters(
+        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+    ) -> None:
+        """成功登录后，两个计数 key 被从 Redis 删除。"""
+        user, pw = parent_with_password
+        device_id = "dev_rate_E"
+
+        # 先触发几次失败
+        for i in range(3):
+            await api_client.post(
+                "/api/v1/auth/login",
+                json={"phone": user.phone, "password": f"wrongpw{i}", "device_id": device_id},
+            )
+
+        phone_key = f"login_fail:phone:{user.phone}"
+        assert await redis_client.get(phone_key) is not None
+
+        # 成功登录
+        resp = await api_client.post(
+            "/api/v1/auth/login",
+            json={"phone": user.phone, "password": pw, "device_id": device_id},
+        )
+        assert resp.status_code == 200
+
+        # 两个 key 都已清
+        await db_session.commit()
+        assert await redis_client.get(phone_key) is None
+
+
 # ---- Logout 端点测试 ----
 
 class TestLogoutEndpoint:
@@ -360,6 +479,7 @@ class TestLogoutEndpoint:
 
         # DB revoked_at 已写入
         from sqlalchemy import select
+
         from app.models.accounts import AuthToken
         revoked_at = (await db_session.execute(
             select(AuthToken.revoked_at).where(AuthToken.token_hash == th)
