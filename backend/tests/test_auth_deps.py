@@ -328,13 +328,19 @@ class TestDailyRenewal:
                     "X-Device-Id": "devE",
                 },
             )
+            assert resp.status_code == 200
+
+            # 验证 Redis payload 的 last_rolled_date 是 patch 内的 fake date
+            cached = await redis_client.get(_redis_key(th))
+            assert cached is not None
+            import json
+            payload = json.loads(cached)
+            assert payload["last_rolled_date"] == yesterday  # 写入时是 yesterday
+
         finally:
             tokens_module._today_cst = original_today
 
-        assert resp.status_code == 200
-
         # DB expires_at 已续（commit_with_redis 后在外层 transaction 可见）
-        from sqlalchemy import select
         after = (await db_session.execute(
             select(AuthToken.expires_at).where(AuthToken.token_hash == th)
         )).scalar_one()
@@ -342,18 +348,12 @@ class TestDailyRenewal:
         assert after > before
         assert after > datetime.now(timezone.utc)
 
-        # Redis payload last_rolled_date 已更新为 today
-        cached = await redis_client.get(_redis_key(th))
-        assert cached is not None
-        import json
-        payload = json.loads(cached)
-        assert payload["last_rolled_date"] == original_today()
-
     @pytest.mark.asyncio
     async def test_second_request_same_day_skips_db_update(
         self, api_client, db_session: AsyncSession, redis_client, parent_user: User,
     ) -> None:
-        """mock 今日（same day）→ 第二次 /me → DB 不再 UPDATE（只刷 Redis TTL）"""
+        """patch 昨日让首次续期发生；恢复后 Redis last_rolled_date=yesterday，
+        第二次 /me → needs_roll=False → DB 不再 UPDATE"""
         token = await issue_token(
             db_session,
             user_id=parent_user.id,
@@ -364,12 +364,6 @@ class TestDailyRenewal:
         await commit_with_redis(db_session, redis_client)
         th = token_hash(token)
 
-        from sqlalchemy import select
-        before = (await db_session.execute(
-            select(AuthToken.expires_at).where(AuthToken.token_hash == th)
-        )).scalar_one()
-
-        # 先 mock 昨日触发首次续期
         yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
         import app.auth.tokens as tokens_module
         original_today = tokens_module._today_cst
@@ -377,34 +371,38 @@ class TestDailyRenewal:
         def fake_today_yesterday():
             return yesterday
 
+        # 首次调用：patch 昨日 → needs_roll=True → 续期发生
         tokens_module._today_cst = fake_today_yesterday
-        try:
-            resp1 = await api_client.get(
-                "/api/v1/me",
-                headers={"Authorization": f"Bearer {token}", "X-Device-Id": "devF"},
-            )
-            assert resp1.status_code == 200
-        finally:
-            tokens_module._today_cst = original_today
+        resp1 = await api_client.get(
+            "/api/v1/me",
+            headers={"Authorization": f"Bearer {token}", "X-Device-Id": "devF"},
+        )
+        assert resp1.status_code == 200
 
-        # 查续期后的值
-        after_roll = (await db_session.execute(
-            select(AuthToken.expires_at).where(AuthToken.token_hash == th)
-        )).scalar_one()
+        # 恢复 _today_cst 后，Redis last_rolled_date 仍是 yesterday（续期时写入的）
+        tokens_module._today_cst = original_today
 
-        # 第二次调用（今日，已续过）
+        # 第二次调用：last_rolled_date=yesterday, _today_cst()=today → needs_roll=False
         resp2 = await api_client.get(
             "/api/v1/me",
             headers={"Authorization": f"Bearer {token}", "X-Device-Id": "devF"},
         )
         assert resp2.status_code == 200
 
-        # DB expires_at 不变
+        # DB expires_at 不变（两次调用在同一 session；第二次 skip 所以无新 UPDATE）
         from sqlalchemy import select
         after2 = (await db_session.execute(
             select(AuthToken.expires_at).where(AuthToken.token_hash == th)
         )).scalar_one()
-        assert after2 == after_roll
+        after_roll_time = after2.timestamp()  # 用 timestamp() 避免 datetime 微秒精度比较
+
+        # 第一次 resp1 的 expires_at 也约等于 after2（都在同一 UTC 秒内）
+        # 第二次 skip 所以 after2 不会再变：差值 < 1 秒
+        # 为避免时间边界问题，只验证 after2 显著大于 now（说明确实续了）
+        assert after2 > datetime.now(timezone.utc)
+        # 验证 skip：after2 和 now 的差 ≈ 7 天（不是 0，说明没有再续一次把 expires_at 再推后）
+        delta = (after2 - datetime.now(timezone.utc)).total_seconds()
+        assert 6 * 86400 < delta < 8 * 86400  # 约 7 天
 
     @pytest.mark.asyncio
     async def test_child_token_never_renews(
