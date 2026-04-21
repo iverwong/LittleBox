@@ -176,29 +176,28 @@ async def api_client(app: FastAPI) -> AsyncGenerator[AsyncClient, None]:
 
 # ---------- 业务高层便捷 fixtures（后续 Step 复用） ----------
 
-# @pytest_asyncio.fixture
-# async def seeded_parent(db_session: AsyncSession):
-#     """种一个 active parent + family + family_members。返回 (user, plaintext_password)。"""
-#     from app.auth.password import generate_password, generate_phone, hash_password
-#     from app.models.accounts import Family, FamilyMember, User
-#     from app.models.enums import UserRole
-#
-#     pw = generate_password()
-#     fam = Family()
-#     db_session.add(fam)
-#     await db_session.flush()
-#
-#     user = User(
-#         family_id=fam.id,
-#         role=UserRole.parent,
-#         phone=generate_phone(),
-#         password_hash=hash_password(pw),
-#         is_active=True,
-#         admin_note="test parent",
-#     )
-#     db_session.add(user)
-#     await db_session.flush()
-#
-#     db_session.add(FamilyMember(family_id=fam.id, user_id=user.id, role=UserRole.parent))
-#     await db_session.commit()  # 实际 release savepoint
-#     return user, pw
+@pytest_asyncio.fixture
+async def seeded_parent(db_session: AsyncSession) -> tuple[User, str]:
+    """种一个 active parent + family + family_members。返回 (user, plaintext_password)。"""
+    from app.auth.password import generate_password, generate_phone, hash_password
+    from app.models.accounts import Family, FamilyMember, User
+    from app.models.enums import UserRole
+
+    pw = generate_password()
+    fam = Family()
+    db_session.add(fam)
+    await db_session.flush()
+
+    user = User(
+        family_id=fam.id,
+        role=UserRole.parent,
+        phone=generate_phone(),
+        password_hash=hash_password(pw),
+        is_active=True,
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    db_session.add(FamilyMember(family_id=fam.id, user_id=user.id, role=UserRole.parent))
+    await db_session.commit()  # 实际 release savepoint
+    return user, pw

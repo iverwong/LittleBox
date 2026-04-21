@@ -11,30 +11,21 @@ from app.auth.tokens import REDIS_KEY_PREFIX, issue_token, token_hash
 from app.models.accounts import Family, FamilyMember, User
 from app.models.enums import UserRole
 
+# ---- C3 · 响应屏蔽辅助函数 ----
+
+_SECRET_KEYWORDS = ("password_hash", "hashed_password", "secret", "token_hash")
+
+
+def _assert_no_secret_fields(body: dict) -> None:
+    """断言响应 body 中不包含敏感字段。"""
+    flat_keys = [k for k in body.keys()]
+    offenders = [k for k in flat_keys if any(sec in k.lower() for sec in _SECRET_KEYWORDS)]
+    assert not offenders, f"Response body contains secret fields: {offenders}"
+
+
 # ---- 辅助 fixtures ----
 
-@pytest_asyncio.fixture
-async def parent_with_password(db_session: AsyncSession) -> tuple[User, str]:
-    """种一个 active parent + family + family_members + password_hash。"""
-    fam = Family()
-    db_session.add(fam)
-    await db_session.flush()
-
-    pw = generate_password()
-    user = User(
-        family_id=fam.id,
-        role=UserRole.parent,
-        phone=generate_phone(),
-        password_hash=hash_password(pw),
-        is_active=True,
-    )
-    db_session.add(user)
-    await db_session.flush()
-
-    db_session.add(FamilyMember(family_id=fam.id, user_id=user.id, role=UserRole.parent))
-    await db_session.commit()
-    return user, pw
-
+# seeded_parent 已收敛到 conftest.py::seeded_parent
 
 @pytest_asyncio.fixture
 async def inactive_parent(db_session: AsyncSession) -> tuple[User, str]:
@@ -85,10 +76,10 @@ def _redis_key(th: str) -> str:
 class TestLoginEndpoint:
     @pytest.mark.asyncio
     async def test_login_happy_path(
-        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+        self, api_client, db_session: AsyncSession, redis_client, seeded_parent: tuple[User, str],
     ) -> None:
         """有效 phone + password → 200 + token + AccountOut（无 password_hash/admin_note）。"""
-        user, pw = parent_with_password
+        user, pw = seeded_parent
         resp = await api_client.post(
             "/api/v1/auth/login",
             json={"phone": user.phone, "password": pw, "device_id": "dev_login_A"},
@@ -99,28 +90,30 @@ class TestLoginEndpoint:
         assert data["account"]["id"] == str(user.id)
         assert data["account"]["role"] == "parent"
         assert data["account"]["family_id"] == str(user.family_id)
+        _assert_no_secret_fields(data)
+        _assert_no_secret_fields(data["account"])
 
     @pytest.mark.asyncio
     async def test_login_response_excludes_sensitive_fields(
-        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+        self, api_client, db_session: AsyncSession, redis_client, seeded_parent: tuple[User, str],
     ) -> None:
-        """response JSON 不含 password_hash / admin_note。"""
-        user, pw = parent_with_password
+        """response JSON 不含 password_hash / admin_note 等敏感字段。"""
+        user, pw = seeded_parent
         resp = await api_client.post(
             "/api/v1/auth/login",
             json={"phone": user.phone, "password": pw, "device_id": "dev_login_B"},
         )
         assert resp.status_code == 200
-        text = resp.text
-        assert "password_hash" not in text
-        assert "admin_note" not in text
+        data = resp.json()
+        _assert_no_secret_fields(data)
+        _assert_no_secret_fields(data["account"])
 
     @pytest.mark.asyncio
     async def test_login_device_id_persisted_to_db(
-        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+        self, api_client, db_session: AsyncSession, redis_client, seeded_parent: tuple[User, str],
     ) -> None:
         """登录后 auth_tokens 表 device_id 列 == LoginRequest.device_id。"""
-        user, pw = parent_with_password
+        user, pw = seeded_parent
         device_id = "dev_login_C"
         resp = await api_client.post(
             "/api/v1/auth/login",
@@ -140,10 +133,10 @@ class TestLoginEndpoint:
 
     @pytest.mark.asyncio
     async def test_login_device_id_persisted_to_redis(
-        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+        self, api_client, db_session: AsyncSession, redis_client, seeded_parent: tuple[User, str],
     ) -> None:
         """登录后 Redis payload.device_id == LoginRequest.device_id。"""
-        user, pw = parent_with_password
+        user, pw = seeded_parent
         device_id = "dev_login_D"
         resp = await api_client.post(
             "/api/v1/auth/login",
@@ -161,10 +154,10 @@ class TestLoginEndpoint:
 
     @pytest.mark.asyncio
     async def test_login_new_token_usable_immediately(
-        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+        self, api_client, db_session: AsyncSession, redis_client, seeded_parent: tuple[User, str],
     ) -> None:
         """新 token + 同一 device_id 立即可用于 GET /api/v1/me。"""
-        user, pw = parent_with_password
+        user, pw = seeded_parent
         device_id = "dev_login_E"
         resp = await api_client.post(
             "/api/v1/auth/login",
@@ -182,10 +175,10 @@ class TestLoginEndpoint:
 
     @pytest.mark.asyncio
     async def test_login_missing_device_id_422(
-        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+        self, api_client, db_session: AsyncSession, redis_client, seeded_parent: tuple[User, str],
     ) -> None:
         """LoginRequest 缺 device_id → pydantic 422。"""
-        user, pw = parent_with_password
+        user, pw = seeded_parent
         resp = await api_client.post(
             "/api/v1/auth/login",
             json={"phone": user.phone, "password": pw},
@@ -194,10 +187,10 @@ class TestLoginEndpoint:
 
     @pytest.mark.asyncio
     async def test_login_wrong_password_401(
-        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+        self, api_client, db_session: AsyncSession, redis_client, seeded_parent: tuple[User, str],
     ) -> None:
         """错误密码 → 401，消息不区分"账号不存在"vs"密码错"。"""
-        user, _pw = parent_with_password
+        user, _pw = seeded_parent
         resp = await api_client.post(
             "/api/v1/auth/login",
             json={"phone": user.phone, "password": "wrongpassword1", "device_id": "dev_login_F"},
@@ -207,10 +200,10 @@ class TestLoginEndpoint:
 
     @pytest.mark.asyncio
     async def test_login_wrong_phone_401(
-        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+        self, api_client, db_session: AsyncSession, redis_client, seeded_parent: tuple[User, str],
     ) -> None:
         """错误 phone → 401，消息与错误密码完全相同。"""
-        _user, pw = parent_with_password
+        _user, pw = seeded_parent
         resp = await api_client.post(
             "/api/v1/auth/login",
             json={"phone": "zzzz", "password": pw, "device_id": "dev_login_G"},
@@ -246,10 +239,10 @@ class TestLoginEndpoint:
 
     @pytest.mark.asyncio
     async def test_login_second_login_new_device_revokes_old(
-        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+        self, api_client, db_session: AsyncSession, redis_client, seeded_parent: tuple[User, str],
     ) -> None:
         """同一 parent 第二次登录（新 device_id）→ 老 token 被吊销。"""
-        user, pw = parent_with_password
+        user, pw = seeded_parent
         device_a = "dev_login_J_A"
         device_b = "dev_login_J_B"
 
@@ -292,10 +285,10 @@ class TestLoginEndpoint:
 
     @pytest.mark.asyncio
     async def test_login_same_device_relogin_revokes_previous(
-        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+        self, api_client, db_session: AsyncSession, redis_client, seeded_parent: tuple[User, str],
     ) -> None:
         """同一 parent 同设备复登 → 上一个 token 也被 revoke_all_active_tokens 吊销。"""
-        user, pw = parent_with_password
+        user, pw = seeded_parent
         device_id = "dev_login_K"
 
         # 第一次登录
@@ -328,10 +321,10 @@ class TestLoginEndpoint:
 class TestLoginRateLimit:
     @pytest.mark.asyncio
     async def test_phone_rate_limit_5_failures_6th_429(
-        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+        self, api_client, db_session: AsyncSession, redis_client, seeded_parent: tuple[User, str],
     ) -> None:
         """同 phone 连续错密码 5 次 → 第 6 次返 429。"""
-        user, _pw = parent_with_password
+        user, _pw = seeded_parent
         device_id = "dev_rate_A"
 
         # 5 次错密码
@@ -352,10 +345,10 @@ class TestLoginRateLimit:
 
     @pytest.mark.asyncio
     async def test_phone_rate_limit_correct_password_also_429_when_limited(
-        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+        self, api_client, db_session: AsyncSession, redis_client, seeded_parent: tuple[User, str],
     ) -> None:
         """同 phone 连续错密码 5 次后，即使正确密码也返回 429。"""
-        user, pw = parent_with_password
+        user, pw = seeded_parent
         device_id = "dev_rate_B"
 
         for i in range(5):
@@ -373,10 +366,10 @@ class TestLoginRateLimit:
 
     @pytest.mark.asyncio
     async def test_ip_rate_limit_20_failures_21st_429(
-        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+        self, api_client, db_session: AsyncSession, redis_client, seeded_parent: tuple[User, str],
     ) -> None:
         """同 IP（跨 phone）连续 20 次错密码 → 第 21 次返 429。"""
-        user, _pw = parent_with_password
+        user, _pw = seeded_parent
         device_id = "dev_rate_C"
 
         # 用不同 phone 模拟跨账号 IP 级别攻击
@@ -397,10 +390,10 @@ class TestLoginRateLimit:
 
     @pytest.mark.asyncio
     async def test_expire_nx_does_not_refresh_ttl(
-        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+        self, api_client, db_session: AsyncSession, redis_client, seeded_parent: tuple[User, str],
     ) -> None:
         """连续 INCR 5 次后，TTL 应 ≤ 60 且 ≠ -1（nx=True 不重置过期）。"""
-        user, _pw = parent_with_password
+        user, _pw = seeded_parent
         device_id = "dev_rate_D"
 
         for i in range(5):
@@ -415,10 +408,10 @@ class TestLoginRateLimit:
 
     @pytest.mark.asyncio
     async def test_success_clears_counters(
-        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+        self, api_client, db_session: AsyncSession, redis_client, seeded_parent: tuple[User, str],
     ) -> None:
         """成功登录后，两个计数 key 被从 Redis 删除。"""
-        user, pw = parent_with_password
+        user, pw = seeded_parent
         device_id = "dev_rate_E"
 
         # 先触发几次失败
@@ -517,10 +510,10 @@ class TestLoginRateLimit:
 class TestLogoutEndpoint:
     @pytest.mark.asyncio
     async def test_logout_happy_path(
-        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+        self, api_client, db_session: AsyncSession, redis_client, seeded_parent: tuple[User, str],
     ) -> None:
         """logout → 204；之后同一 token 请求 → 401。"""
-        user, pw = parent_with_password
+        user, pw = seeded_parent
         device_id = "dev_logout_A"
 
         # 登录
@@ -561,10 +554,10 @@ class TestLogoutEndpoint:
 
     @pytest.mark.asyncio
     async def test_logout_idempotent(
-        self, api_client, db_session: AsyncSession, redis_client, parent_with_password: tuple[User, str],
+        self, api_client, db_session: AsyncSession, redis_client, seeded_parent: tuple[User, str],
     ) -> None:
         """同一 token 调两次 logout → 第一次 204，第二次 401（token 已吊销）。"""
-        user, pw = parent_with_password
+        user, pw = seeded_parent
         device_id = "dev_logout_B"
 
         resp = await api_client.post(
