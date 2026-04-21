@@ -1,11 +1,13 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { DarkTheme, DefaultTheme, ThemeProvider as NavThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useEffect } from 'react';
 import 'react-native-reanimated';
 
+import { ThemeProvider } from '../theme/ThemeProvider';
 import { useColorScheme } from '@/components/useColorScheme';
 
 // [M3-TEMP] 角色守卫相关 import 暂时注释，M3 只测 dev-chat 流式链路，不走登录路径。
@@ -83,16 +85,20 @@ function RootLayoutNav() {
   */
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        {/* [M3-TEMP] M3 期间只暴露 dev-chat；其它分组屏幕声明保留注释，M4 还原。 */}
-        <Stack.Screen name="dev-chat" options={{ headerShown: false }} />
-        {/*
-        <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-        <Stack.Screen name="(child)" options={{ headerShown: false }} />
-        <Stack.Screen name="(parent)" options={{ headerShown: false }} />
-        */}
-      </Stack>
+    <ThemeProvider>
+      <SafeAreaProvider>
+        <NavThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+          <Stack>
+            {/* [M3-TEMP] M3 期间只暴露 dev-chat；其它分组屏幕声明保留注释，M4 还原。 */}
+            <Stack.Screen name="dev-chat" options={{ headerShown: false }} />
+            {/*
+            <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+            <Stack.Screen name="(child)" options={{ headerShown: false }} />
+            <Stack.Screen name="(parent)" options={{ headerShown: false }} />
+            */}
+          </Stack>
+        </NavThemeProvider>
+      </SafeAreaProvider>
     </ThemeProvider>
   );
 }
