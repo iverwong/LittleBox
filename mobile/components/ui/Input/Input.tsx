@@ -3,7 +3,8 @@ import { TextInput, View, Text } from 'react-native'
 import { useMemo, useState } from 'react'
 import { useTheme } from '@/theme'
 import { createStyles } from './Input.styles'
-import type { InputProps, FeatherName } from './Input.types'
+import type { InputProps } from './Input.types'
+import type { FeatherName } from '../types'
 
 export function Input({
 	value,

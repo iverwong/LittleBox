@@ -1,9 +1,11 @@
 import { Feather } from '@expo/vector-icons'
-import { Pressable, Text, ActivityIndicator } from 'react-native'
+import { Pressable, Text } from 'react-native'
 import { useMemo } from 'react'
 import { useTheme } from '@/theme'
 import { createStyles } from './Button.styles'
-import type { ButtonProps, FeatherName } from './Button.types'
+import type { ButtonProps } from './Button.types'
+import type { FeatherName } from '../types'
+import { Loading } from '@/components/ui/Loading'
 
 const VARIANT_TEXT_COLOR: Record<string, string> = {
 	primary: '#FFFFFF',
@@ -44,7 +46,7 @@ export function Button({
 			]}
 		>
 			{loading ? (
-				<ActivityIndicator size="small" color={variant === 'ghost' ? ghostColor : '#FFFFFF'} />
+				<Loading size="sm" />
 			) : (
 				<>
 					{leftIcon && (

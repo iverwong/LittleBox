@@ -1,7 +1,5 @@
-import type { Feather } from '@expo/vector-icons'
 import type { StyleProp, ViewStyle } from 'react-native'
-
-export type FeatherName = keyof typeof Feather.glyphMap
+import type { FeatherName } from '../types'
 
 export type InputSize = 'md' | 'lg'
 
