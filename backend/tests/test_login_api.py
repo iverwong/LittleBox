@@ -442,6 +442,75 @@ class TestLoginRateLimit:
         await db_session.commit()
         assert await redis_client.get(phone_key) is None
 
+    # ---- A7 · login rate-limit 窗口到期后计数重置 ----
+
+    @pytest.mark.asyncio
+    async def test_login_rate_limit_counter_resets_after_window_expiry(
+        self, api_client, db_session: AsyncSession, redis_client,
+    ) -> None:
+        """TTL 到期后 key 删除，计数器重置 → 下一个错密码只计 1。"""
+        # 用一个确定 phone 的 parent
+        from app.auth.password import generate_password, generate_phone, hash_password
+        from app.models.accounts import Family, FamilyMember, User
+        from app.models.enums import UserRole
+
+        fam = Family()
+        db_session.add(fam)
+        await db_session.flush()
+
+        phone = "abcd"  # 固定 4-char phone
+        pw = generate_password()
+        user = User(
+            family_id=fam.id,
+            role=UserRole.parent,
+            phone=phone,
+            password_hash=hash_password(pw),
+            is_active=True,
+        )
+        db_session.add(user)
+        await db_session.flush()
+        db_session.add(FamilyMember(family_id=fam.id, user_id=user.id, role=UserRole.parent))
+        await db_session.commit()
+
+        device_id = "dev_rate_reset"
+
+        # 5 次错密码 → 1-5 都是 401
+        for i in range(5):
+            resp = await api_client.post(
+                "/api/v1/auth/login",
+                json={"phone": phone, "password": f"wrongpw{i}", "device_id": device_id},
+            )
+            assert resp.status_code == 401, f"attempt {i+1}: {resp.status_code}"
+
+        # 第 6 次 → 429
+        resp6 = await api_client.post(
+            "/api/v1/auth/login",
+            json={"phone": phone, "password": "wrongpw_final", "device_id": device_id},
+        )
+        assert resp6.status_code == 429
+        assert resp6.json()["detail"] == "too many attempts; try again later"
+
+        # 模拟 TTL 到期：删掉计数 key
+        phone_key = f"login_fail:phone:{phone}"
+        # 先查真实 key 名
+        ip_keys = await redis_client.keys("login_fail:ip:*")
+        ip_key = ip_keys[0] if ip_keys else None
+
+        await redis_client.delete(phone_key)
+        if ip_key:
+            await redis_client.delete(ip_key)
+
+        # 再打一次错密码 → 401（不是 429），计数器重置为 1
+        resp7 = await api_client.post(
+            "/api/v1/auth/login",
+            json={"phone": phone, "password": "wrongpw_after_reset", "device_id": device_id},
+        )
+        assert resp7.status_code == 401
+
+        # 验证计数器重置为 1
+        count_after = await redis_client.get(phone_key)
+        assert count_after == "1"
+
 
 # ---- Logout 端点测试 ----
 
