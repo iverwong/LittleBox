@@ -9,9 +9,15 @@ export interface ToastItem {
 	duration: number
 }
 
+export interface ToastOptions {
+	message: string
+	variant?: ToastVariant
+	duration?: number
+}
+
 interface ToastStore {
 	toasts: ToastItem[]
-	addToast: (message: string, variant: ToastVariant, duration: number) => void
+	addToast: (opts: ToastOptions) => void
 	removeToast: (id: number) => void
 }
 
@@ -19,7 +25,7 @@ let nextId = 1
 
 export const useToastStore = create<ToastStore>((set) => ({
 	toasts: [],
-	addToast: (message, variant, duration) => {
+	addToast: ({ message, variant = 'info', duration = 3000 }) => {
 		set((state) => ({
 			toasts: [...state.toasts, { id: nextId++, message, variant, duration }],
 		}))
@@ -32,7 +38,7 @@ export const useToastStore = create<ToastStore>((set) => ({
 }))
 
 export const toast = {
-	show: (message: string, variant: ToastVariant = 'info', duration: number = 3000) => {
-		useToastStore.getState().addToast(message, variant, duration)
+	show: ({ message, variant = 'info', duration = 3000 }: ToastOptions) => {
+		useToastStore.getState().addToast({ message, variant, duration })
 	},
 }
