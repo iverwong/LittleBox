@@ -452,6 +452,74 @@ class TestRollTokenExpiry:
         # 断言：value 字符串本身发生变化
         assert new_raw != old_raw
 
+    # ---- B4 · commit 后 last_rolled_date 回滚 + needs_roll(False) ----
+
+    @pytest.mark.asyncio
+    async def test_roll_token_updates_last_rolled_date_in_redis_payload(
+        self,
+        monkeypatch,
+        db_session: AsyncSession,
+        redis_client: FakeRedis,
+        parent_user: User,
+    ) -> None:
+        """roll + commit 后，Redis payload.last_rolled_date == today_cst()，
+        且 needs_roll(new_payload) is False。Redis key: auth:<th>，value: JSON 字符串。"""
+        import app.auth.tokens as tokens_mod
+
+        token = await issue_token(
+            db_session,
+            user_id=parent_user.id,
+            role=parent_user.role,
+            family_id=parent_user.family_id,
+            device_id="devH",
+        )
+        await commit_with_redis(db_session, redis_client)
+        th = token_hash(token)
+
+        # monkeypatch _today_cst 到昨天，让 needs_roll 进入 True 分支
+        yesterday = (
+            datetime.fromisoformat(tokens_mod._today_cst()).date()
+            - timedelta(days=1)
+        ).isoformat()
+
+        original_today_cst = tokens_mod._today_cst
+
+        def _fake_yesterday() -> str:
+            return yesterday
+
+        monkeypatch.setattr("app.auth.tokens._today_cst", _fake_yesterday)
+
+        try:
+            # fresh resolve（cache hit 不修改 last_rolled_date；
+            # 用 model_copy 强制 last_rolled_date=yesterday 以触发 roll）
+            cached = await redis_client.get(f"auth:{th}")
+            cached_payload = TokenPayload.model_validate_json(cached)
+            payload = cached_payload.model_copy(
+                update={"last_rolled_date": yesterday}
+            )
+        finally:
+            # 恢复 _today_cst（roll 写回时 last_rolled_date 用 _today_cst() 写入）
+            monkeypatch.setattr("app.auth.tokens._today_cst", original_today_cst)
+
+        # 调 roll + commit
+        await roll_token_expiry(db_session, token_hash_hex=th, payload=payload)
+        await commit_with_redis(db_session, redis_client)
+
+        # 从 Redis 重新读取，验证 last_rolled_date 已回滚
+        new_raw = await redis_client.get(f"auth:{th}")
+        new_payload = TokenPayload.model_validate_json(new_raw)
+
+        # 断言：last_rolled_date == today_cst（真今日，CST）
+        assert new_payload.last_rolled_date == tokens_mod._today_cst(), (
+            f"last_rolled_date should be {tokens_mod._today_cst()}, "
+            f"got {new_payload.last_rolled_date}"
+        )
+        # 断言：needs_roll(new_payload) is False
+        assert needs_roll(new_payload) is False, (
+            f"needs_roll should be False after roll, "
+            f"got {needs_roll(new_payload)}"
+        )
+
     @pytest.mark.asyncio
     async def test_roll_token_plus_commit_persists(
         self, db_session: AsyncSession, redis_client, parent_user: User
