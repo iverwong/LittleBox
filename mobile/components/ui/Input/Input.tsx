@@ -3,7 +3,7 @@ import { TextInput, View, Text } from 'react-native'
 import { useMemo, useState } from 'react'
 import { useTheme } from '@/theme'
 import { createStyles } from './Input.styles'
-import type { InputProps } from './Input.types'
+import type { InputProps, FeatherName } from './Input.types'
 
 export function Input({
 	value,
@@ -51,7 +51,7 @@ export function Input({
 			<View style={containerStyle as object}>
 				{leftIcon && (
 					<Feather
-						name={leftIcon as keyof typeof Feather.glyphMap}
+						name={leftIcon as FeatherName}
 						size={18}
 						color={iconColor}
 						style={styles.iconLeft as object}
@@ -71,7 +71,7 @@ export function Input({
 				/>
 				{rightIcon && (
 					<Feather
-						name={rightIcon as keyof typeof Feather.glyphMap}
+						name={rightIcon as FeatherName}
 						size={18}
 						color={iconColor}
 						style={styles.iconRight as object}

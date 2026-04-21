@@ -3,7 +3,7 @@ import { Pressable, Text, ActivityIndicator } from 'react-native'
 import { useMemo } from 'react'
 import { useTheme } from '@/theme'
 import { createStyles } from './Button.styles'
-import type { ButtonProps } from './Button.types'
+import type { ButtonProps, FeatherName } from './Button.types'
 
 const VARIANT_TEXT_COLOR: Record<string, string> = {
 	primary: '#FFFFFF',
@@ -49,7 +49,7 @@ export function Button({
 				<>
 					{leftIcon && (
 						<Feather
-							name={leftIcon as keyof typeof Feather.glyphMap}
+							name={leftIcon as FeatherName}
 							size={18}
 							color={textColor}
 							style={styles.icon as object}
@@ -62,7 +62,7 @@ export function Button({
 					)}
 					{rightIcon && (
 						<Feather
-							name={rightIcon as keyof typeof Feather.glyphMap}
+							name={rightIcon as FeatherName}
 							size={18}
 							color={textColor}
 							style={styles.icon as object}
