@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 LittleBox is a parent-child AI chat application. Parents monitor children via an AI chat interface, with AI-powered safety auditing and daily reporting. The child runs a minimal chat client; the parent has a management dashboard.
 
-**Current milestone: M3** (streaming pipeline validation). The project follows a 17-milestone plan documented in `docs/M1-plan.md` through `docs/M3-plan.md`.
+**Current milestone: M4** (account system & auth). The project follows a 17-milestone plan documented in `docs/M1-plan.md` through `docs/M4-plan.md`.
 
 ## Development Commands
 
@@ -26,6 +26,10 @@ docker compose exec api basedpyright app
 
 # Run a single test
 docker compose exec api pytest tests/path/to/test_file.py::test_name -v
+
+# CLI scripts (M4 auth)
+docker compose exec api python -m app.scripts.create_parent --note "..."
+docker compose exec api python -m app.scripts.reset_parent_password --phone <4-letter-id>
 ```
 
 ### Frontend (Expo React Native)
@@ -77,17 +81,24 @@ backend/
 │   ├── config.py            # pydantic-settings (env var prefix: LB_)
 │   ├── api/
 │   │   ├── health.py        # GET /health
-│   │   └── dev_chat.py       # ⚠️ TEMPORARY M3 demo route (deleted at M7)
-│   ├── chat/
-│   │   ├── llm.py           # get_chat_llm() singleton, DashScope client
-│   │   ├── dashscope_chat.py # ChatDashScopeQwen (LangChain BaseChatModel wrapper)
-│   │   ├── graph.py          # LangGraph StateGraph (M3: single node; M6: full graph)
-│   │   └── sse.py            # SSE event serialization + stream generator
-│   ├── models/              # SQLAlchemy ORM (12 tables across 4 modules)
-│   ├── audit/               # Audit pipeline (placeholder, M8)
-│   ├── expert/              # Daily expert agent (placeholder, M12)
-│   ├── notify/              # Push notifications (placeholder, M9)
-│   └── state/               # Redis session state (placeholder, M5)
+│   │   ├── auth.py          # POST /auth/login, /auth/logout, /auth/redeem-bind-token
+│   │   ├── children.py      # Parent: list/add children, generate bind QR
+│   │   ├── me.py            # GET /me (current account info)
+│   │   └── dev_chat.py      # ⚠️ TEMPORARY M3 demo route (deleted at M7)
+│   ├── schemas/
+│   │   └── accounts.py      # Pydantic request/response schemas for accounts
+│   ├── models/
+│   │   ├── enums.py        # UserRole, Gender enums
+│   │   ├── accounts.py     # users, auth_tokens, child_profiles, family_members
+│   │   ├── chat.py         # sessions, messages
+│   │   ├── audit.py        # audit_records, rolling_summaries
+│   │   └── parent.py       # daily_reports, notifications, data_deletion_requests
+│   ├── chat/               # LLM streaming (M3)
+│   ├── auth/               # Password hashing (argon2), token ops
+│   ├── audit/              # Audit pipeline (placeholder, M8)
+│   ├── expert/             # Daily expert agent (placeholder, M12)
+│   ├── notify/             # Push notifications (placeholder, M9)
+│   └── state/              # Redis session state (placeholder, M5)
 ├── alembic/                 # DB migrations (async SQLAlchemy)
 └── tests/
 ```
@@ -106,7 +117,15 @@ mobile/
 └── lib/sseClient.ts        # SSE client wrapper (react-native-sse)
 ```
 
-### Streaming Architecture (M3 Decision)
+### Auth Architecture (M4 Decision)
+
+- **Opaque tokens**: 32-byte `secrets.token_urlsafe(32)`, stored as sha256 hash in DB, cached in Redis (`auth:{sha256(token)}` → JSON payload, TTL 10min rolling)
+- **Parent token**: 7-day rolling, renewed on each request if last_rolled_date != today (Asia/Shanghai); child tokens never expire
+- **Child bind flow**: Parent generates `bind_token` (16-byte, 5min TTL in Redis) → QR code → child scans via `POST /auth/redeem-bind-token`
+- **Auth depends**: `get_current_account` → `require_parent` / `require_child` role guards
+- **Device binding**: All tokens bound to `X-Device-Id` header; mismatches trigger immediate revocation
+
+### Streaming Architecture (M3, stable)
 
 1. Client sends message → FastAPI `POST /api/dev/chat/stream`
 2. `stream_chat()` generator runs LangGraph `.astream_events(version="v2")`
@@ -152,11 +171,20 @@ The following files are M3/M4 temporary artifacts scheduled for deletion at M7:
 
 ## Critical Gotchas
 
+### Auth (M4)
+- **`X-Device-Id` header required**: Every `/auth/*` and protected endpoint must send `X-Device-Id` header; missing → 422.
+- **Redis lifespan**: `auth.redis` is initialized in `main.py` lifespan; do not create Redis clients per-request.
+- **argon2 verification**: `VerifyMismatchError` must be caught separately — other exceptions (`VerifyError`, `InvalidHashError`) indicate internal failures, return 500.
+- **Partial unique index**: `users.phone` has `WHERE role='parent' AND is_active=true` partial index; alembic autogenerate may try to drop it — always review migration files.
+
+### Streaming (M3)
 - **`dashscope` SDK** requires `DASHSCOPE_API_KEY` env var (NOT `LB_DASHSCOPE_API_KEY`). The `LB_DASHSCOPE_API_KEY` is used by `app.config.py`, but the SDK itself reads `DASHSCOPE_API_KEY` directly.
-- **Python 3.14**: Test files must use `pytest.mark.asyncio` and `async def` functions.
 - **LangGraph `disable_streaming`**: Must remain `False`. If set to `True`, `.astream_events()` stops emitting `on_chat_model_stream` events.
 - **`get_chat_llm()`**: Uses `@lru_cache(maxsize=1)`. In tests, call `.cache_clear()` before patching to avoid stale singleton.
 - **Patch location for `get_chat_llm`**: Patch `app.chat.graph.get_chat_llm` (usage site), not `app.chat.llm.get_chat_llm` (definition site) — Python import binding.
+
+### General
+- **Python 3.14**: Test files must use `pytest.mark.asyncio` and `async def` functions.
 - **`messages.role`**: DB stores `human`/`ai` (not `user`/`assistant`), aligned with LangChain `HumanMessage`/`AIMessage`.
 - **pgAdmin port**: Mapped to `16050:5050` (not `5050:5050`) to avoid conflict.
 - **RedisInsight port**: Mapped to `16540:5540` (not `5540:5540`).
