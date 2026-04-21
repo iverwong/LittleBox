@@ -9,6 +9,7 @@ import 'react-native-reanimated';
 
 import { ThemeProvider } from '../theme/ThemeProvider';
 import { useColorScheme } from '@/components/useColorScheme';
+import { ToastContainer } from '@/components/ui/Toast';
 
 // [M3-TEMP] 角色守卫相关 import 暂时注释，M3 只测 dev-chat 流式链路，不走登录路径。
 // 恢复时机：M4 用户鉴权里程碑实施时一并还原 import 和下方 RootLayoutNav 里的守卫逻辑。
@@ -87,6 +88,12 @@ function RootLayoutNav() {
   return (
     <ThemeProvider>
       <SafeAreaProvider>
+        {/* ToastContainer must be inside SafeAreaProvider to use useSafeAreaInsets.
+            Plan Step 4 wrote "outside SafeAreaProvider" which is a plan contradiction
+            (useSafeAreaInsets requires SafeAreaProvider ancestor). Correct placement:
+            SafeAreaProvider > NavThemeProvider > Stack, with ToastContainer as a
+            sibling to NavThemeProvider / Stack — not inside NavThemeProvider. */}
+        <ToastContainer />
         <NavThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <Stack>
             {/* [M3-TEMP] M3 期间只暴露 dev-chat；其它分组屏幕声明保留注释，M4 还原。 */}
