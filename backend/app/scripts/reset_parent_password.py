@@ -1,4 +1,26 @@
-"""reset_parent_password CLI：重置父账号密码并吊销所有活跃 token。"""
+"""reset_parent_password CLI：重置父账号密码并吊销所有活跃 token。
+
+Usage:
+    docker compose exec api python -m app.scripts.reset_parent_password --phone abcd
+
+Arguments:
+    --phone    必填。要重置密码的父账号手机号（4 位字母）。
+
+Exit codes:
+    0       成功重置，stdout 打印新密码。
+    非 0    失败（phone 不存在或非活跃 parent）；stderr 打印错误信息。
+
+Output:
+    成功后在 stdout 打印 phone / user_id / 新密码。
+    ⚠️  明文密码仅此一次，请立即妥善保管。
+
+Details:
+    - 只作用于 is_active=True 且 role=parent 的账号（fail closed）。
+    - 自动生成新 8 位密码（去 i/l/o），覆盖原有 password_hash。
+    - 重置后立即吊销该 parent 所有活跃 token（DB revoked_at + Redis 双清）。
+    - 走 commit_with_redis 统一入口，不裸 db.commit()。
+    - 运行在 CLI 专用 cli_runtime() 中，不复用 FastAPI 全局 Redis 连接。
+"""
 
 from __future__ import annotations
 
