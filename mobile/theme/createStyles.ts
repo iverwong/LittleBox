@@ -1,4 +1,4 @@
-import type { StyleSheet } from 'react-native'
 import type { Theme } from './theme'
 
-export type StylesFactory<T extends StyleSheet.NamedStyles<T>> = (theme: Theme) => T
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type StylesFactory<T extends object> = (theme: Theme) => T
