@@ -346,10 +346,14 @@ class TestNeedsRoll:
 # ---- roll_token_expiry ----
 
 class TestRollTokenExpiry:
+    # ---- B3 · 未 commit 时 Redis 保持旧值 ----
+
     @pytest.mark.asyncio
     async def test_roll_token_stage_redis_op_not_committed(
         self, db_session: AsyncSession, redis_client, parent_user: User
     ) -> None:
+        """roll_token_expiry 调用后（未 commit），pending_redis_ops 有 setex，
+        但 Redis 里 `auth:<th>` 的 value 仍为旧值，未被修改。"""
         token = await issue_token(
             db_session,
             user_id=parent_user.id,
@@ -359,22 +363,94 @@ class TestRollTokenExpiry:
         )
         await commit_with_redis(db_session, redis_client)
         th = token_hash(token)
+
+        # 记录 Redis 初始 value
+        old_raw = await redis_client.get(f"auth:{th}")
+        assert old_raw is not None
+
+        # fresh resolve 拿 payload（不走 cache miss 路径）
         payload = await resolve_token(db_session, redis_client, token)
         assert payload is not None
 
-        # stage roll
+        # 手动把 payload.last_rolled_date 拨到昨天（强制 needs_roll=True）
+        import app.auth.tokens as tokens_mod
+        yesterday = (
+            datetime.fromisoformat(tokens_mod._today_cst()).date()
+            - timedelta(days=1)
+        ).isoformat()
+        payload = payload.model_copy(update={"last_rolled_date": yesterday})
+
+        # 调用 roll_token_expiry（不 commit）
         await roll_token_expiry(
             db_session, token_hash_hex=th, payload=payload
         )
-        # 验证 session.info 已有 staged op（未 commit）
+
+        # 断言 pending_redis_ops 中有 setex
         pending = db_session.info.get("pending_redis_ops", [])
         assert any(
             op.kind == "setex" and op.key == f"auth:{th}"
             for op in pending
         )
-        # rollback 外层 transaction；session.info 保留，手动 discard 避免 teardown 护栏
-        await db_session.rollback()
+
+        # 关键断言：Redis value 未被修改（仍为 old_raw）
+        now_raw = await redis_client.get(f"auth:{th}")
+        assert now_raw == old_raw, (
+            f"Redis should not be written before commit; "
+            f"old={old_raw!r}, now={now_raw!r}"
+        )
+
+        # 清理：discard pending ops，不触发 teardown 护栏
         discard_pending_redis_ops(db_session)
+        # 不 rollback —— 验证路径不涉及 DB 状态的断言
+
+    # ---- B2 · commit 后 Redis payload 已更新 ----
+
+    @pytest.mark.asyncio
+    async def test_roll_token_plus_commit_updates_redis_payload(
+        self, db_session: AsyncSession, redis_client, parent_user: User,
+    ) -> None:
+        """commit_with_redis 后，Redis `auth:<th>` 的 JSON value 已更新：
+        expires_at 增大，last_rolled_date == today_cst，value 字符串本身发生变化。"""
+        import app.auth.tokens as tokens_mod
+
+        token = await issue_token(
+            db_session,
+            user_id=parent_user.id,
+            role=parent_user.role,
+            family_id=parent_user.family_id,
+            device_id="devG",
+        )
+        await commit_with_redis(db_session, redis_client)
+        th = token_hash(token)
+
+        # 记录初始 Redis value
+        old_raw = await redis_client.get(f"auth:{th}")
+        old_payload = TokenPayload.model_validate_json(old_raw)
+
+        # 手动把 last_rolled_date 拨到昨天，强制 roll 发生
+        yesterday = (
+            datetime.fromisoformat(tokens_mod._today_cst()).date()
+            - timedelta(days=1)
+        ).isoformat()
+        payload = old_payload.model_copy(update={"last_rolled_date": yesterday})
+
+        # 停 monkeypatch（恢复 today），调 roll_token_expiry + commit
+        await roll_token_expiry(db_session, token_hash_hex=th, payload=payload)
+        await commit_with_redis(db_session, redis_client)
+
+        # 重新读取 Redis
+        new_raw = await redis_client.get(f"auth:{th}")
+        new_payload = TokenPayload.model_validate_json(new_raw)
+
+        # 断言：new.expires_at > old.expires_at
+        assert new_payload.expires_at > old_payload.expires_at, (
+            f"expires_at should increase after roll; "
+            f"old={old_payload.expires_at}, new={new_payload.expires_at}"
+        )
+        # 断言：new.last_rolled_date == today_cst（真今日，CST 对齐）
+        assert new_payload.last_rolled_date == tokens_mod._today_cst()
+        # 断言：value 字符串本身发生变化
+        assert new_raw != old_raw
 
     @pytest.mark.asyncio
     async def test_roll_token_plus_commit_persists(
