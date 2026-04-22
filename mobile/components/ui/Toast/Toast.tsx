@@ -5,7 +5,6 @@ import Animated, {
 	useSharedValue,
 	useAnimatedStyle,
 	withTiming,
-	runOnJS,
 } from 'react-native-reanimated'
 import { useTheme } from '@/theme'
 import { createStyles, VARIANT_COLORS } from './Toast.styles'
@@ -19,12 +18,13 @@ const ICON_MAP: Record<string, FeatherName> = {
 	error: 'x-circle',
 }
 
-export function Toast({ message, variant, onDismiss, style }: ToastProps) {
+export function Toast({ message, variant, style }: ToastProps) {
 	const theme = useTheme()
 	const styles = createStyles(theme)
 	const opacity = useSharedValue(0)
 	const translateY = useSharedValue(-20)
 
+	// Entry animation on mount
 	useEffect(() => {
 		opacity.value = withTiming(1, { duration: 200 })
 		translateY.value = withTiming(0, { duration: 200 })
@@ -34,18 +34,6 @@ export function Toast({ message, variant, onDismiss, style }: ToastProps) {
 		opacity: opacity.value,
 		transform: [{ translateY: translateY.value }],
 	}))
-
-	useEffect(() => {
-		const timer = setTimeout(() => {
-			opacity.value = withTiming(0, { duration: 200 }, (finished) => {
-				if (finished) {
-					runOnJS(onDismiss)()
-				}
-			})
-			translateY.value = withTiming(-20, { duration: 200 })
-		}, 3000)
-		return () => clearTimeout(timer)
-	}, [opacity, translateY, onDismiss])
 
 	const bgColor = VARIANT_COLORS[variant]
 

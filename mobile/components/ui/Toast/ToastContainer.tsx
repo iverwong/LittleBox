@@ -8,7 +8,6 @@ export function ToastContainer() {
 	const theme = useTheme()
 	const insets = useSafeAreaInsets()
 	const toasts = useToastStore((s) => s.toasts)
-	const removeToast = useToastStore((s) => s.removeToast)
 
 	return (
 		<View
@@ -27,7 +26,6 @@ export function ToastContainer() {
 					key={t.id}
 					message={t.message}
 					variant={t.variant}
-					onDismiss={() => removeToast(t.id)}
 				/>
 			))}
 		</View>
