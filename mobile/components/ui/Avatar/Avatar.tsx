@@ -5,6 +5,7 @@ import { createStyles } from './Avatar.styles'
 import type { AvatarProps } from './Avatar.types'
 
 const FONT_SIZE = { sm: 16, md: 22, lg: 28, xl: 36 } as const
+const AVATAR_SIZE: Record<'sm' | 'md' | 'lg' | 'xl', number> = { sm: 40, md: 56, lg: 72, xl: 96 }
 
 export function Avatar({
 	source,
@@ -20,9 +21,9 @@ export function Avatar({
 	const initial = name?.trim().charAt(0).toUpperCase() ?? ''
 
 	return (
-		<View style={[styles.wrap as object, styles[`size_${size}`] as object, { backgroundColor: bg }, style as object]}>
+		<View style={[styles.wrap, styles[`size_${size}`], { backgroundColor: bg }, style]}>
 			{source ? (
-				<Image source={source} style={[styles.wrap as object, styles[`size_${size}`] as object]} />
+				<Image source={source} style={{ width: AVATAR_SIZE[size], height: AVATAR_SIZE[size], borderRadius: theme.radius.full }} />
 			) : (
 				initial ? (
 					<Text style={{ fontSize: FONT_SIZE[size], fontWeight: theme.typography.fontWeight.semibold, color: theme.palette.primary[700] }}>
@@ -30,7 +31,7 @@ export function Avatar({
 					</Text>
 				) : null
 			)}
-			{badge ? <View style={styles.badge as object}>{badge}</View> : null}
+			{badge ? <View style={styles.badge}>{badge}</View> : null}
 		</View>
 	)
 }

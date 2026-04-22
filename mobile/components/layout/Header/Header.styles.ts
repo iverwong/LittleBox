@@ -1,7 +1,16 @@
 import { StyleSheet } from 'react-native'
+import type { TextStyle, ViewStyle } from 'react-native'
 import type { Theme } from '@/theme'
 
-type HeaderStyles = Record<string, object>
+type HeaderStyles = {
+	container: ViewStyle
+	row: ViewStyle
+	leading: ViewStyle
+	titleWrap: ViewStyle
+	title: TextStyle
+	subtitle: TextStyle
+	trailing: ViewStyle
+}
 
 export const createStyles = (_theme: Theme): HeaderStyles => {
 	return StyleSheet.create({

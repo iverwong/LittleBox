@@ -17,7 +17,7 @@ export function Card({
 	const paddingValue = theme.spacing[padding] ?? 16
 
 	const content = (
-		<View style={[styles.base as object, styles[`variant_${variant}`] as object, { padding: paddingValue }, style as object]}>
+		<View style={[styles.base, styles[`variant_${variant}`], { padding: paddingValue }, style]}>
 			{children}
 		</View>
 	)

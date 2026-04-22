@@ -32,7 +32,7 @@ export function ScreenContainer({
 	if (scrollable) {
 		return (
 			<ScrollView
-				style={[styles.container as object, containerStyle, style as object]}
+				style={[styles.container, containerStyle, style]}
 				contentContainerStyle={styles.contentContainer}
 			>
 				{children}
@@ -41,7 +41,7 @@ export function ScreenContainer({
 	}
 
 	return (
-		<View style={[styles.container as object, containerStyle, style as object]}>
+		<View style={[styles.container, containerStyle, style]}>
 			{children}
 		</View>
 	)

@@ -10,13 +10,13 @@ export function ListItem({ leading, title, subtitle, trailing, onPress, divider 
 	const styles = useMemo(() => createStyles(theme), [theme])
 
 	const content = (
-		<View style={styles.content as object}>
-			{leading && <View style={styles.leading as object}>{leading}</View>}
-			<View style={styles.textWrap as object}>
+		<View style={styles.content}>
+			{leading && <View style={styles.leading}>{leading}</View>}
+			<View style={styles.textWrap}>
 				<Text style={styles.title}>{title}</Text>
-				{subtitle && <Text style={styles.subtitle as object}>{subtitle}</Text>}
+				{subtitle && <Text style={styles.subtitle}>{subtitle}</Text>}
 			</View>
-			{trailing && <View style={styles.trailing as object}>{trailing}</View>}
+			{trailing && <View style={styles.trailing}>{trailing}</View>}
 		</View>
 	)
 
@@ -24,7 +24,7 @@ export function ListItem({ leading, title, subtitle, trailing, onPress, divider 
 		return (
 			<Pressable onPress={onPress} style={({ pressed }) => [pressed ? { opacity: 0.7 } : null]}>
 				{content}
-				{divider && <View style={styles.divider as object} />}
+				{divider && <View style={styles.divider} />}
 			</Pressable>
 		)
 	}
@@ -32,7 +32,7 @@ export function ListItem({ leading, title, subtitle, trailing, onPress, divider 
 	return (
 		<View>
 			{content}
-			{divider && <View style={styles.divider as object} />}
+			{divider && <View style={styles.divider} />}
 		</View>
 	)
 }

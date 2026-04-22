@@ -44,7 +44,7 @@ export function Mascot({ state = 'idle', size = 'md', onFinish, style }: MascotP
 					width: containerSize,
 					height: containerSize,
 				},
-				style as object,
+				style,
 			]}
 		>
 			<View

@@ -2,7 +2,13 @@ import { StyleSheet } from 'react-native'
 import type { ViewStyle } from 'react-native'
 import type { Theme } from '@/theme'
 
-type CardStyles = Record<string, ViewStyle>
+type CardStyles = {
+	base: ViewStyle
+	variant_elevated: ViewStyle
+	variant_outlined: ViewStyle
+	variant_filled: ViewStyle
+	variant_accentSecondary: ViewStyle
+}
 
 export const createStyles = (theme: Theme): CardStyles => {
 	return StyleSheet.create({

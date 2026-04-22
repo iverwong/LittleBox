@@ -3,8 +3,11 @@ import type { ViewStyle, TextStyle } from 'react-native'
 import type { Theme } from '@/theme'
 import type { ToastVariant } from './toastStore'
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-type _ToastStyles = Record<string, ViewStyle | TextStyle>
+type ToastStyles = {
+	container: ViewStyle
+	icon: TextStyle
+	message: TextStyle
+}
 
 const VARIANT_COLORS: Record<ToastVariant, string> = {
 	info: '#6A8CA8',
@@ -13,17 +16,16 @@ const VARIANT_COLORS: Record<ToastVariant, string> = {
 	error: '#C56B5E',
 }
 
-export const createStyles = (theme: Theme) => {
+export const createStyles = (_theme: Theme): ToastStyles => {
 	return StyleSheet.create({
 		container: {
 			flexDirection: 'row',
 			alignItems: 'center',
-			paddingVertical: theme.spacing[3],
-			paddingHorizontal: theme.spacing[4],
-			borderRadius: theme.radius.md,
-			marginHorizontal: theme.spacing[4],
-			gap: theme.spacing[2],
-			// Shadow for elevation feel
+			paddingVertical: _theme.spacing[3],
+			paddingHorizontal: _theme.spacing[4],
+			borderRadius: _theme.radius.md,
+			marginHorizontal: _theme.spacing[4],
+			gap: _theme.spacing[2],
 			shadowColor: '#3C2814',
 			shadowOpacity: 0.1,
 			shadowOffset: { width: 0, height: 2 },
@@ -36,8 +38,8 @@ export const createStyles = (theme: Theme) => {
 		},
 		message: {
 			flex: 1,
-			fontSize: theme.typography.fontSize.sm,
-			fontWeight: theme.typography.fontWeight.medium,
+			fontSize: _theme.typography.fontSize.sm,
+			fontWeight: _theme.typography.fontWeight.medium,
 			color: '#FFFFFF',
 		},
 	})

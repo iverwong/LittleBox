@@ -19,7 +19,7 @@ export function Loading({ size = 'md', color, style }: LoadingProps) {
 	const nativeSize = SIZE_MAP[size] ?? 24
 
 	return (
-		<View style={[styles.container as object, style as object]}>
+		<View style={[styles.container, style]}>
 			<ActivityIndicator size={nativeSize} color={indicatorColor} />
 		</View>
 	)

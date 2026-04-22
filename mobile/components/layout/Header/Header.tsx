@@ -19,7 +19,7 @@ export function Header({ title, subtitle, leading, trailing, safeArea = true }: 
 				{leading && <View style={styles.leading}>{leading}</View>}
 				<View style={styles.titleWrap}>
 					{title && <Text style={styles.title}>{title}</Text>}
-					{subtitle && <Text style={styles.subtitle as object}>{subtitle}</Text>}
+					{subtitle && <Text style={styles.subtitle}>{subtitle}</Text>}
 				</View>
 				{trailing && <View style={styles.trailing}>{trailing}</View>}
 			</View>

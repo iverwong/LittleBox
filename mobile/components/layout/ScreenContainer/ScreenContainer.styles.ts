@@ -1,7 +1,11 @@
 import { StyleSheet } from 'react-native'
+import type { ViewStyle } from 'react-native'
 import type { Theme } from '@/theme'
 
-type ScreenContainerStyles = Record<string, object>
+type ScreenContainerStyles = {
+	container: ViewStyle
+	contentContainer: ViewStyle
+}
 
 export const createStyles = (_theme: Theme): ScreenContainerStyles => {
 	return StyleSheet.create({

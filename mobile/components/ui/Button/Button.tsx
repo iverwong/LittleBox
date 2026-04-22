@@ -42,7 +42,7 @@ export function Button({
 				styles[`size_${size}`],
 				pressed && !isDisabled ? styles.pressed : null,
 				isDisabled ? styles.disabled : null,
-				style as object,
+				style,
 			]}
 		>
 			{loading ? (
@@ -54,7 +54,7 @@ export function Button({
 							name={leftIcon as FeatherName}
 							size={18}
 							color={textColor}
-							style={styles.icon as object}
+							style={styles.icon}
 						/>
 					)}
 					{children != null && (
@@ -67,7 +67,7 @@ export function Button({
 							name={rightIcon as FeatherName}
 							size={18}
 							color={textColor}
-							style={styles.icon as object}
+							style={styles.icon}
 						/>
 					)}
 				</>

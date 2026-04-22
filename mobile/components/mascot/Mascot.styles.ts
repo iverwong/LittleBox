@@ -1,4 +1,5 @@
 import { StyleSheet } from 'react-native'
+import type { ViewStyle } from 'react-native'
 import type { Theme } from '@/theme'
 import type { MascotSize } from './Mascot.types'
 
@@ -9,7 +10,13 @@ const SIZE_MAP: Record<MascotSize, number> = {
 	xl: 200,
 }
 
-export const createStyles = (_theme: Theme) => {
+type MascotStyles = {
+	container: ViewStyle
+	outerRing: ViewStyle
+	innerCircle: ViewStyle
+}
+
+export const createStyles = (_theme: Theme): MascotStyles => {
 	return StyleSheet.create({
 		container: {
 			alignItems: 'center',

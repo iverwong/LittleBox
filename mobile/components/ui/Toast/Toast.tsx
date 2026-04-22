@@ -26,10 +26,10 @@ export function Toast({ message, variant, style }: ToastProps) {
 			style={[
 				styles.container,
 				{ backgroundColor: bgColor },
-				style as object,
+				style,
 			]}
 		>
-			<Feather name={ICON_MAP[variant]} size={18} color="#FFFFFF" style={styles.icon as object} />
+			<Feather name={ICON_MAP[variant]} size={18} color="#FFFFFF" style={styles.icon} />
 			<Text style={styles.message}>{message}</Text>
 		</Animated.View>
 	)

@@ -1,12 +1,22 @@
 import { StyleSheet } from 'react-native'
+import type { TextStyle, ViewStyle } from 'react-native'
 import type { Theme } from '@/theme'
 
-type ChatBubbleStyles = Record<string, object>
+type ChatBubbleStyles = {
+	wrap: ViewStyle
+	wrapUser: ViewStyle
+	wrapAi: ViewStyle
+	bubble: ViewStyle
+	bubbleUser: ViewStyle
+	bubbleAi: ViewStyle
+	text: TextStyle
+	textUser: TextStyle
+	textAi: TextStyle
+}
 
 export const createStyles = (_theme: Theme): ChatBubbleStyles => {
 	return StyleSheet.create({
 		wrap: {
-			display: 'flex',
 			marginVertical: 4,
 		},
 		wrapUser: {

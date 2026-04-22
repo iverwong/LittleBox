@@ -1,8 +1,21 @@
 import { StyleSheet } from 'react-native'
-import type { ViewStyle } from 'react-native'
+import type { ViewStyle, TextStyle } from 'react-native'
 import type { Theme } from '@/theme'
 
-type ButtonStyles = Record<string, ViewStyle>
+type ButtonStyles = {
+	base: ViewStyle
+	variant_primary: ViewStyle
+	variant_secondary: ViewStyle
+	variant_ghost: ViewStyle
+	variant_danger: ViewStyle
+	size_sm: ViewStyle
+	size_md: ViewStyle
+	size_lg: ViewStyle
+	pressed: ViewStyle
+	disabled: ViewStyle
+	icon: TextStyle
+	spinner: TextStyle
+}
 
 export const createStyles = (theme: Theme): ButtonStyles => {
 	return StyleSheet.create({

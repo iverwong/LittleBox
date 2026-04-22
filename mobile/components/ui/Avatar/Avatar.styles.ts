@@ -2,7 +2,14 @@ import { StyleSheet } from 'react-native'
 import type { ViewStyle } from 'react-native'
 import type { Theme } from '@/theme'
 
-type AvatarStyles = Record<string, ViewStyle>
+type AvatarStyles = {
+	wrap: ViewStyle
+	size_sm: ViewStyle
+	size_md: ViewStyle
+	size_lg: ViewStyle
+	size_xl: ViewStyle
+	badge: ViewStyle
+}
 
 export const createStyles = (theme: Theme): AvatarStyles => {
 	return StyleSheet.create({

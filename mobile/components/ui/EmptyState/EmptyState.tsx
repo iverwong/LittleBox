@@ -14,7 +14,7 @@ export function EmptyState({ illustration, icon, title, description, action }: E
 	return (
 		<View style={styles.container}>
 			{(illustration || icon) && (
-				<View style={styles.iconWrap as object}>
+				<View style={styles.iconWrap}>
 					{illustration ? (
 						<Image source={illustration} resizeMode="contain" style={{ width: 120, height: 120 }} />
 					) : (
@@ -23,7 +23,7 @@ export function EmptyState({ illustration, icon, title, description, action }: E
 				</View>
 			)}
 			<Text style={styles.title}>{title}</Text>
-			{description && <Text style={styles.description as object}>{description}</Text>}
+			{description && <Text style={styles.description}>{description}</Text>}
 			{action && <View style={{ marginTop: theme.spacing[2] }}>{action}</View>}
 		</View>
 	)
