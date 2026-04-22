@@ -1,7 +1,20 @@
-import { StyleSheet, DimensionValue } from 'react-native'
+import { StyleSheet } from 'react-native'
+import type { TextStyle, ViewStyle } from 'react-native'
 import type { Theme } from '@/theme'
 
-type ModalStyles = Record<string, object>
+type ModalStyles = {
+	backdrop: ViewStyle
+	panel: ViewStyle
+	size_sm: ViewStyle
+	size_md: ViewStyle
+	size_lg: ViewStyle
+	size_full: ViewStyle
+	header: ViewStyle
+	title: TextStyle
+	closeBtn: ViewStyle
+	content: ViewStyle
+	footer: ViewStyle
+}
 
 export const createStyles = (_theme: Theme): ModalStyles => {
 	return StyleSheet.create({
@@ -18,27 +31,20 @@ export const createStyles = (_theme: Theme): ModalStyles => {
 			overflow: 'hidden',
 		},
 		size_sm: {
-			width: '100%' as DimensionValue,
-			maxWidth: 320,
+			width: '70%',
 			maxHeight: '40%',
-			marginBottom: _theme.spacing[4],
 		},
 		size_md: {
-			width: '100%' as DimensionValue,
-			maxWidth: 420,
+			width: '85%',
 			maxHeight: '55%',
-			marginBottom: _theme.spacing[4],
 		},
 		size_lg: {
-			width: '100%' as DimensionValue,
-			maxWidth: 520,
+			width: '95%',
 			maxHeight: '75%',
-			marginBottom: _theme.spacing[4],
 		},
 		size_full: {
-			width: '100%' as DimensionValue,
-			maxWidth: '100%' as DimensionValue,
-			maxHeight: '90%',
+			width: '100%',
+			maxHeight: '100%',
 			borderTopLeftRadius: 0,
 			borderTopRightRadius: 0,
 		},

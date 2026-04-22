@@ -1,6 +1,7 @@
 import { Modal as RNModal, View, Text, Pressable } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { useMemo, useEffect } from 'react'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Animated, {
 	useSharedValue,
 	useAnimatedStyle,
@@ -29,6 +30,7 @@ export function Modal({
 	style,
 }: ModalProps) {
 	const theme = useTheme()
+	const insets = useSafeAreaInsets()
 	const styles = useMemo(() => createStyles(theme), [theme])
 
 	const translateY = useSharedValue(300)
@@ -59,6 +61,9 @@ export function Modal({
 		}
 	}
 
+	const panelPaddingBottom =
+		size === 'full' ? insets.bottom : insets.bottom + theme.spacing[4]
+
 	return (
 		<RNModal
 			transparent
@@ -68,24 +73,30 @@ export function Modal({
 			statusBarTranslucent
 		>
 			<AnimatedPressable
-				style={[styles.backdrop as object, backdropStyle]}
+				style={[styles.backdrop, backdropStyle]}
 				onPress={handleBackdropPress}
 			>
 				<Animated.View
-					style={[styles.panel, styles[`size_${size}`] as object, style as object, animatedStyle]}
+					style={[
+						styles.panel,
+						styles[`size_${size}`],
+						{ paddingBottom: panelPaddingBottom },
+						style,
+						animatedStyle,
+					]}
 					onStartShouldSetResponder={() => true}
 					onResponderRelease={() => {}}
 				>
 					{title && (
-						<View style={styles.header as object}>
-							<Text style={styles.title as object}>{title}</Text>
-							<Pressable onPress={onClose} style={styles.closeBtn as object} hitSlop={8}>
+						<View style={styles.header}>
+							<Text style={styles.title}>{title}</Text>
+							<Pressable onPress={onClose} style={styles.closeBtn} hitSlop={8}>
 								<Feather name="x" size={20} color={theme.palette.neutral[600]} />
 							</Pressable>
 						</View>
 					)}
-					<View style={styles.content as object}>{children}</View>
-					{footer && <View style={styles.footer as object}>{footer}</View>}
+					<View style={styles.content}>{children}</View>
+					{footer && <View style={styles.footer}>{footer}</View>}
 				</Animated.View>
 			</AnimatedPressable>
 		</RNModal>
