@@ -19,4 +19,10 @@ export type { EmptyStateProps } from './EmptyState'
 export { ListItem } from './ListItem'
 export type { ListItemProps } from './ListItem'
 
+export { Modal } from './Modal'
+export type { ModalProps, ModalSize } from './Modal'
+
+export { Toast, ToastContainer, toast } from './Toast'
+export type { ToastProps, ToastVariant } from './Toast'
+
 export type { FeatherName } from './types'
