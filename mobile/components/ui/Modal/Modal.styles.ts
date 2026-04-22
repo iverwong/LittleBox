@@ -39,7 +39,8 @@ export const createStyles = (_theme: Theme): ModalStyles => {
 			width: '100%' as DimensionValue,
 			maxWidth: '100%' as DimensionValue,
 			maxHeight: '90%',
-			borderRadius: 0,
+			borderTopLeftRadius: 0,
+			borderTopRightRadius: 0,
 		},
 		header: {
 			flexDirection: 'row',

@@ -1,5 +1,10 @@
 import { View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import Animated, {
+	FadeInDown,
+	FadeOut,
+	LinearTransition,
+} from 'react-native-reanimated'
 import { useTheme } from '@/theme'
 import { useToastStore } from './toastStore'
 import { Toast } from './Toast'
@@ -22,11 +27,17 @@ export function ToastContainer() {
 			pointerEvents="none"
 		>
 			{toasts.map((t) => (
-				<Toast
+				<Animated.View
 					key={t.id}
-					message={t.message}
-					variant={t.variant}
-				/>
+					entering={FadeInDown.duration(200)}
+					exiting={FadeOut.duration(200)}
+					layout={LinearTransition.duration(200)}
+				>
+					<Toast
+						message={t.message}
+						variant={t.variant}
+					/>
+				</Animated.View>
 			))}
 		</View>
 	)

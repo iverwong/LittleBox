@@ -1,11 +1,6 @@
 import { Text } from 'react-native'
 import { Feather } from '@expo/vector-icons'
-import { useEffect } from 'react'
-import Animated, {
-	useSharedValue,
-	useAnimatedStyle,
-	withTiming,
-} from 'react-native-reanimated'
+import Animated from 'react-native-reanimated'
 import { useTheme } from '@/theme'
 import { createStyles, VARIANT_COLORS } from './Toast.styles'
 import type { ToastProps } from './Toast.types'
@@ -18,23 +13,12 @@ const ICON_MAP: Record<string, FeatherName> = {
 	error: 'x-circle',
 }
 
+// Toast is rendered inside Animated.View in ToastContainer.
+// Entry/exit animations are handled by the parent Animated.View (FadeInDown/FadeOut).
+// No internal animation needed here.
 export function Toast({ message, variant, style }: ToastProps) {
 	const theme = useTheme()
 	const styles = createStyles(theme)
-	const opacity = useSharedValue(0)
-	const translateY = useSharedValue(-20)
-
-	// Entry animation on mount
-	useEffect(() => {
-		opacity.value = withTiming(1, { duration: 200 })
-		translateY.value = withTiming(0, { duration: 200 })
-	}, [opacity, translateY])
-
-	const animatedStyle = useAnimatedStyle(() => ({
-		opacity: opacity.value,
-		transform: [{ translateY: translateY.value }],
-	}))
-
 	const bgColor = VARIANT_COLORS[variant]
 
 	return (
@@ -42,7 +26,6 @@ export function Toast({ message, variant, style }: ToastProps) {
 			style={[
 				styles.container,
 				{ backgroundColor: bgColor },
-				animatedStyle,
 				style as object,
 			]}
 		>
