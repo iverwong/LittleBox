@@ -98,6 +98,8 @@ function RootLayoutNav() {
           <Stack>
             {/* [M3-TEMP] M3 期间只暴露 dev-chat；其它分组屏幕声明保留注释，M4 还原。 */}
             <Stack.Screen name="dev-chat" options={{ headerShown: false }} />
+            {/* [M15-TEMP] Dev-only gallery. Remove at M15. */}
+            <Stack.Screen name="(dev)" options={{ headerShown: false }} />
             {/*
             <Stack.Screen name="(auth)" options={{ headerShown: false }} />
             <Stack.Screen name="(child)" options={{ headerShown: false }} />

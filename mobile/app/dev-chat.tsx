@@ -55,7 +55,6 @@ export default function DevChat() {
 		<View style={styles.container}>
 			<Text style={styles.title}>M3 Streaming Demo（M7 后删除）</Text>
 			{/* [M15-TEMP] 临时入口，展厅验收完成后删除 */}
-			{/* @ts-expect-error expo-router generated types don't yet include /(dev)/components */}
 			<Button title="开发展厅" onPress={() => router.push('/components')} />
 			<TextInput
 				style={styles.input}
