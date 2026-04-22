@@ -61,3 +61,5 @@ export const shadow = {
 export const surface = {
 	paper: '#FFFFFF',
 } as const
+
+export { layout } from './layout'
