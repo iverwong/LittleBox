@@ -252,7 +252,6 @@ function InputSection() {
 	const [valDefault, setValDefault] = useState('')
 	const [valFocused, setValFocused] = useState('聚焦态内容')
 	const [valError, setValError] = useState('')
-	const [errMsg, setErrMsg] = useState('')
 
 	return (
 		<>
@@ -260,7 +259,7 @@ function InputSection() {
 			<View style={{ paddingHorizontal: 16, gap: 12 }}>
 				<Input
 					value={valDefault}
-					onChangeText={t => { setValDefault(t); setErrMsg('') }}
+					onChangeText={setValDefault}
 					placeholder="默认状态"
 					label="默认"
 					size="md"
@@ -273,11 +272,11 @@ function InputSection() {
 					size="md"
 				/>
 				<Input
-					value={valError || 'invalid@example'}
-					onChangeText={t => { setValError(t); setErrMsg(t.length > 10 ? '输入错误' : '') }}
+					value={valError}
+					onChangeText={setValError}
 					placeholder="Error"
 					label="错误态"
-					error={errMsg || undefined}
+					error="请输入有效邮箱"
 					size="md"
 				/>
 				<Input
