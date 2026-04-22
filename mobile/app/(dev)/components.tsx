@@ -421,11 +421,11 @@ function ModalSection() {
 					title="组件标题"
 					size={size}
 					onClose={() => setVisible(false)}
-					footer={
-						<View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16 }}>
+footer={
+						<>
 							<Button variant="ghost" size="md" onPress={() => setVisible(false)}>取消</Button>
 							<Button variant="primary" size="md" onPress={() => setVisible(false)}>确认</Button>
-						</View>
+						</>
 					}
 				>
 					<Text style={{ fontSize: 14, color: '#555', lineHeight: 22 }}>

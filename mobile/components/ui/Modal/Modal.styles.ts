@@ -76,6 +76,9 @@ export const createStyles = (_theme: Theme): ModalStyles => {
 			paddingHorizontal: _theme.spacing[5],
 			borderTopWidth: 1,
 			borderTopColor: _theme.palette.neutral[100],
+			flexDirection: 'row',
+			justifyContent: 'flex-end',
+			gap: _theme.spacing[2],
 		},
 	})
 }
