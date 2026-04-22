@@ -356,7 +356,7 @@ function ListItemSection() {
 	return (
 		<>
 			<SectionHeader title="ListItem" />
-			<View style={{ paddingHorizontal: 16 }}>
+			<View style={{ paddingHorizontal: 16, gap: 8 }}>
 				<ListItem
 					leading={<Avatar name="李" size="sm" />}
 					title="李小白"
