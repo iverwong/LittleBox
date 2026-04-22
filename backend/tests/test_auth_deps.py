@@ -4,7 +4,9 @@ device_changed 走 revoke_token + commit_with_redis 返回 401。
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
@@ -349,60 +351,77 @@ class TestDailyRenewal:
         assert after > datetime.now(timezone.utc)
 
     @pytest.mark.asyncio
-    async def test_second_request_same_day_skips_db_update(
-        self, api_client, db_session: AsyncSession, redis_client, parent_user: User,
+    async def test_get_current_account_same_day_skips_roll_token_call(
+        self, monkeypatch, api_client, db_session: AsyncSession, redis_client, parent_user: User,
     ) -> None:
-        """patch 昨日让首次续期发生；恢复后 Redis last_rolled_date=yesterday，
-        第二次 /me → needs_roll=False → DB 不再 UPDATE"""
+        """同一天内第二次 /me 调用 get_current_account，roll_token_expiry 不应被调用。
+
+        验证方式：monkeypatch counter 记录 roll_token_expiry 调用次数。
+
+        patch 目标：app.auth.deps.roll_token_expiry（使用点），
+        不是 app.auth.tokens.roll_token_expiry（定义点）。
+
+        前置条件：issue_token 把 last_rolled_date 初始化为当天，
+        导致 needs_roll=False。需先将 Redis 中的 last_rolled_date 拨到昨天，
+        确保首次请求触发 roll_token_expiry。
+        """
+        import app.auth.deps as auth_deps
+        import app.auth.tokens as tokens_mod
+
         token = await issue_token(
             db_session,
             user_id=parent_user.id,
             role=parent_user.role,
             family_id=parent_user.family_id,
-            device_id="devF",
+            device_id="dev_same_day",
         )
         await commit_with_redis(db_session, redis_client)
         th = token_hash(token)
 
-        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
-        import app.auth.tokens as tokens_module
-        original_today = tokens_module._today_cst
+        # 将 Redis 中的 last_rolled_date 拨到昨天（CST 对齐），确保 needs_roll=True
+        today_cst = tokens_mod._today_cst()
+        yesterday_date = (
+            datetime.fromisoformat(today_cst).date() - timedelta(days=1)
+        ).isoformat()
 
-        def fake_today_yesterday():
-            return yesterday
+        raw = await redis_client.get(f"{REDIS_KEY_PREFIX}{th}")
+        payload_dict = json.loads(raw)
+        payload_dict["last_rolled_date"] = yesterday_date
+        await redis_client.set(f"{REDIS_KEY_PREFIX}{th}", json.dumps(payload_dict))
 
-        # 首次调用：patch 昨日 → needs_roll=True → 续期发生
-        tokens_module._today_cst = fake_today_yesterday
-        resp1 = await api_client.get(
-            "/api/v1/me",
-            headers={"Authorization": f"Bearer {token}", "X-Device-Id": "devF"},
-        )
-        assert resp1.status_code == 200
+        calls: list[tuple[Any, ...]] = []
+        original = auth_deps.roll_token_expiry
 
-        # 恢复 _today_cst 后，Redis last_rolled_date 仍是 yesterday（续期时写入的）
-        tokens_module._today_cst = original_today
+        async def _counting(*args: Any, **kwargs: Any) -> Any:
+            calls.append((args, kwargs))
+            return await original(*args, **kwargs)
 
-        # 第二次调用：last_rolled_date=yesterday, _today_cst()=today → needs_roll=False
-        resp2 = await api_client.get(
-            "/api/v1/me",
-            headers={"Authorization": f"Bearer {token}", "X-Device-Id": "devF"},
-        )
-        assert resp2.status_code == 200
+        monkeypatch.setattr("app.auth.deps.roll_token_expiry", _counting)
 
-        # DB expires_at 不变（两次调用在同一 session；第二次 skip 所以无新 UPDATE）
-        from sqlalchemy import select
-        after2 = (await db_session.execute(
-            select(AuthToken.expires_at).where(AuthToken.token_hash == th)
-        )).scalar_one()
-        after_roll_time = after2.timestamp()  # 用 timestamp() 避免 datetime 微秒精度比较
+        try:
+            headers = {"Authorization": f"Bearer {token}", "X-Device-Id": "dev_same_day"}
 
-        # 第一次 resp1 的 expires_at 也约等于 after2（都在同一 UTC 秒内）
-        # 第二次 skip 所以 after2 不会再变：差值 < 1 秒
-        # 为避免时间边界问题，只验证 after2 显著大于 now（说明确实续了）
-        assert after2 > datetime.now(timezone.utc)
-        # 验证 skip：after2 和 now 的差 ≈ 7 天（不是 0，说明没有再续一次把 expires_at 再推后）
-        delta = (after2 - datetime.now(timezone.utc)).total_seconds()
-        assert 6 * 86400 < delta < 8 * 86400  # 约 7 天
+            # 第一次 /me：last_rolled_date=yesterday → needs_roll=True → 触发
+            resp1 = await api_client.get("/api/v1/me", headers=headers)
+            assert resp1.status_code == 200
+
+            # 显式断言：第一次请求后 Redis payload 已回写 last_rolled_date=今天（CST）
+            raw_after_first = await redis_client.get(f"{REDIS_KEY_PREFIX}{th}")
+            payload_after_first = json.loads(raw_after_first)
+            assert payload_after_first["last_rolled_date"] == today_cst, (
+                f"after first request last_rolled_date should be {today_cst}, "
+                f"got {payload_after_first['last_rolled_date']}"
+            )
+
+            # 第二次 /me：last_rolled_date 已在第一次被更新为今天 → needs_roll=False → 跳过
+            resp2 = await api_client.get("/api/v1/me", headers=headers)
+            assert resp2.status_code == 200
+
+            # 断言：roll_token_expiry 只被调用 1 次（同一天 skip）
+            assert len(calls) == 1, f"expected 1 call, got {len(calls)}"
+
+        finally:
+            monkeypatch.setattr("app.auth.deps.roll_token_expiry", original)
 
     @pytest.mark.asyncio
     async def test_child_token_never_renews(
