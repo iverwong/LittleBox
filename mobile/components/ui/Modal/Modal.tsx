@@ -10,7 +10,8 @@ import Animated, {
 import { useTheme } from '@/theme'
 import { createStyles } from './Modal.styles'
 import type { ModalProps } from './Modal.types'
-export type { ModalProps, ModalSize } from './Modal.types'
+export type { ModalProps } from './Modal.types'
+export type { ModalSize } from './Modal.types'
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable)
 
@@ -23,6 +24,7 @@ export function Modal({
 	title,
 	children,
 	footer,
+	size = 'md',
 	dismissOnBackdrop = true,
 	style,
 }: ModalProps) {
@@ -70,7 +72,7 @@ export function Modal({
 				onPress={handleBackdropPress}
 			>
 				<Animated.View
-					style={[styles.panel, style as object, animatedStyle]}
+					style={[styles.panel, styles[`size_${size}`] as object, style as object, animatedStyle]}
 					onStartShouldSetResponder={() => true}
 					onResponderRelease={() => {}}
 				>

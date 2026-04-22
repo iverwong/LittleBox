@@ -1,15 +1,9 @@
-import { StyleSheet } from 'react-native'
+import { StyleSheet, DimensionValue } from 'react-native'
 import type { Theme } from '@/theme'
-import type { ModalSize } from './Modal.types'
 
-const SIZE_WIDTH: Record<ModalSize, string | number> = {
-	sm: 320,
-	md: 420,
-	lg: 560,
-	full: '92%',
-}
+type ModalStyles = Record<string, object>
 
-export const createStyles = (_theme: Theme) => {
+export const createStyles = (_theme: Theme): ModalStyles => {
 	return StyleSheet.create({
 		backdrop: {
 			flex: 1,
@@ -21,10 +15,31 @@ export const createStyles = (_theme: Theme) => {
 			backgroundColor: _theme.surface.paper,
 			borderTopLeftRadius: _theme.radius['2xl'],
 			borderTopRightRadius: _theme.radius['2xl'],
-			width: '100%',
-			maxWidth: SIZE_WIDTH.lg as number,
-			maxHeight: '90%',
 			overflow: 'hidden',
+		},
+		size_sm: {
+			width: '100%' as DimensionValue,
+			maxWidth: 320,
+			maxHeight: '40%',
+			marginBottom: _theme.spacing[4],
+		},
+		size_md: {
+			width: '100%' as DimensionValue,
+			maxWidth: 420,
+			maxHeight: '55%',
+			marginBottom: _theme.spacing[4],
+		},
+		size_lg: {
+			width: '100%' as DimensionValue,
+			maxWidth: 520,
+			maxHeight: '75%',
+			marginBottom: _theme.spacing[4],
+		},
+		size_full: {
+			width: '100%' as DimensionValue,
+			maxWidth: '100%' as DimensionValue,
+			maxHeight: '90%',
+			borderRadius: 0,
 		},
 		header: {
 			flexDirection: 'row',
