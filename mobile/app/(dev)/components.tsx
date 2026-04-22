@@ -16,7 +16,6 @@ import {
 	ListItem,
 	Modal,
 	toast,
-	ToastContainer,
 } from '@/components/ui'
 import { ScreenContainer, Header, ChatBubble } from '@/components/layout'
 import { Mascot } from '@/components/mascot'
@@ -636,9 +635,6 @@ export default function ComponentGallery() {
 				<SectionHeader title="Mascot" />
 				<MascotSection />
 			</ScrollView>
-
-			{/* ToastContainer must be inside the page to use useSafeAreaInsets */}
-			<ToastContainer />
 		</View>
 	)
 }
