@@ -5,11 +5,14 @@ import type { Theme } from '@/theme'
 type InputStyles = {
 	wrap: ViewStyle
 	container: ViewStyle
+	container_focused: ViewStyle
+	container_error: ViewStyle
+	container_disabled: ViewStyle
 	input: TextStyle
 	size_md: TextStyle
 	size_lg: TextStyle
-	iconLeft: ViewStyle
-	iconRight: ViewStyle
+	iconLeft: TextStyle
+	iconRight: TextStyle
 	errorText: TextStyle
 }
 
@@ -25,10 +28,26 @@ export const createStyles = (theme: Theme): InputStyles => {
 			flexDirection: 'row',
 			alignItems: 'center',
 			backgroundColor: theme.palette.neutral[50],
-			borderWidth: 1,
+			borderWidth: 2,
 			borderColor: theme.palette.neutral[200],
 			borderRadius: theme.radius.md,
 			paddingHorizontal: theme.spacing[3],
+		},
+		container_focused: {
+			borderColor: theme.palette.primary[400],
+			shadowColor: theme.palette.primary[500],
+			shadowOpacity: 0.25,
+			shadowRadius: 4,
+			shadowOffset: { width: 0, height: 0 },
+			elevation: 3,
+		},
+		container_error: {
+			borderColor: theme.ui.error,
+			borderWidth: 2,
+		},
+		container_disabled: {
+			backgroundColor: theme.palette.neutral[100],
+			borderColor: theme.palette.neutral[200],
 		},
 		input: { flex: 1, color: theme.palette.neutral[800] },
 		size_md: sizeStyles.md,
