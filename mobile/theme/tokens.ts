@@ -56,3 +56,8 @@ export const shadow = {
 	md: { shadowColor: '#3C2814', shadowOpacity: 0.08, shadowOffset: { width: 0, height: 2 }, shadowRadius: 6, elevation: 3 },
 	lg: { shadowColor: '#3C2814', shadowOpacity: 0.10, shadowOffset: { width: 0, height: 4 }, shadowRadius: 14, elevation: 6 },
 } as const
+
+/** 浮起表面层 · 与环境底 neutral[50] 米杏纸质感形成两层对比 */
+export const surface = {
+	paper: '#FFFFFF',
+} as const

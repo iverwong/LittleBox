@@ -1,4 +1,4 @@
-import { palette, ui, report, tags, fontSize, fontWeight, lineHeight, spacing, radius, shadow } from './tokens'
+import { palette, ui, report, tags, fontSize, fontWeight, lineHeight, spacing, radius, shadow, surface } from './tokens'
 
 export const theme = {
 	palette,
@@ -9,6 +9,7 @@ export const theme = {
 	spacing,
 	radius,
 	shadow,
+	surface,
 } as const
 
 export type Theme = typeof theme
