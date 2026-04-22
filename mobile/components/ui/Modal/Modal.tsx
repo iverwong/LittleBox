@@ -15,8 +15,8 @@ export type { ModalSize } from './Modal.types'
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable)
 
-const OPEN_SPRING = { damping: 20, stiffness: 200 }
-const CLOSE_SPRING = { damping: 20, stiffness: 150 }
+const OPEN_SPRING = { damping: 20, stiffness: 240, mass: 0.6 }
+const CLOSE_SPRING = { damping: 20, stiffness: 200, mass: 0.6 }
 
 export function Modal({
 	visible,
