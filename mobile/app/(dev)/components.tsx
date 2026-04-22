@@ -364,6 +364,7 @@ function ListItemSection() {
 					title="李小白"
 					subtitle="最后消息：今天过得怎么样？"
 					trailing={<Text style={{ fontSize: 12, color: '#999' }}>刚刚</Text>}
+					divider
 				/>
 				<ListItem
 					leading={<Avatar name="陈" size="sm" backgroundColor="#7A9180" />}
