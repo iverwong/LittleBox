@@ -1,7 +1,7 @@
 """redis_ops 单元测试：commit_with_redis 语义、discard_pending_redis_ops。"""
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -82,9 +82,19 @@ class TestRedisOpsStaging:
     ) -> None:
         stage_redis_op(db_session, RedisOp(kind="setex", key="k", ttl_seconds=60, value="v"))
 
-        # monkeypatch pipeline to raise
+        # monkeypatch pipeline to return a MagicMock (not AsyncMock) so __aenter__
+        # returns the pipe synchronously, avoiding 'coroutine never awaited' warning.
         original_pipeline = redis_client.pipeline
-        redis_client.pipeline = AsyncMock(side_effect=RuntimeError("redis boom"))  # type: ignore[method-assign]
+
+        mock_pipe = MagicMock()
+        mock_pipe.__aenter__.return_value = mock_pipe
+        mock_pipe.__aexit__.return_value = None
+
+        async def _raise(*args, **kwargs):
+            raise RuntimeError("redis boom")
+
+        mock_pipe.execute = _raise
+        redis_client.pipeline = MagicMock(return_value=mock_pipe)  # type: ignore[method-assign]
 
         # 不抛异常
         await commit_with_redis(db_session, redis_client)
