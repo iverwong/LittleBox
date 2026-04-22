@@ -18,7 +18,7 @@ export const createStyles = (_theme: Theme) => {
 			alignItems: 'center',
 		},
 		panel: {
-			backgroundColor: '#FFFFFF',
+			backgroundColor: _theme.surface.paper,
 			borderTopLeftRadius: _theme.radius['2xl'],
 			borderTopRightRadius: _theme.radius['2xl'],
 			width: '100%',

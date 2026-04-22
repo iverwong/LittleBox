@@ -31,7 +31,7 @@ export const createStyles = (_theme: Theme): ChatBubbleStyles => {
 			borderBottomRightRadius: 4,
 		},
 		bubbleAi: {
-			backgroundColor: '#FFFFFF',
+			backgroundColor: _theme.surface.paper,
 			borderBottomLeftRadius: 4,
 		},
 		text: {
