@@ -201,3 +201,81 @@ async def seeded_parent(db_session: AsyncSession) -> tuple[User, str]:
     db_session.add(FamilyMember(family_id=fam.id, user_id=user.id, role=UserRole.parent))
     await db_session.commit()  # 实际 release savepoint
     return user, pw
+
+
+@pytest_asyncio.fixture
+async def inactive_parent(db_session: AsyncSession) -> tuple[User, str]:
+    """种一个 is_active=False 的 parent。返回 (user, plaintext_password)。"""
+    from app.auth.password import generate_password, generate_phone, hash_password
+    from app.models.accounts import Family, FamilyMember, User
+    from app.models.enums import UserRole
+
+    pw = generate_password()
+    fam = Family()
+    db_session.add(fam)
+    await db_session.flush()
+
+    user = User(
+        family_id=fam.id,
+        role=UserRole.parent,
+        phone=generate_phone(),
+        password_hash=hash_password(pw),
+        is_active=False,
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    db_session.add(FamilyMember(family_id=fam.id, user_id=user.id, role=UserRole.parent))
+    await db_session.commit()
+    return user, pw
+
+
+@pytest_asyncio.fixture
+async def child_user(db_session: AsyncSession) -> User:
+    """种一个 child + family（无 password_hash）。"""
+    from app.models.accounts import Family, FamilyMember, User
+    from app.models.enums import UserRole
+
+    fam = Family()
+    db_session.add(fam)
+    await db_session.flush()
+
+    user = User(
+        family_id=fam.id,
+        role=UserRole.child,
+        phone="0000",  # 固定 phone，避免随机生成与 seeded_parent 冲突
+        is_active=True,
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    db_session.add(FamilyMember(family_id=fam.id, user_id=user.id, role=UserRole.child))
+    await db_session.commit()
+    return user
+
+
+@pytest_asyncio.fixture
+async def rate_limit_parent(db_session: AsyncSession) -> tuple[User, str]:
+    """种一个固定 phone='abcd' 的 active parent，用于 rate-limit 计数测试。"""
+    from app.auth.password import generate_password, hash_password
+    from app.models.accounts import Family, FamilyMember, User
+    from app.models.enums import UserRole
+
+    pw = generate_password()
+    fam = Family()
+    db_session.add(fam)
+    await db_session.flush()
+
+    user = User(
+        family_id=fam.id,
+        role=UserRole.parent,
+        phone="abcd",  # 固定 phone，用于 rate-limit 测试
+        password_hash=hash_password(pw),
+        is_active=True,
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    db_session.add(FamilyMember(family_id=fam.id, user_id=user.id, role=UserRole.parent))
+    await db_session.commit()
+    return user, pw

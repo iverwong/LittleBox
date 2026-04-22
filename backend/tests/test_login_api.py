@@ -5,7 +5,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.password import generate_password, generate_phone, hash_password
+from app.auth.password import generate_phone
 from app.auth.redis_ops import commit_with_redis
 from app.auth.tokens import REDIS_KEY_PREFIX, issue_token, token_hash
 from app.models.accounts import Family, FamilyMember, User
@@ -25,46 +25,8 @@ def _assert_no_secret_fields(body: dict) -> None:
 
 # ---- 辅助 fixtures ----
 
-# seeded_parent 已收敛到 conftest.py::seeded_parent
-
-@pytest_asyncio.fixture
-async def inactive_parent(db_session: AsyncSession) -> tuple[User, str]:
-    """种一个 inactive parent（is_active=False）。"""
-    fam = Family()
-    db_session.add(fam)
-    await db_session.flush()
-
-    pw = generate_password()
-    user = User(
-        family_id=fam.id,
-        role=UserRole.parent,
-        phone=generate_phone(),
-        password_hash=hash_password(pw),
-        is_active=False,
-    )
-    db_session.add(user)
-    await db_session.flush()
-    await db_session.commit()
-    return user, pw
-
-
-@pytest_asyncio.fixture
-async def child_with_password(db_session: AsyncSession) -> tuple[User, str]:
-    """种一个 child（无 password_hash）。"""
-    fam = Family()
-    db_session.add(fam)
-    await db_session.flush()
-
-    user = User(
-        family_id=fam.id,
-        role=UserRole.child,
-        phone=generate_phone(),
-        is_active=True,
-    )
-    db_session.add(user)
-    await db_session.flush()
-    await db_session.commit()
-    return user, "unused_password"
+# seeded_parent, inactive_parent: conftest.py::seeded_parent / inactive_parent
+# child_user: test_child_bind.py::child_user（无 password_hash）
 
 
 def _redis_key(th: str) -> str:
@@ -226,10 +188,10 @@ class TestLoginEndpoint:
 
     @pytest.mark.asyncio
     async def test_login_child_account_401(
-        self, api_client, db_session: AsyncSession, redis_client, child_with_password: tuple[User, str],
+        self, api_client, db_session: AsyncSession, redis_client, child_user: User,
     ) -> None:
         """child 账号用 phone 来登录 → 401（child 本就没 password_hash）。"""
-        user, _pw = child_with_password
+        user = child_user
         resp = await api_client.post(
             "/api/v1/auth/login",
             json={"phone": user.phone, "password": "anypassword1", "device_id": "dev_login_I"},
@@ -439,31 +401,11 @@ class TestLoginRateLimit:
 
     @pytest.mark.asyncio
     async def test_login_rate_limit_counter_resets_after_window_expiry(
-        self, api_client, db_session: AsyncSession, redis_client,
+        self, api_client, db_session: AsyncSession, redis_client, rate_limit_parent: tuple[User, str],
     ) -> None:
         """TTL 到期后 key 删除，计数器重置 → 下一个错密码只计 1。"""
-        # 用一个确定 phone 的 parent
-        from app.auth.password import generate_password, generate_phone, hash_password
-        from app.models.accounts import Family, FamilyMember, User
-        from app.models.enums import UserRole
-
-        fam = Family()
-        db_session.add(fam)
-        await db_session.flush()
-
-        phone = "abcd"  # 固定 4-char phone
-        pw = generate_password()
-        user = User(
-            family_id=fam.id,
-            role=UserRole.parent,
-            phone=phone,
-            password_hash=hash_password(pw),
-            is_active=True,
-        )
-        db_session.add(user)
-        await db_session.flush()
-        db_session.add(FamilyMember(family_id=fam.id, user_id=user.id, role=UserRole.parent))
-        await db_session.commit()
+        user, pw = rate_limit_parent
+        phone = user.phone  # "abcd"
 
         device_id = "dev_rate_reset"
 
@@ -581,10 +523,10 @@ class TestLogoutEndpoint:
 
     @pytest.mark.asyncio
     async def test_logout_requires_parent(
-        self, api_client, db_session: AsyncSession, redis_client, child_with_password: tuple[User, str],
+        self, api_client, db_session: AsyncSession, redis_client, child_user: User,
     ) -> None:
         """child token 调 /logout → 403。"""
-        user, _pw = child_with_password
+        user = child_user
         device_id = "dev_logout_C"
 
         # 用 issue_token 直接给 child 造一个 token（child 无法走 login）
