@@ -250,33 +250,35 @@ function BtnLabel(s: ButtonSize) {
 // ─── Input ────────────────────────────────────────────────────────────────────
 
 function InputSection() {
-	const [val, setVal] = useState('')
-	const [err, setErr] = useState('')
+	const [valDefault, setValDefault] = useState('')
+	const [valFocused, setValFocused] = useState('聚焦态内容')
+	const [valError, setValError] = useState('')
+	const [errMsg, setErrMsg] = useState('')
 
 	return (
 		<>
 			<SectionHeader title="Input" />
 			<View style={{ paddingHorizontal: 16, gap: 12 }}>
 				<Input
-					value={val}
-					onChangeText={t => { setVal(t); setErr('') }}
+					value={valDefault}
+					onChangeText={t => { setValDefault(t); setErrMsg('') }}
 					placeholder="默认状态"
 					label="默认"
 					size="md"
 				/>
 				<Input
-					value="聚焦态内容"
-					onChangeText={() => {}}
+					value={valFocused}
+					onChangeText={setValFocused}
 					placeholder="Focused"
 					label="聚焦"
 					size="md"
 				/>
 				<Input
-					value={err || 'invalid@example'}
-					onChangeText={t => setErr(t.length > 10 ? '输入错误' : '')}
+					value={valError || 'invalid@example'}
+					onChangeText={t => { setValError(t); setErrMsg(t.length > 10 ? '输入错误' : '') }}
 					placeholder="Error"
 					label="错误态"
-					error={err ? '错误提示文字' : undefined}
+					error={errMsg || undefined}
 					size="md"
 				/>
 				<Input
