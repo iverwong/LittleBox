@@ -16,8 +16,6 @@ type ListItemStyles = {
 export const createStyles = (theme: Theme): ListItemStyles => {
 	return StyleSheet.create({
 		container: {
-			flexDirection: 'row',
-			alignItems: 'center',
 			paddingVertical: theme.spacing[3],
 			paddingHorizontal: theme.spacing[4],
 		},

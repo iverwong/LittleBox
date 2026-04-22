@@ -22,7 +22,10 @@ export function ListItem({ leading, title, subtitle, trailing, onPress, divider 
 
 	if (onPress) {
 		return (
-			<Pressable onPress={onPress} style={({ pressed }) => [pressed ? { opacity: 0.7 } : null]}>
+			<Pressable
+				onPress={onPress}
+				style={({ pressed }) => [styles.container, pressed ? { opacity: 0.7 } : null]}
+			>
 				{content}
 				{divider && <View style={styles.divider} />}
 			</Pressable>
@@ -30,7 +33,7 @@ export function ListItem({ leading, title, subtitle, trailing, onPress, divider 
 	}
 
 	return (
-		<View>
+		<View style={styles.container}>
 			{content}
 			{divider && <View style={styles.divider} />}
 		</View>
