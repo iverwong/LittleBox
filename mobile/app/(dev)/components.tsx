@@ -50,21 +50,21 @@ function ColorsSection() {
 		<>
 			<SectionHeader title="Colors / Palette / Primary" />
 			<View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16 }}>
-				{(['50','100','200','300','400','500','600','700','800','900'] as const).map(k => (
+				{(['50', '100', '200', '300', '400', '500', '600', '700', '800', '900'] as const).map(k => (
 					<Chip key={k} color={p.primary[k]} label={k} />
 				))}
 			</View>
 
 			<SectionHeader title="Colors / Palette / Secondary" />
 			<View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16 }}>
-				{(['50','100','200','300','400','500','600','700','800','900'] as const).map(k => (
+				{(['50', '100', '200', '300', '400', '500', '600', '700', '800', '900'] as const).map(k => (
 					<Chip key={k} color={p.secondary[k]} label={k} />
 				))}
 			</View>
 
 			<SectionHeader title="Colors / Palette / Neutral" />
 			<View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16 }}>
-				{(['50','100','200','300','400','500','600','700','800','900'] as const).map(k => (
+				{(['50', '100', '200', '300', '400', '500', '600', '700', '800', '900'] as const).map(k => (
 					<Chip key={k} color={p.neutral[k]} label={k} />
 				))}
 			</View>
@@ -104,8 +104,8 @@ function ColorsSection() {
 
 function TypographySection() {
 	const theme = useTheme()
-	const sizes = ['xs','sm','base','md','lg','xl','2xl','3xl'] as const
-	const weights = ['regular','medium','semibold','bold'] as const
+	const sizes = ['xs', 'sm', 'base', 'md', 'lg', 'xl', '2xl', '3xl'] as const
+	const weights = ['regular', 'medium', 'semibold', 'bold'] as const
 
 	return (
 		<>
@@ -182,7 +182,7 @@ function RadiusSection() {
 
 function ShadowSection() {
 	const theme = useTheme()
-	const variants = ['sm','md','lg'] as const
+	const variants = ['sm', 'md', 'lg'] as const
 
 	return (
 		<>
@@ -210,8 +210,8 @@ function ShadowSection() {
 // ─── Button ───────────────────────────────────────────────────────────────────
 
 function ButtonSection() {
-	const variants: ButtonVariant[] = ['primary','secondary','ghost','danger']
-	const sizes: ButtonSize[] = ['sm','md','lg']
+	const variants: ButtonVariant[] = ['primary', 'secondary', 'ghost', 'danger']
+	const sizes: ButtonSize[] = ['sm', 'md', 'lg']
 
 	return (
 		<>
@@ -282,7 +282,7 @@ function InputSection() {
 				/>
 				<Input
 					value="禁用内容"
-					onChangeText={() => {}}
+					onChangeText={() => { }}
 					placeholder="Disabled"
 					label="禁用"
 					disabled
@@ -296,7 +296,7 @@ function InputSection() {
 // ─── Card ─────────────────────────────────────────────────────────────────────
 
 function CardSection() {
-	const variants: CardVariant[] = ['elevated','outlined','filled','accentSecondary']
+	const variants: CardVariant[] = ['elevated', 'outlined', 'filled', 'accentSecondary']
 
 	return (
 		<>
@@ -316,7 +316,7 @@ function CardSection() {
 // ─── Avatar ───────────────────────────────────────────────────────────────────
 
 function AvatarSection() {
-	const sizes: AvatarSize[] = ['sm','md','lg','xl']
+	const sizes: AvatarSize[] = ['sm', 'md', 'lg', 'xl']
 	const names = ['李小白', '陈明', '王芳', '刘洋']
 
 	return (
@@ -334,7 +334,7 @@ function AvatarSection() {
 // ─── Loading ─────────────────────────────────────────────────────────────────
 
 function LoadingSection() {
-	const sizes: ('sm' | 'md' | 'lg')[] = ['sm','md','lg']
+	const sizes: ('sm' | 'md' | 'lg')[] = ['sm', 'md', 'lg']
 
 	return (
 		<>
@@ -376,7 +376,7 @@ function ListItemSection() {
 					leading={<Avatar name="+" size="sm" backgroundColor="#D89155" />}
 					title="添加孩子"
 					trailing={<Feather name="chevron-right" size={18} color="#999" />}
-					onPress={() => {}}
+					onPress={() => { }}
 				/>
 			</View>
 		</>
@@ -411,7 +411,7 @@ function ModalSection() {
 			<SectionHeader title="Modal (trigger × size selector)" />
 			<View style={{ paddingHorizontal: 16, gap: 8 }}>
 				<View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16 }}>
-					{(['sm','md','lg','full'] as ModalSize[]).map(s => (
+					{(['sm', 'md', 'lg', 'full'] as ModalSize[]).map(s => (
 						<Button key={s} variant="secondary" size="sm" onPress={() => { setSize(s); setVisible(true) }}>
 							{s}
 						</Button>
@@ -422,7 +422,7 @@ function ModalSection() {
 					title="组件标题"
 					size={size}
 					onClose={() => setVisible(false)}
-footer={
+					footer={
 						<>
 							<Button variant="ghost" size="md" onPress={() => setVisible(false)}>取消</Button>
 							<Button variant="primary" size="md" onPress={() => setVisible(false)}>确认</Button>
@@ -440,7 +440,7 @@ footer={
 
 // ─── Toast ─────────────────────────────────────────────────────────────────────
 
-const TOAST_VARIANTS: ToastVariant[] = ['info','success','warning','error']
+const TOAST_VARIANTS: ToastVariant[] = ['info', 'success', 'warning', 'error']
 
 function ToastSection() {
 	return (
@@ -477,7 +477,7 @@ function ToastMsg(v: ToastVariant): string {
 // ─── ScreenContainer ───────────────────────────────────────────────────────────
 
 function ScreenContainerSection() {
-	const bgOptions: ('primary'|'secondary'|'neutral')[] = ['primary','secondary','neutral']
+	const bgOptions: ('primary' | 'secondary' | 'neutral')[] = ['primary', 'secondary', 'neutral']
 
 	return (
 		<>
@@ -518,7 +518,7 @@ function HeaderSection() {
 // ─── ChatBubble ────────────────────────────────────────────────────────────────
 
 function ChatBubbleSection() {
-	const roles: BubbleRole[] = ['ai','user']
+	const roles: BubbleRole[] = ['ai', 'user']
 
 	return (
 		<>
@@ -536,8 +536,8 @@ function ChatBubbleSection() {
 
 // ─── Mascot ────────────────────────────────────────────────────────────────────
 
-const MASCOT_STATES: MascotState[] = ['enter','idle','listen','thinking','narrating','done']
-const MASCOT_SIZES: MascotSize[] = ['sm','md','lg','xl']
+const MASCOT_STATES: MascotState[] = ['enter', 'idle', 'listen', 'thinking', 'narrating', 'done']
+const MASCOT_SIZES: MascotSize[] = ['sm', 'md', 'lg', 'xl']
 
 function MascotSection() {
 	const [finishCount, setFinishCount] = useState(0)
@@ -595,6 +595,7 @@ function MascotSection() {
 
 function DiscreteSliderSection() {
 	const [v, setV] = useState(5)
+	const [age, setAge] = useState(12)
 
 	const ageLabel = (val: number) => {
 		if (val <= 5) return '幼儿'
@@ -619,8 +620,8 @@ function DiscreteSliderSection() {
 			<View style={{ paddingHorizontal: 16, gap: 12 }}>
 				<DiscreteSlider
 					nodes={[3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]}
-					value={12}
-					onValueChange={() => {}}
+					value={age}
+					onValueChange={setAge}
 					leftLabel={<Text style={{ fontSize: 12, color: '#7A6546' }}>3-</Text>}
 					rightLabel={<Text style={{ fontSize: 12, color: '#7A6546' }}>20+</Text>}
 					centerLabel={(v) => (
