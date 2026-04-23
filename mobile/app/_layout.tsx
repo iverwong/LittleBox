@@ -4,6 +4,7 @@ import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useEffect } from 'react';
 import 'react-native-reanimated';
 
@@ -86,28 +87,30 @@ function RootLayoutNav() {
   */
 
   return (
-    <ThemeProvider>
-      <SafeAreaProvider>
-        {/* ToastContainer must be inside SafeAreaProvider to use useSafeAreaInsets.
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ThemeProvider>
+        <SafeAreaProvider>
+          {/* ToastContainer must be inside SafeAreaProvider to use useSafeAreaInsets.
             Plan Step 4 wrote "outside SafeAreaProvider" which is a plan contradiction
             (useSafeAreaInsets requires SafeAreaProvider ancestor). Correct placement:
             SafeAreaProvider > NavThemeProvider > Stack, with ToastContainer as a
             sibling to NavThemeProvider / Stack — not inside NavThemeProvider. */}
-        <ToastContainer />
-        <NavThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-          <Stack>
-            {/* [M3-TEMP] M3 期间只暴露 dev-chat；其它分组屏幕声明保留注释，M4 还原。 */}
-            <Stack.Screen name="dev-chat" options={{ headerShown: false }} />
-            {/* [M15-TEMP] Dev-only gallery. Remove at M15. */}
-            <Stack.Screen name="(dev)" options={{ headerShown: false }} />
-            {/*
-            <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-            <Stack.Screen name="(child)" options={{ headerShown: false }} />
-            <Stack.Screen name="(parent)" options={{ headerShown: false }} />
-            */}
-          </Stack>
-        </NavThemeProvider>
-      </SafeAreaProvider>
-    </ThemeProvider>
+          <ToastContainer />
+          <NavThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+            <Stack>
+              {/* [M3-TEMP] M3 期间只暴露 dev-chat；其它分组屏幕声明保留注释，M4 还原。 */}
+              <Stack.Screen name="dev-chat" options={{ headerShown: false }} />
+              {/* [M15-TEMP] Dev-only gallery. Remove at M15. */}
+              <Stack.Screen name="(dev)" options={{ headerShown: false }} />
+              {/*
+              <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+              <Stack.Screen name="(child)" options={{ headerShown: false }} />
+              <Stack.Screen name="(parent)" options={{ headerShown: false }} />
+              */}
+            </Stack>
+          </NavThemeProvider>
+        </SafeAreaProvider>
+      </ThemeProvider>
+    </GestureHandlerRootView>
   );
 }
