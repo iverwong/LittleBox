@@ -16,6 +16,7 @@ import {
 	ListItem,
 	Modal,
 	toast,
+	DiscreteSlider,
 } from '@/components/ui'
 import { ScreenContainer, Header, ChatBubble } from '@/components/layout'
 import { Mascot } from '@/components/mascot'
@@ -590,6 +591,25 @@ function MascotSection() {
 	)
 }
 
+// ─── DiscreteSlider ───────────────────────────────────────────────────────────────
+
+function DiscreteSliderSection() {
+	const [v, setV] = useState(5)
+
+	return (
+		<>
+			<SectionHeader title="DiscreteSlider (10 nodes, value=5)" />
+			<View style={{ paddingHorizontal: 16, gap: 12 }}>
+				<DiscreteSlider
+					nodes={[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]}
+					value={v}
+					onValueChange={setV}
+				/>
+			</View>
+		</>
+	)
+}
+
 // ─── Main Gallery Page ────────────────────────────────────────────────────────
 
 export default function ComponentGallery() {
@@ -625,6 +645,9 @@ export default function ComponentGallery() {
 				<EmptyStateSection />
 				<ModalSection />
 				<ToastSection />
+
+				<SectionHeader title="DiscreteSlider" />
+				<DiscreteSliderSection />
 
 				<SectionHeader title="Layout Components" />
 				<ScreenContainerSection />
