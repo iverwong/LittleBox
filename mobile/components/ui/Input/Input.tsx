@@ -44,7 +44,7 @@ export function Input({
 					{label}
 				</Text>
 			)}
-			<View style={containerStyle}>
+			<View style={containerStyle} collapsable={false}>
 				{leftIcon && (
 					<Feather
 						name={leftIcon as FeatherName}
