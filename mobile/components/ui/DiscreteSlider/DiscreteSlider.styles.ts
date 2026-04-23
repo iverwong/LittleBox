@@ -69,14 +69,15 @@ export const createStyles = (theme: Theme): DiscreteSliderStyles => {
     },
     thumbOuter: {
       position: 'absolute',
+      left: 0,
+      top: '50%',
+      marginTop: -15,
       width: 30,
       height: 30,
       borderRadius: 15,
       backgroundColor: theme.surface.paper,
       alignItems: 'center',
       justifyContent: 'center',
-      top: '50%',
-      marginTop: -15,
       // shadow handled via shadow.sm on thumb
     },
     thumb: {

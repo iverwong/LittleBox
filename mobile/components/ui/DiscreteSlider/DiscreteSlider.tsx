@@ -6,7 +6,7 @@ import Animated, {
 	runOnJS,
 	useAnimatedStyle,
 	useSharedValue,
-	withSpring,
+	withTiming,
 } from 'react-native-reanimated'
 import { useTheme } from '@/theme'
 import type { DiscreteSliderProps } from './DiscreteSlider.types'
@@ -92,7 +92,7 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 					if (width <= 0 || nodeCount < 2) return
 					const gap = width / (nodeCount - 1)
 					const snappedX = lastSnappedIndex.value * gap
-					thumbX.value = withSpring(snappedX, { damping: 18, stiffness: 200 })
+					thumbX.value = withTiming(snappedX, { duration: 120 })
 				}),
 		[disabled, nodeCount, notifyChange],
 	)
@@ -114,9 +114,9 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 	useEffect(() => {
 		const width = trackWidthSV.value
 		if (width > 0 && nodeCount > 1) {
-			thumbX.value = withSpring(
+			thumbX.value = withTiming(
 				(activeIndex / (nodeCount - 1)) * width,
-				{ damping: 18, stiffness: 200 },
+				{ duration: 120 },
 			)
 			lastSnappedIndex.value = activeIndex
 		}
@@ -129,6 +129,20 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 	const activeTrackStyle = useAnimatedStyle(() => ({
 		width: thumbX.value,
 	}))
+
+	// ── 点击节点：JS 线程同步 shared value，立即对齐 ─────────────────────────
+	const onNodePress = useCallback(
+		(i: number) => {
+			const width = trackWidthSV.value
+			if (width > 0 && nodeCount > 1) {
+				const targetX = (i / (nodeCount - 1)) * width
+				thumbX.value = withTiming(targetX, { duration: 120 })
+				lastSnappedIndex.value = i
+			}
+			onValueChange(nodes[i])
+		},
+		[nodeCount, onValueChange, nodes, trackWidthSV, thumbX, lastSnappedIndex],
+	)
 
 	return (
 		<View style={styles.container}>
@@ -164,7 +178,7 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 								key={i}
 								style={[styles.nodePressable, { left: `${nodePct}%`, marginLeft: -7 }]}
 								hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-								onPress={() => onValueChange(nodeVal)}
+								onPress={() => onNodePress(i)}
 								disabled={disabled}
 							>
 								<View style={styles.node} />
