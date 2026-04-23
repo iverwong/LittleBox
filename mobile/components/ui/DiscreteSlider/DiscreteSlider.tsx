@@ -73,7 +73,8 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 					return (
 						<Pressable
 							key={i}
-							style={[styles.nodePressable, { left: `${nodePct}%`, marginLeft: -13 }]}
+							style={[styles.nodePressable, { left: `${nodePct}%`, marginLeft: -7 }]}
+							hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
 							onPress={() => onValueChange(nodeVal)}
 							disabled={disabled}
 						>

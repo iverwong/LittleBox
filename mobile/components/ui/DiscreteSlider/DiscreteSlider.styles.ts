@@ -29,10 +29,10 @@ export const createStyles = (theme: Theme): DiscreteSliderStyles => {
 			...theme.shadow.sm,
 		},
 		centerLabelRow: {
-			minHeight: 44,
+			minHeight: 36,
 			alignItems: 'center',
 			justifyContent: 'flex-end',
-			marginBottom: 8,
+			marginBottom: 4,
 		},
 		trackRow: {
 			height: 44,
@@ -54,10 +54,8 @@ export const createStyles = (theme: Theme): DiscreteSliderStyles => {
 		},
 		nodePressable: {
 			position: 'absolute',
-			width: 26,
-			height: 26,
-			alignItems: 'center',
-			justifyContent: 'center',
+			width: 14,
+			height: 14,
 		},
 		node: {
 			width: 14,
@@ -86,7 +84,7 @@ export const createStyles = (theme: Theme): DiscreteSliderStyles => {
 		bottomRow: {
 			flexDirection: 'row',
 			justifyContent: 'space-between',
-			marginTop: 12,
+			marginTop: 4,
 		},
 		centerValue: {
 			fontSize: theme.typography.fontSize.lg,
