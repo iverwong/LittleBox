@@ -37,7 +37,7 @@ function renderCenter(
 	return <Text style={styles.centerValue}>{String(value)}</Text>
 }
 
-const THUMB_RADIUS = 12 // thumb 直径 24 / 2
+const THUMB_RADIUS = 15 // thumbOuter 外层 30×30 容器半径，不是内层视觉圆 24/2
 
 export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabel, rightLabel, centerLabel, showLeftLabel, showRightLabel, showCenterLabel }: DiscreteSliderProps) {
 	const theme = useTheme()
@@ -69,12 +69,25 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 		() =>
 			Gesture.Pan()
 				.enabled(!disabled)
-				.onStart(() => {
+				.minDistance(0)  // touch down 立即响应
+				.onBegin((e) => {
 					'worklet'
-					startX.value = thumbX.value
+					const width = trackWidthSV.value
+					if (width <= 0 || nodeCount < 2) return
+					const gap = width / (nodeCount - 1)
+					const x = Math.max(0, Math.min(width, e.x))  // e.x 是 GestureDetector 容器内 local X
+					const nearest = Math.round(x / gap)
+					const targetX = nearest * gap
+					thumbX.value = withTiming(targetX, { duration: 120 })
+					startX.value = targetX  // 关键:后续 onUpdate 从吸附点累加 translationX
+					if (nearest !== lastSnappedIndex.value) {
+						lastSnappedIndex.value = nearest
+						runOnJS(notifyChange)(nearest)
+					}
 				})
-				.onUpdate((e: { translationX: number }) => {
+				.onUpdate((e) => {
 					'worklet'
+					// 保持现状:从 startX + translationX 更新
 					const width = trackWidthSV.value
 					if (width <= 0 || nodeCount < 2) return
 					const x = Math.max(0, Math.min(width, startX.value + e.translationX))
@@ -171,18 +184,14 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 						<View style={styles.thumb} />
 					</Animated.View>
 					{/* 节点 */}
-					{nodes.map((nodeVal, i) => {
-						const nodePct = nodeCount > 1 ? (i / (nodeCount - 1)) * 100 : 0
+					{nodes.map((n, i) => {
+						const pct = (i / (nodeCount - 1)) * 100
 						return (
-							<Pressable
+							<View
 								key={i}
-								style={[styles.nodePressable, { left: `${nodePct}%`, marginLeft: -7 }]}
-								hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-								onPress={() => onNodePress(i)}
-								disabled={disabled}
-							>
-								<View style={styles.node} />
-							</Pressable>
+								style={[styles.nodeDot, { left: `${pct}%` }]}
+								pointerEvents="none"
+							/>
 						)
 					})}
 				</View>

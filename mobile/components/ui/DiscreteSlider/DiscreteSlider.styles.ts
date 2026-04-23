@@ -8,7 +8,7 @@ type DiscreteSliderStyles = {
   trackRow: ViewStyle;
   trackBg: ViewStyle;
   activeTrack: ViewStyle;
-  nodePressable: ViewStyle;
+  nodeDot: ViewStyle;
   node: ViewStyle;
   thumbOuter: ViewStyle;
   thumb: ViewStyle;
@@ -52,10 +52,15 @@ export const createStyles = (theme: Theme): DiscreteSliderStyles => {
       backgroundColor: theme.palette.primary[300],
       borderRadius: 3,
     },
-    nodePressable: {
+    nodeDot: {
       position: 'absolute',
       width: 14,
       height: 14,
+      borderRadius: 7,
+      backgroundColor: theme.palette.primary[500],
+      borderWidth: 2,
+      borderColor: theme.palette.neutral[50],
+      marginLeft: -7,
       top: '50%',
       marginTop: -7,
     },
@@ -78,6 +83,8 @@ export const createStyles = (theme: Theme): DiscreteSliderStyles => {
       backgroundColor: theme.surface.paper,
       alignItems: 'center',
       justifyContent: 'center',
+      zIndex: 1,
+      elevation: 1,
       // shadow handled via shadow.sm on thumb
     },
     thumb: {
