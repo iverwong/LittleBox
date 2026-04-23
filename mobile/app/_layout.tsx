@@ -1,12 +1,15 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { DarkTheme, DefaultTheme, ThemeProvider as NavThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useEffect } from 'react';
 import 'react-native-reanimated';
 
+import { ThemeProvider } from '../theme/ThemeProvider';
 import { useColorScheme } from '@/components/useColorScheme';
+import { ToastContainer } from '@/components/ui/Toast';
 
 // [M3-TEMP] 角色守卫相关 import 暂时注释，M3 只测 dev-chat 流式链路，不走登录路径。
 // 恢复时机：M4 用户鉴权里程碑实施时一并还原 import 和下方 RootLayoutNav 里的守卫逻辑。
@@ -83,16 +86,28 @@ function RootLayoutNav() {
   */
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        {/* [M3-TEMP] M3 期间只暴露 dev-chat；其它分组屏幕声明保留注释，M4 还原。 */}
-        <Stack.Screen name="dev-chat" options={{ headerShown: false }} />
-        {/*
-        <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-        <Stack.Screen name="(child)" options={{ headerShown: false }} />
-        <Stack.Screen name="(parent)" options={{ headerShown: false }} />
-        */}
-      </Stack>
+    <ThemeProvider>
+      <SafeAreaProvider>
+        {/* ToastContainer must be inside SafeAreaProvider to use useSafeAreaInsets.
+            Plan Step 4 wrote "outside SafeAreaProvider" which is a plan contradiction
+            (useSafeAreaInsets requires SafeAreaProvider ancestor). Correct placement:
+            SafeAreaProvider > NavThemeProvider > Stack, with ToastContainer as a
+            sibling to NavThemeProvider / Stack — not inside NavThemeProvider. */}
+        <ToastContainer />
+        <NavThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+          <Stack>
+            {/* [M3-TEMP] M3 期间只暴露 dev-chat；其它分组屏幕声明保留注释，M4 还原。 */}
+            <Stack.Screen name="dev-chat" options={{ headerShown: false }} />
+            {/* [M15-TEMP] Dev-only gallery. Remove at M15. */}
+            <Stack.Screen name="(dev)" options={{ headerShown: false }} />
+            {/*
+            <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+            <Stack.Screen name="(child)" options={{ headerShown: false }} />
+            <Stack.Screen name="(parent)" options={{ headerShown: false }} />
+            */}
+          </Stack>
+        </NavThemeProvider>
+      </SafeAreaProvider>
     </ThemeProvider>
   );
 }
