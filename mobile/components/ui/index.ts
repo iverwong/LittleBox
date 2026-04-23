@@ -25,4 +25,7 @@ export type { ModalProps, ModalSize } from './Modal'
 export { Toast, ToastContainer, toast } from './Toast'
 export type { ToastProps, ToastVariant } from './Toast'
 
+export { DiscreteSlider } from './DiscreteSlider'
+export type { DiscreteSliderProps } from './DiscreteSlider'
+
 export type { FeatherName } from './types'
