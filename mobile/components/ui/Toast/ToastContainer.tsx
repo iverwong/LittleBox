@@ -18,7 +18,7 @@ export function ToastContainer() {
 		<View
 			style={{
 				position: 'absolute',
-				top: insets.top + theme.layout.headerHeight,
+				top: insets.top + theme.layout.headerHeight + theme.spacing[2] / 2,
 				left: 0,
 				right: 0,
 				zIndex: 9999,
