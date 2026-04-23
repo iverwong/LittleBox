@@ -23,6 +23,7 @@ export const createStyles = (theme: Theme): ListItemStyles => {
 			height: 1,
 			backgroundColor: theme.palette.neutral[100],
 			marginLeft: theme.spacing[4],
+			marginTop: theme.spacing[3],
 		},
 		content: {
 			flex: 1,
