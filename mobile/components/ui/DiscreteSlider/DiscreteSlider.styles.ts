@@ -12,8 +12,7 @@ type DiscreteSliderStyles = {
 	node: ViewStyle
 	thumbOuter: ViewStyle
 	thumb: ViewStyle
-	leftLabelRow: ViewStyle
-	rightLabelRow: ViewStyle
+	bottomRow: ViewStyle
 	centerValue: TextStyle
 	centerDesc: TextStyle
 	leftLabelText: TextStyle
@@ -47,7 +46,8 @@ export const createStyles = (theme: Theme): DiscreteSliderStyles => {
 		activeTrack: {
 			position: 'absolute',
 			left: 0,
-			top: 0,
+			top: '50%',
+			marginTop: -3,
 			height: 6,
 			backgroundColor: theme.palette.primary[300],
 			borderRadius: 3,
@@ -83,16 +83,10 @@ export const createStyles = (theme: Theme): DiscreteSliderStyles => {
 			borderRadius: 12,
 			backgroundColor: theme.palette.primary[500],
 		},
-		leftLabelRow: {
+		bottomRow: {
+			flexDirection: 'row',
+			justifyContent: 'space-between',
 			marginTop: 12,
-			alignItems: 'flex-start',
-		},
-		rightLabelRow: {
-			position: 'absolute',
-			right: 0,
-			bottom: 0,
-			marginBottom: 12,
-			alignItems: 'flex-end',
 		},
 		centerValue: {
 			fontSize: theme.typography.fontSize.lg,

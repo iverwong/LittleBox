@@ -596,6 +596,14 @@ function MascotSection() {
 function DiscreteSliderSection() {
 	const [v, setV] = useState(5)
 
+	const ageLabel = (val: number) => {
+		if (val <= 5) return '幼儿'
+		if (val <= 9) return '童年'
+		if (val <= 12) return '刚上初中的年纪'
+		if (val <= 15) return '青春期'
+		return '即将成年'
+	}
+
 	return (
 		<>
 			<SectionHeader title="DiscreteSlider (10 nodes, value=5)" />
@@ -604,6 +612,23 @@ function DiscreteSliderSection() {
 					nodes={[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]}
 					value={v}
 					onValueChange={setV}
+				/>
+			</View>
+
+			<SectionHeader title="M5 年龄 (nodes 3-20, centerLabel function)" />
+			<View style={{ paddingHorizontal: 16, gap: 12 }}>
+				<DiscreteSlider
+					nodes={[3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]}
+					value={12}
+					onValueChange={() => {}}
+					leftLabel={<Text style={{ fontSize: 12, color: '#7A6546' }}>3-</Text>}
+					rightLabel={<Text style={{ fontSize: 12, color: '#7A6546' }}>20+</Text>}
+					centerLabel={(v) => (
+						<View style={{ alignItems: 'center' }}>
+							<Text style={{ fontSize: 20, fontWeight: '600', color: '#1A140B' }}>{v} 岁</Text>
+							<Text style={{ fontSize: 13, color: '#7A6546', marginTop: 2 }}>{ageLabel(v)}</Text>
+						</View>
+					)}
 				/>
 			</View>
 		</>

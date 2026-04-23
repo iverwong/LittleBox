@@ -84,14 +84,12 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 			</View>
 
 			{/* 左右 label */}
-			<View style={styles.leftLabelRow}>
+			<View style={styles.bottomRow}>
 				{leftLabel !== undefined ? (
 					leftLabel
 				) : (
 					<Text style={styles.leftLabelText}>{String(nodes[0])}</Text>
 				)}
-			</View>
-			<View style={styles.rightLabelRow}>
 				{rightLabel !== undefined ? (
 					rightLabel
 				) : (
