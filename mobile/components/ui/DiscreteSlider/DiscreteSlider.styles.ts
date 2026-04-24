@@ -113,6 +113,7 @@ export const createStyles = (theme: Theme): DiscreteSliderStyles => {
       height: 24,
       borderRadius: 12,
       backgroundColor: theme.palette.primary[500],
+      ...theme.shadow.sm,
     },
     thumbDisabled: {
       backgroundColor: theme.palette.neutral[500],
