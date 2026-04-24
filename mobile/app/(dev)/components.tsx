@@ -594,30 +594,24 @@ function MascotSection() {
 // ─── DiscreteSlider ───────────────────────────────────────────────────────────────
 
 function DiscreteSliderSection() {
-	const [v, setV] = useState(5)
 	const [age, setAge] = useState(12)
+	const [sensitivity, setSensitivity] = useState(5)
+	const [disabledSensitivity, setDisabledSensitivity] = useState(5)
+	const [fiveNode, setFiveNode] = useState(2)
 
-	const ageLabel = (val: number) => {
-		if (val <= 5) return '幼儿'
-		if (val <= 9) return '童年'
-		if (val <= 12) return '刚上初中的年纪'
-		if (val <= 15) return '青春期'
-		return '即将成年'
+	const ageLabel = (val: number): string => {
+		if (val <= 4) return '幼童'
+		if (val <= 8) return '童年期'
+		if (val === 12) return '刚上初中的年纪'
+		if (val <= 14) return '青春期初'
+		if (val <= 17) return '青少年'
+		return '即将成年' // v >= 19 or 20
 	}
 
 	return (
 		<>
-			<SectionHeader title="DiscreteSlider (10 nodes, value=5)" />
-			<View style={{ paddingHorizontal: 16, gap: 12 }}>
-				<DiscreteSlider
-					nodes={[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]}
-					value={v}
-					onValueChange={setV}
-				/>
-			</View>
-
-			<SectionHeader title="M5 年龄 (nodes 3-20, centerLabel function)" />
-			<View style={{ paddingHorizontal: 16, gap: 12 }}>
+			<SectionHeader title="场景 1 · M5 年龄 18 档 (value=12)" />
+			<View style={{ paddingHorizontal: 16, gap: 4 }}>
 				<DiscreteSlider
 					nodes={[3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]}
 					value={age}
@@ -631,6 +625,65 @@ function DiscreteSliderSection() {
 						</View>
 					)}
 				/>
+				<Text style={{ fontSize: 11, color: '#888', paddingHorizontal: 16 }}>
+					对照 §视觉规格冻结 场景 1 · 激活段 52.94% (= 9 / 17)
+				</Text>
+			</View>
+
+			<SectionHeader title="场景 2 · M10 敏感度 10 档 (value=5)" />
+			<View style={{ paddingHorizontal: 16, gap: 4 }}>
+				<DiscreteSlider
+					nodes={[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]}
+					value={sensitivity}
+					onValueChange={setSensitivity}
+					leftLabel={<Text style={{ fontSize: 12, color: '#7A6546' }}>迟钝</Text>}
+					rightLabel={<Text style={{ fontSize: 12, color: '#7A6546' }}>敏感</Text>}
+					centerLabel={(v) => (
+						<View style={{ alignItems: 'center' }}>
+							<Text style={{ fontSize: 20, fontWeight: '600', color: '#1A140B' }}>{v} / 9</Text>
+							<Text style={{ fontSize: 13, color: '#7A6546', marginTop: 2 }}>默认敏感度 · 平衡介入</Text>
+						</View>
+					)}
+				/>
+				<Text style={{ fontSize: 11, color: '#888', paddingHorizontal: 16 }}>
+					对照 §视觉规格冻结 场景 2 · 激活段 55.55% (= 5 / 9)
+				</Text>
+			</View>
+
+			<SectionHeader title="场景 3 · disabled (value=5)" />
+			<View style={{ paddingHorizontal: 16, gap: 4 }}>
+				<DiscreteSlider
+					nodes={[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]}
+					value={disabledSensitivity}
+					onValueChange={setDisabledSensitivity}
+					disabled
+					leftLabel={<Text style={{ fontSize: 12, color: '#7A6546' }}>迟钝</Text>}
+					rightLabel={<Text style={{ fontSize: 12, color: '#7A6546' }}>敏感</Text>}
+					centerLabel={(v) => (
+						<View style={{ alignItems: 'center' }}>
+							<Text style={{ fontSize: 20, fontWeight: '600', color: '#1A140B' }}>{v} / 9</Text>
+							<Text style={{ fontSize: 13, color: '#7A6546', marginTop: 2 }}>不可编辑</Text>
+						</View>
+					)}
+				/>
+				<Text style={{ fontSize: 11, color: '#888', paddingHorizontal: 16 }}>
+					对照 §视觉规格冻结 场景 3 · 激活段 55.55% (灰化)
+				</Text>
+			</View>
+
+			<SectionHeader title="场景 4 · 三 label 全关 (5 nodes, value=2)" />
+			<View style={{ paddingHorizontal: 16, gap: 4 }}>
+				<DiscreteSlider
+					nodes={[0, 1, 2, 3, 4]}
+					value={fiveNode}
+					onValueChange={setFiveNode}
+					showLeftLabel={false}
+					showRightLabel={false}
+					showCenterLabel={false}
+				/>
+				<Text style={{ fontSize: 11, color: '#888', paddingHorizontal: 16 }}>
+					对照 §视觉规格冻结 场景 4 · 激活段 50% (= 2 / 4)
+				</Text>
 			</View>
 		</>
 	)
