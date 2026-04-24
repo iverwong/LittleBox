@@ -168,20 +168,42 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 
 			{/* 轨道行 */}
 			<GestureDetector gesture={pan}>
-				<View style={styles.trackRow} onLayout={onTrackLayout}>
+				<View
+					style={[
+						styles.trackRow,
+						disabled && styles.trackRowDisabled,
+					]}
+					onLayout={onTrackLayout}
+				>
 					{/* 轨道背景 */}
-					<View style={styles.trackBg} />
+					<View
+						style={[
+							styles.trackBg,
+							disabled && styles.trackBgDisabled,
+						]}
+					/>
 					{/* 激活段 */}
-					<Animated.View style={[styles.activeTrack, activeTrackStyle]} />
+					<Animated.View
+						style={[
+							styles.activeTrack,
+							activeTrackStyle,
+							disabled && styles.activeTrackDisabled,
+						]}
+					/>
 					{/* thumb */}
 					<Animated.View
 						style={[
 							styles.thumbOuter,
+							disabled && styles.thumbOuterDisabled,
 							thumbStyle,
-							disabled && { opacity: 0.6 },
 						]}
 					>
-						<View style={styles.thumb} />
+						<View
+							style={[
+								styles.thumb,
+								disabled && styles.thumbDisabled,
+							]}
+						/>
 					</Animated.View>
 					{/* 节点 */}
 					{nodes.map((n, i) => {
@@ -189,7 +211,11 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 						return (
 							<View
 								key={i}
-								style={[styles.nodeDot, { left: `${pct}%` }]}
+								style={[
+									styles.nodeDot,
+									disabled && styles.nodeDotDisabled,
+									{ left: `${pct}%` },
+								]}
 								pointerEvents="none"
 							/>
 						)
@@ -201,10 +227,10 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 			{(showLeftLabel !== false || showRightLabel !== false) && (
 				<View style={styles.bottomRow}>
 					{showLeftLabel !== false && (
-						leftLabel !== undefined ? leftLabel : <Text style={styles.leftLabelText}>{String(nodes[0])}</Text>
+						leftLabel ?? <Text style={styles.leftLabelText}>{String(nodes[0])}</Text>
 					)}
 					{showRightLabel !== false && (
-						rightLabel !== undefined ? rightLabel : <Text style={styles.rightLabelText}>{String(nodes[nodes.length - 1])}</Text>
+						rightLabel ?? <Text style={styles.rightLabelText}>{String(nodes[nodes.length - 1])}</Text>
 					)}
 				</View>
 			)}

@@ -6,12 +6,18 @@ type DiscreteSliderStyles = {
   container: ViewStyle;
   centerLabelRow: ViewStyle;
   trackRow: ViewStyle;
+  trackRowDisabled: ViewStyle;
   trackBg: ViewStyle;
+  trackBgDisabled: ViewStyle;
   activeTrack: ViewStyle;
+  activeTrackDisabled: ViewStyle;
   nodeDot: ViewStyle;
+  nodeDotDisabled: ViewStyle;
   node: ViewStyle;
   thumbOuter: ViewStyle;
+  thumbOuterDisabled: ViewStyle;
   thumb: ViewStyle;
+  thumbDisabled: ViewStyle;
   bottomRow: ViewStyle;
   centerValue: TextStyle;
   centerDesc: TextStyle;
@@ -38,10 +44,16 @@ export const createStyles = (theme: Theme): DiscreteSliderStyles => {
       height: 44,
       justifyContent: 'center',
     },
+    trackRowDisabled: {
+      opacity: 0.6,
+    },
     trackBg: {
       height: 6,
       backgroundColor: theme.palette.neutral[200],
       borderRadius: 3,
+    },
+    trackBgDisabled: {
+      backgroundColor: theme.palette.neutral[200],
     },
     activeTrack: {
       position: 'absolute',
@@ -51,6 +63,9 @@ export const createStyles = (theme: Theme): DiscreteSliderStyles => {
       height: 6,
       backgroundColor: theme.palette.primary[300],
       borderRadius: 3,
+    },
+    activeTrackDisabled: {
+      backgroundColor: theme.palette.neutral[200],
     },
     nodeDot: {
       position: 'absolute',
@@ -63,6 +78,9 @@ export const createStyles = (theme: Theme): DiscreteSliderStyles => {
       marginLeft: -7,
       top: '50%',
       marginTop: -7,
+    },
+    nodeDotDisabled: {
+      backgroundColor: theme.palette.neutral[500],
     },
     node: {
       width: 14,
@@ -87,11 +105,17 @@ export const createStyles = (theme: Theme): DiscreteSliderStyles => {
       elevation: 1,
       // shadow handled via shadow.sm on thumb
     },
+    thumbOuterDisabled: {
+      backgroundColor: theme.surface.paper,
+    },
     thumb: {
       width: 24,
       height: 24,
       borderRadius: 12,
       backgroundColor: theme.palette.primary[500],
+    },
+    thumbDisabled: {
+      backgroundColor: theme.palette.neutral[500],
     },
     bottomRow: {
       flexDirection: 'row',
