@@ -65,29 +65,48 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 	)
 
 	// ── 手势 ────────────────────────────────────────────────────────────────────
-	const pan = useMemo(
+	// Tap: 纯点击吸附（最大位移 5px）
+	const tap = useMemo(
 		() =>
-			Gesture.Pan()
+			Gesture.Tap()
 				.enabled(!disabled)
-				.minDistance(0)  // touch down 立即响应
-				.onBegin((e) => {
+				.maxDeltaX(5)
+				.maxDeltaY(5)
+				.onEnd((e, success) => {
 					'worklet'
+					if (!success) return
 					const width = trackWidthSV.value
 					if (width <= 0 || nodeCount < 2) return
 					const gap = width / (nodeCount - 1)
-					const x = Math.max(0, Math.min(width, e.x))  // e.x 是 GestureDetector 容器内 local X
+					const x = Math.max(0, Math.min(width, e.x))
 					const nearest = Math.round(x / gap)
 					const targetX = nearest * gap
 					thumbX.value = withTiming(targetX, { duration: 120 })
-					startX.value = targetX  // 关键:后续 onUpdate 从吸附点累加 translationX
 					if (nearest !== lastSnappedIndex.value) {
 						lastSnappedIndex.value = nearest
 						runOnJS(notifyChange)(nearest)
 					}
+				}),
+		[disabled, nodeCount, notifyChange],
+	)
+
+	// Pan: 只对明确横向位移 activate，纵向位移让 ScrollView
+	const pan = useMemo(
+		() =>
+			Gesture.Pan()
+				.enabled(!disabled)
+				.activeOffsetX([-8, 8])
+				.failOffsetY([-10, 10])
+				.onBegin(() => {
+					'worklet'
+					const width = trackWidthSV.value
+					if (width <= 0 || nodeCount < 2) return
+					const gap = width / (nodeCount - 1)
+					// 稳定基准：从上次吸附节点起算，避免 tap 动画中途开拖时跳一下
+					startX.value = lastSnappedIndex.value * gap
 				})
 				.onUpdate((e) => {
 					'worklet'
-					// 保持现状:从 startX + translationX 更新
 					const width = trackWidthSV.value
 					if (width <= 0 || nodeCount < 2) return
 					const x = Math.max(0, Math.min(width, startX.value + e.translationX))
@@ -109,6 +128,9 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 				}),
 		[disabled, nodeCount, notifyChange],
 	)
+
+	// 两者互斥，同一 touch 只会有一个成功
+	const gesture = useMemo(() => Gesture.Race(tap, pan), [tap, pan])
 
 	// ── track 宽度采集 + thumb 初始位置 ─────────────────────────────────────────
 	const onTrackLayout = useCallback(
@@ -153,7 +175,7 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 			)}
 
 			{/* 轨道行 */}
-			<GestureDetector gesture={pan}>
+			<GestureDetector gesture={gesture}>
 				<View
 					style={[
 						styles.trackRow,
