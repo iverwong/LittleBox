@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo } from 'react'
-import type { LayoutChangeEvent } from 'react-native'
-import { View, Text } from 'react-native'
+import type { GestureResponderEvent, LayoutChangeEvent } from 'react-native'
+import { Pressable, StyleSheet, View, Text } from 'react-native'
 import { Gesture, GestureDetector } from 'react-native-gesture-handler'
 import Animated, {
 	runOnJS,
@@ -65,31 +65,6 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 	)
 
 	// ── 手势 ────────────────────────────────────────────────────────────────────
-	// Tap: 纯点击吸附（最大位移 5px）
-	const tap = useMemo(
-		() =>
-			Gesture.Tap()
-				.enabled(!disabled)
-				.maxDeltaX(5)
-				.maxDeltaY(5)
-				.onEnd((e, success) => {
-					'worklet'
-					if (!success) return
-					const width = trackWidthSV.value
-					if (width <= 0 || nodeCount < 2) return
-					const gap = width / (nodeCount - 1)
-					const x = Math.max(0, Math.min(width, e.x))
-					const nearest = Math.round(x / gap)
-					const targetX = nearest * gap
-					thumbX.value = withTiming(targetX, { duration: 120 })
-					if (nearest !== lastSnappedIndex.value) {
-						lastSnappedIndex.value = nearest
-						runOnJS(notifyChange)(nearest)
-					}
-				}),
-		[disabled, nodeCount, notifyChange],
-	)
-
 	// Pan: 只对明确横向位移 activate，纵向位移让 ScrollView
 	const pan = useMemo(
 		() =>
@@ -102,7 +77,7 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 					const width = trackWidthSV.value
 					if (width <= 0 || nodeCount < 2) return
 					const gap = width / (nodeCount - 1)
-					// 稳定基准：从上次吸附节点起算，避免 tap 动画中途开拖时跳一下
+					// 稳定基准：从上次吸附节点起算
 					startX.value = lastSnappedIndex.value * gap
 				})
 				.onUpdate((e) => {
@@ -129,8 +104,23 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 		[disabled, nodeCount, notifyChange],
 	)
 
-	// 两者互斥，同一 touch 只会有一个成功
-	const gesture = useMemo(() => Gesture.Race(tap, pan), [tap, pan])
+	// ── tap-to-jump：RN 原生 Pressable，不走 RNGH ───────────────────────────────
+	const handleTrackPress = useCallback(
+		(e: GestureResponderEvent) => {
+			if (disabled) return
+			const width = trackWidthSV.value
+			if (width <= 0 || nodeCount < 2) return
+			const x = Math.max(0, Math.min(width, e.nativeEvent.locationX))
+			const gap = width / (nodeCount - 1)
+			const nearest = Math.round(x / gap)
+			thumbX.value = withTiming(nearest * gap, { duration: 120 })
+			if (nearest !== lastSnappedIndex.value) {
+				lastSnappedIndex.value = nearest
+				notifyChange(nearest)
+			}
+		},
+		[disabled, nodeCount, notifyChange],
+	)
 
 	// ── track 宽度采集 + thumb 初始位置 ─────────────────────────────────────────
 	const onTrackLayout = useCallback(
@@ -175,7 +165,7 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 			)}
 
 			{/* 轨道行 */}
-			<GestureDetector gesture={gesture}>
+			<GestureDetector gesture={pan}>
 				<View
 					style={[
 						styles.trackRow,
@@ -197,6 +187,11 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 							activeTrackStyle,
 							disabled && styles.activeTrackDisabled,
 						]}
+					/>
+					{/* tap-to-jump: absoluteFill Pressable 在 thumb 之下、nodeDots 之上 */}
+					<Pressable
+						style={StyleSheet.absoluteFill}
+						onPress={handleTrackPress}
 					/>
 					{/* thumb */}
 					<Animated.View
