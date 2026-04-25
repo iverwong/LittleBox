@@ -1,75 +1,315 @@
-// 占位实现。外包交付 Lottie JSON 后，本文件内部替换为 lottie-react-native 实现。
-// 调用方 API（Props / MascotState / MascotSize）必须保持兼容，
-// 不得破坏 state / size / onFinish 接口。契约定义在 Mascot.types.ts，替换时不得修改。
-
-import { Feather } from '@expo/vector-icons'
-import { useMemo, useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { View } from 'react-native'
-import { useTheme } from '@/theme'
-import { createStyles, getMascotSize, getMascotIconSize } from './Mascot.styles'
-import type { MascotProps } from './Mascot.types'
+import {
+	useSharedValue, useAnimatedProps,
+	withTiming, withRepeat, withSequence, withDelay,
+	cancelAnimation, runOnJS,
+} from 'react-native-reanimated'
+import type { MascotProps, MascotSize } from './Mascot.types'
+import { MascotSvg } from './Mascot.svg'
+import {
+	STATE_PARAMS, EASING,
+	BLINK_PERIOD_MS, BLINK_DURATION_MS,
+} from './animations'
+import { THINKING_LAYOUT, NARRATING_LAYOUT } from './icons'
 
-// One-time states trigger onFinish after 500ms; loop states do not.
-const ONE_TIME_STATES = new Set(['enter', 'done'])
+const SIZE_PX: Record<MascotSize, number> = { sm: 48, md: 96, lg: 128, xl: 200 }
+const THINKING_COUNT = THINKING_LAYOUT.length
+const NARRATING_COUNT = NARRATING_LAYOUT.length
 
 export function Mascot({ state = 'idle', size = 'md', onFinish, style }: MascotProps) {
-	const theme = useTheme()
-	const styles = useMemo(() => createStyles(theme), [theme])
-	const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+	const px = SIZE_PX[size]
 
-	const containerSize = getMascotSize(size)
-	const iconSize = getMascotIconSize(size)
-	const halfSize = containerSize / 2
+	// body
+	const bodyScaleX = useSharedValue(1)
+	const bodyScaleY = useSharedValue(1)
+	const bodyTranslateY = useSharedValue(0)
+	// shadow
+	const shadowScale = useSharedValue(1)
+	const shadowOpacity = useSharedValue(0.3)
+	// blink
+	const blinkScaleY = useSharedValue(1)
+	// eyes 4 形态 opacity
+	const eyesOpenOpacity = useSharedValue(1)
+	const eyesSquintOpacity = useSharedValue(0)
+	const eyesSmileOpacity = useSharedValue(0)
+	const eyesCrescentOpacity = useSharedValue(0)
 
-	// Restart 500ms timer whenever a one-time state changes
+	// All 7 thinking SVs — always called unconditionally to satisfy hooks rules
+	const thinkingSV0 = useSharedValue(0)
+	const thinkingSV1 = useSharedValue(0)
+	const thinkingSV2 = useSharedValue(0)
+	const thinkingSV3 = useSharedValue(0)
+	const thinkingSV4 = useSharedValue(0)
+	const thinkingSV5 = useSharedValue(0)
+	const thinkingSV6 = useSharedValue(0)
+	const thinkingSVs = [thinkingSV0, thinkingSV1, thinkingSV2, thinkingSV3, thinkingSV4, thinkingSV5, thinkingSV6]
+
+	// All narrating SVs — always called
+	const narratingSV0 = useSharedValue(0)
+	const narratingSVs = [narratingSV0]
+
 	useEffect(() => {
-		if (ONE_TIME_STATES.has(state)) {
-			timerRef.current = setTimeout(() => {
-				onFinish?.()
-			}, 500)
+		const params = STATE_PARAMS[state]
+
+		// —— 取消所有正在跑的动画 ——
+		cancelAnimation(bodyScaleX)
+		cancelAnimation(bodyScaleY)
+		cancelAnimation(bodyTranslateY)
+		cancelAnimation(shadowScale)
+		cancelAnimation(shadowOpacity)
+		cancelAnimation(blinkScaleY)
+		thinkingSVs.forEach(cancelAnimation)
+		narratingSVs.forEach(cancelAnimation)
+
+		// —— body 动画 ——
+		if (params.isOneTime && state === 'enter') {
+			bodyTranslateY.value = -200
+			bodyScaleX.value = 1
+			bodyScaleY.value = 1
+			shadowScale.value = 0.2
+			shadowOpacity.value = 0.1
+
+			bodyTranslateY.value = withTiming(0, { duration: 600, easing: EASING.fall })
+			shadowScale.value = withTiming(1, { duration: 600, easing: EASING.fall })
+			shadowOpacity.value = withTiming(0.5, { duration: 600, easing: EASING.fall })
+
+			bodyScaleX.value = withSequence(
+				withDelay(600, withTiming(1.15, { duration: 120, easing: EASING.standard })),
+				withTiming(0.92, { duration: 120, easing: EASING.standard }),
+				withTiming(1, { duration: 150, easing: EASING.standard }, (finished) => {
+					if (finished && onFinish) runOnJS(onFinish)()
+				}),
+			)
+			bodyScaleY.value = withSequence(
+				withDelay(600, withTiming(0.85, { duration: 120, easing: EASING.standard })),
+				withTiming(1.15, { duration: 120, easing: EASING.standard }),
+				withTiming(1, { duration: 150, easing: EASING.standard }),
+			)
+		} else if (params.isOneTime && state === 'done') {
+			shadowScale.value = withTiming(1, { duration: 200 })
+			shadowOpacity.value = withTiming(0.3, { duration: 200 })
+			bodyTranslateY.value = withTiming(0, { duration: 200 })
+			bodyScaleX.value = withSequence(
+				withTiming(1.05, { duration: 200, easing: EASING.standard }),
+				withTiming(1, { duration: 300, easing: EASING.standard }, (finished) => {
+					if (finished && onFinish) runOnJS(onFinish)()
+				}),
+			)
+			bodyScaleY.value = withSequence(
+				withTiming(1.05, { duration: 200, easing: EASING.standard }),
+				withTiming(1, { duration: 300, easing: EASING.standard }),
+			)
+		} else if (params.body.loop) {
+			shadowScale.value = withTiming(1, { duration: 200 })
+			shadowOpacity.value = withTiming(0.3, { duration: 200 })
+
+			bodyScaleX.value = withRepeat(
+				withSequence(
+					withTiming(params.body.scaleX, { duration: params.body.duration, easing: EASING.loopSoft }),
+					withTiming(1, { duration: params.body.duration, easing: EASING.loopSoft }),
+				), -1, false,
+			)
+			bodyScaleY.value = withRepeat(
+				withSequence(
+					withTiming(params.body.scaleY, { duration: params.body.duration, easing: EASING.loopSoft }),
+					withTiming(1, { duration: params.body.duration, easing: EASING.loopSoft }),
+				), -1, false,
+			)
+			bodyTranslateY.value = withRepeat(
+				withSequence(
+					withTiming(params.body.translateY, { duration: params.body.duration, easing: EASING.loopSoft }),
+					withTiming(0, { duration: params.body.duration, easing: EASING.loopSoft }),
+				), -1, false,
+			)
+		} else {
+			shadowScale.value = withTiming(1, { duration: 200 })
+			shadowOpacity.value = withTiming(0.3, { duration: 200 })
+			bodyScaleX.value = withTiming(params.body.scaleX, { duration: params.body.duration, easing: EASING.standard })
+			bodyScaleY.value = withTiming(params.body.scaleY, { duration: params.body.duration, easing: EASING.standard })
+			bodyTranslateY.value = withTiming(params.body.translateY, { duration: params.body.duration, easing: EASING.standard })
 		}
-		return () => {
-			if (timerRef.current !== null) {
-				clearTimeout(timerRef.current)
-				timerRef.current = null
+
+		// —— blink ——
+		if (params.blinkActive) {
+			blinkScaleY.value = withRepeat(
+				withSequence(
+					withTiming(1, { duration: BLINK_PERIOD_MS - BLINK_DURATION_MS }),
+					withTiming(0.1, { duration: BLINK_DURATION_MS / 2 }),
+					withTiming(1, { duration: BLINK_DURATION_MS / 2 }),
+				), -1, false,
+			)
+		} else {
+			blinkScaleY.value = withTiming(1, { duration: 100 })
+		}
+
+		// —— eyes 形态切换（150ms crossfade） ——
+		eyesOpenOpacity.value     = withTiming(params.eyes === 'open'     ? 1 : 0, { duration: 150 })
+		eyesSquintOpacity.value   = withTiming(params.eyes === 'squint'   ? 1 : 0, { duration: 150 })
+		eyesSmileOpacity.value    = withTiming(params.eyes === 'smile'    ? 1 : 0, { duration: 150 })
+		eyesCrescentOpacity.value = withTiming(params.eyes === 'crescent' ? 1 : 0, { duration: 150 })
+
+		// —— thinking 抛物线（仅操作前 THINKING_COUNT 个） ——
+		if (params.thinkingActive) {
+			for (let i = 0; i < THINKING_COUNT; i++) {
+				const item = THINKING_LAYOUT[i]
+				thinkingSVs[i].value = 0
+				thinkingSVs[i].value = withDelay(
+					item.delay,
+					withRepeat(
+						withTiming(1, { duration: item.durationMs, easing: EASING.parabolic }),
+						-1, false,
+					),
+				)
+			}
+		} else {
+			for (let i = 0; i < THINKING_COUNT; i++) {
+				thinkingSVs[i].value = withTiming(0, { duration: 200 })
 			}
 		}
-	}, [state, onFinish])
+
+		// —— narrating 直上（仅操作前 NARRATING_COUNT 个） ——
+		if (params.narratingActive) {
+			for (let i = 0; i < NARRATING_COUNT; i++) {
+				const item = NARRATING_LAYOUT[i]
+				narratingSVs[i].value = 0
+				narratingSVs[i].value = withDelay(
+					item.delay,
+					withRepeat(
+						withTiming(1, { duration: item.durationMs, easing: EASING.standard }),
+						-1, false,
+					),
+				)
+			}
+		} else {
+			for (let i = 0; i < NARRATING_COUNT; i++) {
+				narratingSVs[i].value = withTiming(0, { duration: 200 })
+			}
+		}
+	}, [state])
+
+	// —— animatedProps ——
+	const bodyAnimatedProps = useAnimatedProps(() => ({
+		transform: `translate(0 ${bodyTranslateY.value}) scale(${bodyScaleX.value} ${bodyScaleY.value})`,
+	}))
+	const shadowAnimatedProps = useAnimatedProps(() => ({
+		opacity: shadowOpacity.value,
+		transform: `translate(100 195) scale(${shadowScale.value})`,
+	}))
+	const blinkAnimatedProps = useAnimatedProps(() => ({
+		transform: `scale(1 ${blinkScaleY.value})`,
+	}))
+	const eyesOpenAnimatedProps     = useAnimatedProps(() => ({ opacity: eyesOpenOpacity.value }))
+	const eyesSquintAnimatedProps   = useAnimatedProps(() => ({ opacity: eyesSquintOpacity.value }))
+	const eyesSmileAnimatedProps   = useAnimatedProps(() => ({ opacity: eyesSmileOpacity.value }))
+	const eyesCrescentAnimatedProps = useAnimatedProps(() => ({ opacity: eyesCrescentOpacity.value }))
+
+	// thinking — one useAnimatedProps per slot, always called (slots > actual count are no-ops at runtime)
+	const thinkingAP0 = useAnimatedProps(() => {
+		if (THINKING_COUNT === 0) return { opacity: 0, transform: '' }
+		const item = THINKING_LAYOUT[0]
+		const p = thinkingSVs[0].value
+		const x = item.startX + (item.peakX - item.startX) * p
+		const y = item.startY + (item.peakY - item.startY) * p
+		const scale = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
+		const rotate = item.rotateEnd * p
+		const opacity = p < 0.2 ? p * 5 : p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1
+		return { opacity, transform: `translate(${x} ${y}) rotate(${rotate}) scale(${scale})` }
+	})
+	const thinkingAP1 = useAnimatedProps(() => {
+		if (THINKING_COUNT <= 1) return { opacity: 0, transform: '' }
+		const item = THINKING_LAYOUT[1]
+		const p = thinkingSVs[1].value
+		const x = item.startX + (item.peakX - item.startX) * p
+		const y = item.startY + (item.peakY - item.startY) * p
+		const scale = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
+		const rotate = item.rotateEnd * p
+		const opacity = p < 0.2 ? p * 5 : p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1
+		return { opacity, transform: `translate(${x} ${y}) rotate(${rotate}) scale(${scale})` }
+	})
+	const thinkingAP2 = useAnimatedProps(() => {
+		if (THINKING_COUNT <= 2) return { opacity: 0, transform: '' }
+		const item = THINKING_LAYOUT[2]
+		const p = thinkingSVs[2].value
+		const x = item.startX + (item.peakX - item.startX) * p
+		const y = item.startY + (item.peakY - item.startY) * p
+		const scale = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
+		const rotate = item.rotateEnd * p
+		const opacity = p < 0.2 ? p * 5 : p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1
+		return { opacity, transform: `translate(${x} ${y}) rotate(${rotate}) scale(${scale})` }
+	})
+	const thinkingAP3 = useAnimatedProps(() => {
+		if (THINKING_COUNT <= 3) return { opacity: 0, transform: '' }
+		const item = THINKING_LAYOUT[3]
+		const p = thinkingSVs[3].value
+		const x = item.startX + (item.peakX - item.startX) * p
+		const y = item.startY + (item.peakY - item.startY) * p
+		const scale = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
+		const rotate = item.rotateEnd * p
+		const opacity = p < 0.2 ? p * 5 : p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1
+		return { opacity, transform: `translate(${x} ${y}) rotate(${rotate}) scale(${scale})` }
+	})
+	const thinkingAP4 = useAnimatedProps(() => {
+		if (THINKING_COUNT <= 4) return { opacity: 0, transform: '' }
+		const item = THINKING_LAYOUT[4]
+		const p = thinkingSVs[4].value
+		const x = item.startX + (item.peakX - item.startX) * p
+		const y = item.startY + (item.peakY - item.startY) * p
+		const scale = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
+		const rotate = item.rotateEnd * p
+		const opacity = p < 0.2 ? p * 5 : p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1
+		return { opacity, transform: `translate(${x} ${y}) rotate(${rotate}) scale(${scale})` }
+	})
+	const thinkingAP5 = useAnimatedProps(() => {
+		if (THINKING_COUNT <= 5) return { opacity: 0, transform: '' }
+		const item = THINKING_LAYOUT[5]
+		const p = thinkingSVs[5].value
+		const x = item.startX + (item.peakX - item.startX) * p
+		const y = item.startY + (item.peakY - item.startY) * p
+		const scale = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
+		const rotate = item.rotateEnd * p
+		const opacity = p < 0.2 ? p * 5 : p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1
+		return { opacity, transform: `translate(${x} ${y}) rotate(${rotate}) scale(${scale})` }
+	})
+	const thinkingAP6 = useAnimatedProps(() => {
+		if (THINKING_COUNT <= 6) return { opacity: 0, transform: '' }
+		const item = THINKING_LAYOUT[6]
+		const p = thinkingSVs[6].value
+		const x = item.startX + (item.peakX - item.startX) * p
+		const y = item.startY + (item.peakY - item.startY) * p
+		const scale = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
+		const rotate = item.rotateEnd * p
+		const opacity = p < 0.2 ? p * 5 : p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1
+		return { opacity, transform: `translate(${x} ${y}) rotate(${rotate}) scale(${scale})` }
+	})
+
+	const narratingAP0 = useAnimatedProps(() => {
+		if (NARRATING_COUNT === 0) return { opacity: 0, transform: '' }
+		const item = NARRATING_LAYOUT[0]
+		const p = narratingSVs[0].value
+		const y = item.startY + (item.endY - item.startY) * p
+		const scale = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
+		const opacity = p < 0.15 ? p / 0.15 : p > 0.6 ? Math.max(0, (1 - p) / 0.4) : 1
+		return { opacity, transform: `translate(${item.x} ${y}) scale(${scale})` }
+	})
+
+	// Slice to actual used length
+	const thinkingAnimatedProps = [thinkingAP0, thinkingAP1, thinkingAP2, thinkingAP3, thinkingAP4, thinkingAP5, thinkingAP6].slice(0, THINKING_COUNT)
+	const narratingAnimatedProps = [narratingAP0].slice(0, NARRATING_COUNT)
 
 	return (
-		<View
-			style={[
-				styles.container,
-				{
-					width: containerSize,
-					height: containerSize,
-				},
-				style,
-			]}
-		>
-			<View
-				style={[
-					styles.outerRing,
-					{
-						width: containerSize,
-						height: containerSize,
-						borderRadius: halfSize,
-					},
-				]}
-			>
-				<View
-					style={[
-						styles.innerCircle,
-						{
-							width: containerSize - 4,
-							height: containerSize - 4,
-							borderRadius: halfSize - 2,
-						},
-					]}
-				>
-					<Feather name="smile" size={iconSize} color={theme.palette.primary[600]} />
-				</View>
-			</View>
+		<View style={[{ width: px, height: px }, style]}>
+			<MascotSvg
+				bodyAnimatedProps={bodyAnimatedProps}
+				shadowAnimatedProps={shadowAnimatedProps}
+				blinkAnimatedProps={blinkAnimatedProps}
+				eyesOpenAnimatedProps={eyesOpenAnimatedProps}
+				eyesSquintAnimatedProps={eyesSquintAnimatedProps}
+				eyesSmileAnimatedProps={eyesSmileAnimatedProps}
+				eyesCrescentAnimatedProps={eyesCrescentAnimatedProps}
+				thinkingAnimatedProps={thinkingAnimatedProps}
+				narratingAnimatedProps={narratingAnimatedProps}
+			/>
 		</View>
 	)
 }
