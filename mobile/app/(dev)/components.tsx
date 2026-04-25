@@ -536,24 +536,26 @@ function ChatBubbleSection() {
 
 // ─── Mascot ────────────────────────────────────────────────────────────────────
 
-const MASCOT_STATES: MascotState[] = ['enter', 'idle', 'listen', 'thinking', 'narrating', 'done']
+const LOOP_STATES: MascotState[] = ['idle', 'listen', 'thinking', 'narrating']
 const MASCOT_SIZES: MascotSize[] = ['sm', 'md', 'lg', 'xl']
 
 function MascotSection() {
 	const [finishCount, setFinishCount] = useState(0)
 	const [currentState, setCurrentState] = useState<MascotState>('idle')
 
+	// onFinish 只挂在 xl 上；其余 3 个 Mascot 不挂 onFinish，避免 4× 计数
 	const handleFinish = useCallback(() => {
 		setFinishCount(c => c + 1)
+		setCurrentState('idle')
 	}, [])
 
 	return (
 		<>
-			<SectionHeader title="Mascot (6 state × 4 size) + onFinish counter" />
+			<SectionHeader title="Mascot (4 size sync · one-time on xl only)" />
 			<View style={{ paddingHorizontal: 16, gap: 16 }}>
-				{/* State selector */}
+				{/* Loop state buttons — direct setState */}
 				<View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16 }}>
-					{MASCOT_STATES.map(s => (
+					{LOOP_STATES.map(s => (
 						<Button
 							key={s}
 							variant={currentState === s ? 'primary' : 'secondary'}
@@ -564,14 +566,23 @@ function MascotSection() {
 						</Button>
 					))}
 				</View>
-				{/* Size matrix */}
+				{/* One-time state buttons — setState + onFinish回落 idle */}
+				<View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16 }}>
+					<Button variant="primary" size="sm" onPress={() => setCurrentState('enter')}>
+						▶ Play enter
+					</Button>
+					<Button variant="primary" size="sm" onPress={() => setCurrentState('done')}>
+						▶ Play done
+					</Button>
+				</View>
+				{/* Size matrix — onFinish only on xl */}
 				<View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'center' }}>
 					{MASCOT_SIZES.map(size => (
 						<View key={size} style={{ alignItems: 'center' }}>
 							<Mascot
 								state={currentState}
 								size={size}
-								onFinish={handleFinish}
+								onFinish={size === 'xl' ? handleFinish : undefined}
 							/>
 							<Text style={{ fontSize: 10, color: '#888', marginTop: 4 }}>{size}</Text>
 						</View>
@@ -584,7 +595,7 @@ function MascotSection() {
 					<Button variant="ghost" size="sm" onPress={() => setFinishCount(0)}>重置</Button>
 				</View>
 				<Text style={{ fontSize: 11, color: '#999' }}>
-					说明：触发 enter / done，计数器 +1；idle / listen / thinking / narrating 不触发回调。
+					说明：enter / done 完成后 xl 触发 +1 并回落 idle；中途切走（cancel）finished=false，不计数。
 				</Text>
 			</View>
 		</>
