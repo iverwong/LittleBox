@@ -6,7 +6,7 @@ import {
 	cancelAnimation, runOnJS,
 } from 'react-native-reanimated'
 import type { MascotProps, MascotSize } from './Mascot.types'
-import { MascotSvg } from './Mascot.svg'
+import { MascotSvg } from './MascotSvg'
 import {
 	STATE_PARAMS, EASING,
 	BLINK_PERIOD_MS, BLINK_DURATION_MS,
