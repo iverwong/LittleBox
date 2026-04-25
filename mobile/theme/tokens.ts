@@ -62,4 +62,31 @@ export const surface = {
 	paper: '#FFFFFF',
 } as const
 
+// M4.7 新增 — 吉祥物 SVG 填充色（首版从 mascot.svg gradient stops 近似采样）
+export const mascot = {
+	// 盒身
+	bodyInner: '#4A2313',        // box-inner 深棕（primary[800]）
+	bodyFront: '#F1FAF6',        // body-front 基底（渐变终点米白）
+	bodyFrontShadow: '#C7AA8A',  // body-front 阴影层（primary[300] 近似）
+	bodySide: '#AE794A',         // body-side 基底（primary[500] 偏上）
+	bodySideShadow: '#A4693A',    // body-side 阴影层（primary[600]）
+	// 盒盖
+	lidTop: '#DD9D5D',           // lid-top 基底（primary[400]）
+	lidTopHighlight: '#FEFEFD',   // lid-top 高光（近白）
+	lidLeft: '#EFE9D9',          // lid-left 基底（neutral[100]）
+	lidFrontBase: '#A26637',     // lid-front 基底（primary[600]）
+	lidFrontShadow: '#C7AA8A',   // lid-front 阴影（primary[300]）
+	lidFrontHighlight: '#FEFEFD',// lid-front 高光（近白）
+	lidFrontDarkshadow: '#A4693A',// lid-front 深阴影（primary[600]）
+	lidFrontDeepshadow: '#773B13',// lid-front 最深阴影（primary[800] 偏深）
+	// 眼睛
+	eye: '#3C1C0D',              // 眼珠色（primary[900] 偏深）
+	// 阴影 ellipse
+	shadow: '#4A2313',           // 投影（primary[800]）
+	// thinking 图标
+	thinkingIcon: '#8A5A36',     // thinking 态图标描边（primary[600]）
+	// narrating 光斑
+	narratingGlow: '#FFC857',    // narrating 光斑 fill（金黄）
+} as const
+
 export { layout } from './layout'
