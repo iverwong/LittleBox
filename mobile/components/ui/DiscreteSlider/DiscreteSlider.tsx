@@ -4,6 +4,7 @@ import { Pressable, StyleSheet, View, Text } from 'react-native'
 import { Gesture, GestureDetector } from 'react-native-gesture-handler'
 import Animated, {
 	runOnJS,
+	useAnimatedReaction,
 	useAnimatedStyle,
 	useSharedValue,
 	withTiming,
@@ -53,15 +54,43 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 	}, [nodes, value])
 
 	// ── shared values ────────────────────────────────────────────────────────────
+	// thumbX：仅 worklet 写（pan 手势 + useAnimatedReaction 派生），被 thumbStyle / activeTrackStyle 读
 	const thumbX = useSharedValue(0)
+	// startX：仅 worklet 写（pan onBegin）
 	const startX = useSharedValue(0)
+	// trackWidthSV：仅 JS 写（onLayout），不被任何 animatedStyle 读
 	const trackWidthSV = useSharedValue(0)
+	// activeIndexSV：仅 JS 写（useEffect 镜像 prop），不被任何 animatedStyle 读
+	const activeIndexSV = useSharedValue(activeIndex)
+	// lastSnappedIndex：仅 worklet 写（pan 手势），不被任何 animatedStyle 读
 	const lastSnappedIndex = useSharedValue(activeIndex)
 
 	// ── JS 侧 notify（始终读最新 nodes） ────────────────────────────────────────
 	const notifyChange = useCallback(
 		(index: number) => onValueChange(nodes[index]),
 		[nodes, onValueChange],
+	)
+
+	// ── activeIndexSV：镜像 prop 到 SV（替代直接写 thumbX 的旧 useEffect） ──────
+	useEffect(() => {
+		activeIndexSV.value = activeIndex
+	}, [activeIndex])
+
+	// ── R4：useAnimatedReaction 派生 thumbX（worklet 内写 thumbX） ───────────────
+	useAnimatedReaction(
+		() => ({ width: trackWidthSV.value, idx: activeIndexSV.value }),
+		(curr, prev) => {
+			if (curr.width <= 0 || nodeCount <= 1) return
+			const target = (curr.idx / (nodeCount - 1)) * curr.width
+			if (prev == null) {
+				// 首次：直接写到目标位置，避免从 0 滑到目标
+				thumbX.value = target
+			} else if (curr.width !== prev.width || curr.idx !== prev.idx) {
+				thumbX.value = withTiming(target, { duration: 200 })
+			}
+			lastSnappedIndex.value = curr.idx
+		},
+		[nodeCount],
 	)
 
 	// ── 手势 ────────────────────────────────────────────────────────────────────
@@ -77,7 +106,6 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 					const width = trackWidthSV.value
 					if (width <= 0 || nodeCount < 2) return
 					const gap = width / (nodeCount - 1)
-					// 稳定基准：从上次吸附节点起算
 					startX.value = lastSnappedIndex.value * gap
 				})
 				.onUpdate((e) => {
@@ -104,7 +132,7 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 		[disabled, nodeCount, notifyChange],
 	)
 
-	// ── tap-to-jump：RN 原生 Pressable，不走 RNGH ───────────────────────────────
+	// ── tap-to-jump：RN 原生 Pressable，不走 RNGH Tap ────────────────────────────
 	const handleTrackPress = useCallback(
 		(e: GestureResponderEvent) => {
 			if (disabled) return
@@ -113,39 +141,18 @@ export function DiscreteSlider({ nodes, value, onValueChange, disabled, leftLabe
 			const x = Math.max(0, Math.min(width, e.nativeEvent.locationX))
 			const gap = width / (nodeCount - 1)
 			const nearest = Math.round(x / gap)
-			thumbX.value = withTiming(nearest * gap, { duration: 120 })
+			// 通过 prop 变化 → activeIndexSV → useAnimatedReaction 自然派生 thumbX
 			if (nearest !== lastSnappedIndex.value) {
-				lastSnappedIndex.value = nearest
 				notifyChange(nearest)
 			}
 		},
 		[disabled, nodeCount, notifyChange],
 	)
 
-	// ── track 宽度采集 + thumb 初始位置 ─────────────────────────────────────────
-	const onTrackLayout = useCallback(
-		(e: LayoutChangeEvent) => {
-			const w = e.nativeEvent.layout.width
-			trackWidthSV.value = w
-			if (nodeCount > 1) {
-				thumbX.value = (activeIndex / (nodeCount - 1)) * w
-				lastSnappedIndex.value = activeIndex
-			}
-		},
-		[activeIndex, nodeCount],
-	)
-
-	// ── 外部 value 变化同步 thumb ───────────────────────────────────────────────
-	useEffect(() => {
-		const width = trackWidthSV.value
-		if (width > 0 && nodeCount > 1) {
-			thumbX.value = withTiming(
-				(activeIndex / (nodeCount - 1)) * width,
-				{ duration: 120 },
-			)
-			lastSnappedIndex.value = activeIndex
-		}
-	}, [activeIndex, nodeCount])
+	// ── track 宽度采集（只写 trackWidthSV） ────────────────────────────────────
+	const onTrackLayout = useCallback((e: LayoutChangeEvent) => {
+		trackWidthSV.value = e.nativeEvent.layout.width
+	}, [])
 
 	// ── 动画样式 ────────────────────────────────────────────────────────────────
 	const thumbStyle = useAnimatedStyle(() => ({
