@@ -1,6 +1,6 @@
 // [M15-TEMP] Component gallery for visual QA against HTML prototype v0.5.
 // Verify all components match design tokens; surface token diff is expected.
-import { useState, useCallback } from 'react'
+import { useState } from 'react'
 import { ScrollView, View, Text, Pressable } from 'react-native'
 import { router } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
@@ -21,7 +21,7 @@ import {
 import { ScreenContainer, Header, ChatBubble } from '@/components/layout'
 import { Mascot } from '@/components/mascot'
 import type { ToastVariant, ButtonVariant, ButtonSize, ModalSize, AvatarSize, CardVariant } from '@/components/ui'
-import type { MascotState, MascotSize } from '@/components/mascot'
+import type { MascotSize } from '@/components/mascot'
 import type { BubbleRole } from '@/components/layout/ChatBubble'
 
 // ─── Layout helpers ──────────────────────────────────────────────────────────
@@ -536,67 +536,19 @@ function ChatBubbleSection() {
 
 // ─── Mascot ────────────────────────────────────────────────────────────────────
 
-const LOOP_STATES: MascotState[] = ['idle', 'listen', 'thinking', 'narrating']
 const MASCOT_SIZES: MascotSize[] = ['sm', 'md', 'lg', 'xl']
 
 function MascotSection() {
-	const [finishCount, setFinishCount] = useState(0)
-	const [currentState, setCurrentState] = useState<MascotState>('idle')
-
-	// onFinish 只挂在 xl 上；其余 3 个 Mascot 不挂 onFinish，避免 4× 计数
-	const handleFinish = useCallback(() => {
-		setFinishCount(c => c + 1)
-		setCurrentState('idle')
-	}, [])
-
 	return (
 		<>
-			<SectionHeader title="Mascot (4 size sync · one-time on xl only)" />
-			<View style={{ paddingHorizontal: 16, gap: 16 }}>
-				{/* Loop state buttons — direct setState */}
-				<View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16 }}>
-					{LOOP_STATES.map(s => (
-						<Button
-							key={s}
-							variant={currentState === s ? 'primary' : 'secondary'}
-							size="sm"
-							onPress={() => setCurrentState(s)}
-						>
-							{s}
-						</Button>
-					))}
-				</View>
-				{/* One-time state buttons — setState + onFinish回落 idle */}
-				<View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16 }}>
-					<Button variant="primary" size="sm" onPress={() => setCurrentState('enter')}>
-						▶ Play enter
-					</Button>
-					<Button variant="primary" size="sm" onPress={() => setCurrentState('done')}>
-						▶ Play done
-					</Button>
-				</View>
-				{/* Size matrix — onFinish only on xl */}
-				<View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'center' }}>
-					{MASCOT_SIZES.map(size => (
-						<View key={size} style={{ alignItems: 'center' }}>
-							<Mascot
-								state={currentState}
-								size={size}
-								onFinish={size === 'xl' ? handleFinish : undefined}
-							/>
-							<Text style={{ fontSize: 10, color: '#888', marginTop: 4 }}>{size}</Text>
-						</View>
-					))}
-				</View>
-				{/* onFinish counter */}
-				<View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-					<Text style={{ fontSize: 13, color: '#555' }}>一次性态 onFinish 触发次数：</Text>
-					<Text style={{ fontSize: 20, fontWeight: '700', color: '#A67148' }}>{finishCount}</Text>
-					<Button variant="ghost" size="sm" onPress={() => setFinishCount(0)}>重置</Button>
-				</View>
-				<Text style={{ fontSize: 11, color: '#999' }}>
-					说明：enter / done 完成后 xl 触发 +1 并回落 idle；中途切走（cancel）finished=false，不计数。
-				</Text>
+			<SectionHeader title="Mascot (4 sizes · static + blink only)" />
+			<View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'center', paddingHorizontal: 16 }}>
+				{MASCOT_SIZES.map(size => (
+					<View key={size} style={{ alignItems: 'center' }}>
+						<Mascot size={size} />
+						<Text style={{ fontSize: 10, color: '#888', marginTop: 4 }}>{size}</Text>
+					</View>
+				))}
 			</View>
 		</>
 	)

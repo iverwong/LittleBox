@@ -63,6 +63,7 @@ export const surface = {
 } as const
 
 // M4.7 新增 — 吉祥物 SVG 填充色（首版从 mascot.svg gradient stops 近似采样）
+// M4.7 MVP 精简后：移除 shadow / thinkingIcon / narratingGlow（已被删除的动效使用）
 export const mascot = {
 	// 盒身
 	bodyInner: '#4A2313',        // box-inner 深棕（primary[800]）
@@ -81,12 +82,6 @@ export const mascot = {
 	lidFrontDeepshadow: '#773B13',// lid-front 最深阴影（primary[800] 偏深）
 	// 眼睛
 	eye: '#3C1C0D',              // 眼珠色（primary[900] 偏深）
-	// 阴影 ellipse
-	shadow: '#4A2313',           // 投影（primary[800]）
-	// thinking 图标
-	thinkingIcon: '#8A5A36',     // thinking 态图标描边（primary[600]）
-	// narrating 光斑
-	narratingGlow: '#FFC857',    // narrating 光斑 fill（金黄）
 } as const
 
 export { layout } from './layout'
