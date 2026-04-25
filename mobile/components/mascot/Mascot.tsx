@@ -24,9 +24,9 @@ export function Mascot({ state = 'idle', size = 'md', onFinish, style }: MascotP
 	const bodyScaleX = useSharedValue(1)
 	const bodyScaleY = useSharedValue(1)
 	const bodyTranslateY = useSharedValue(0)
-	// shadow
+	// shadow（仅 enter 状态可见；其他状态 opacity/scale 均归 0）
 	const shadowScale = useSharedValue(1)
-	const shadowOpacity = useSharedValue(0.3)
+	const shadowOpacity = useSharedValue(0)
 	// blink
 	const blinkScaleY = useSharedValue(1)
 	// eyes 4 形态 opacity
@@ -70,11 +70,14 @@ export function Mascot({ state = 'idle', size = 'md', onFinish, style }: MascotP
 			bodyScaleX.value = 1
 			bodyScaleY.value = 1
 			shadowScale.value = 0.2
-			shadowOpacity.value = 0.1
+			shadowOpacity.value = 0
 
 			bodyTranslateY.value = withTiming(0, { duration: 600, easing: EASING.fall })
 			shadowScale.value = withTiming(1, { duration: 600, easing: EASING.fall })
-			shadowOpacity.value = withTiming(0.5, { duration: 600, easing: EASING.fall })
+			shadowOpacity.value = withSequence(
+				withTiming(0.4, { duration: 600, easing: EASING.fall }),
+				withDelay(120, withTiming(0, { duration: 270, easing: EASING.standard })),
+			)
 
 			bodyScaleX.value = withSequence(
 				withDelay(600, withTiming(1.15, { duration: 120, easing: EASING.standard })),
@@ -89,8 +92,8 @@ export function Mascot({ state = 'idle', size = 'md', onFinish, style }: MascotP
 				withTiming(1, { duration: 150, easing: EASING.standard }),
 			)
 		} else if (params.isOneTime && state === 'done') {
-			shadowScale.value = withTiming(1, { duration: 200 })
-			shadowOpacity.value = withTiming(0.3, { duration: 200 })
+			shadowScale.value = withTiming(0, { duration: 200 })
+			shadowOpacity.value = withTiming(0, { duration: 200 })
 			bodyTranslateY.value = withTiming(0, { duration: 200 })
 			bodyScaleX.value = withSequence(
 				withTiming(1.05, { duration: 200, easing: EASING.standard }),
@@ -103,8 +106,8 @@ export function Mascot({ state = 'idle', size = 'md', onFinish, style }: MascotP
 				withTiming(1, { duration: 300, easing: EASING.standard }),
 			)
 		} else if (params.body.loop) {
-			shadowScale.value = withTiming(1, { duration: 200 })
-			shadowOpacity.value = withTiming(0.3, { duration: 200 })
+			shadowScale.value = withTiming(0, { duration: 200 })
+			shadowOpacity.value = withTiming(0, { duration: 200 })
 
 			bodyScaleX.value = withRepeat(
 				withSequence(
@@ -125,8 +128,8 @@ export function Mascot({ state = 'idle', size = 'md', onFinish, style }: MascotP
 				), -1, false,
 			)
 		} else {
-			shadowScale.value = withTiming(1, { duration: 200 })
-			shadowOpacity.value = withTiming(0.3, { duration: 200 })
+			shadowScale.value = withTiming(0, { duration: 200 })
+			shadowOpacity.value = withTiming(0, { duration: 200 })
 			bodyScaleX.value = withTiming(params.body.scaleX, { duration: params.body.duration, easing: EASING.standard })
 			bodyScaleY.value = withTiming(params.body.scaleY, { duration: params.body.duration, easing: EASING.standard })
 			bodyTranslateY.value = withTiming(params.body.translateY, { duration: params.body.duration, easing: EASING.standard })
@@ -239,11 +242,10 @@ export function Mascot({ state = 'idle', size = 'md', onFinish, style }: MascotP
 		const cosR = Math.cos(r * Math.PI / 180)
 		const sinR = Math.sin(r * Math.PI / 180)
 		const opacity = p < 0.2 ? p * 5 : p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1
-		// matrix(a,b,c,d,e,f) = scaleX·rotate | scaleY·rotate | translateX | translateY
-		return { opacity, matrix: `${s * cosR} ${s * sinR} ${-s * sinR} ${s * cosR} ${x} ${y}` }
+		return { opacity, matrix: [s * cosR, s * sinR, -s * sinR, s * cosR, x, y] }
 	})
 	const thinkingAP1 = useAnimatedProps(() => {
-		if (THINKING_COUNT <= 1) return { opacity: 0, matrix: '0 0 0 0 0 0' }
+		if (THINKING_COUNT <= 1) return { opacity: 0, matrix: [0, 0, 0, 0, 0, 0] }
 		const item = THINKING_LAYOUT[1]
 		const p = thinkingSVs[1].value
 		const x = item.startX + (item.peakX - item.startX) * p
@@ -253,10 +255,10 @@ export function Mascot({ state = 'idle', size = 'md', onFinish, style }: MascotP
 		const cosR = Math.cos(r * Math.PI / 180)
 		const sinR = Math.sin(r * Math.PI / 180)
 		const opacity = p < 0.2 ? p * 5 : p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1
-		return { opacity, matrix: `${s * cosR} ${s * sinR} ${-s * sinR} ${s * cosR} ${x} ${y}` }
+		return { opacity, matrix: [s * cosR, s * sinR, -s * sinR, s * cosR, x, y] }
 	})
 	const thinkingAP2 = useAnimatedProps(() => {
-		if (THINKING_COUNT <= 2) return { opacity: 0, matrix: '0 0 0 0 0 0' }
+		if (THINKING_COUNT <= 2) return { opacity: 0, matrix: [0, 0, 0, 0, 0, 0] }
 		const item = THINKING_LAYOUT[2]
 		const p = thinkingSVs[2].value
 		const x = item.startX + (item.peakX - item.startX) * p
@@ -266,10 +268,10 @@ export function Mascot({ state = 'idle', size = 'md', onFinish, style }: MascotP
 		const cosR = Math.cos(r * Math.PI / 180)
 		const sinR = Math.sin(r * Math.PI / 180)
 		const opacity = p < 0.2 ? p * 5 : p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1
-		return { opacity, matrix: `${s * cosR} ${s * sinR} ${-s * sinR} ${s * cosR} ${x} ${y}` }
+		return { opacity, matrix: [s * cosR, s * sinR, -s * sinR, s * cosR, x, y] }
 	})
 	const thinkingAP3 = useAnimatedProps(() => {
-		if (THINKING_COUNT <= 3) return { opacity: 0, matrix: '0 0 0 0 0 0' }
+		if (THINKING_COUNT <= 3) return { opacity: 0, matrix: [0, 0, 0, 0, 0, 0] }
 		const item = THINKING_LAYOUT[3]
 		const p = thinkingSVs[3].value
 		const x = item.startX + (item.peakX - item.startX) * p
@@ -279,10 +281,10 @@ export function Mascot({ state = 'idle', size = 'md', onFinish, style }: MascotP
 		const cosR = Math.cos(r * Math.PI / 180)
 		const sinR = Math.sin(r * Math.PI / 180)
 		const opacity = p < 0.2 ? p * 5 : p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1
-		return { opacity, matrix: `${s * cosR} ${s * sinR} ${-s * sinR} ${s * cosR} ${x} ${y}` }
+		return { opacity, matrix: [s * cosR, s * sinR, -s * sinR, s * cosR, x, y] }
 	})
 	const thinkingAP4 = useAnimatedProps(() => {
-		if (THINKING_COUNT <= 4) return { opacity: 0, matrix: '0 0 0 0 0 0' }
+		if (THINKING_COUNT <= 4) return { opacity: 0, matrix: [0, 0, 0, 0, 0, 0] }
 		const item = THINKING_LAYOUT[4]
 		const p = thinkingSVs[4].value
 		const x = item.startX + (item.peakX - item.startX) * p
@@ -292,10 +294,10 @@ export function Mascot({ state = 'idle', size = 'md', onFinish, style }: MascotP
 		const cosR = Math.cos(r * Math.PI / 180)
 		const sinR = Math.sin(r * Math.PI / 180)
 		const opacity = p < 0.2 ? p * 5 : p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1
-		return { opacity, matrix: `${s * cosR} ${s * sinR} ${-s * sinR} ${s * cosR} ${x} ${y}` }
+		return { opacity, matrix: [s * cosR, s * sinR, -s * sinR, s * cosR, x, y] }
 	})
 	const thinkingAP5 = useAnimatedProps(() => {
-		if (THINKING_COUNT <= 5) return { opacity: 0, matrix: '0 0 0 0 0 0' }
+		if (THINKING_COUNT <= 5) return { opacity: 0, matrix: [0, 0, 0, 0, 0, 0] }
 		const item = THINKING_LAYOUT[5]
 		const p = thinkingSVs[5].value
 		const x = item.startX + (item.peakX - item.startX) * p
@@ -305,10 +307,10 @@ export function Mascot({ state = 'idle', size = 'md', onFinish, style }: MascotP
 		const cosR = Math.cos(r * Math.PI / 180)
 		const sinR = Math.sin(r * Math.PI / 180)
 		const opacity = p < 0.2 ? p * 5 : p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1
-		return { opacity, matrix: `${s * cosR} ${s * sinR} ${-s * sinR} ${s * cosR} ${x} ${y}` }
+		return { opacity, matrix: [s * cosR, s * sinR, -s * sinR, s * cosR, x, y] }
 	})
 	const thinkingAP6 = useAnimatedProps(() => {
-		if (THINKING_COUNT <= 6) return { opacity: 0, matrix: '0 0 0 0 0 0' }
+		if (THINKING_COUNT <= 6) return { opacity: 0, matrix: [0, 0, 0, 0, 0, 0] }
 		const item = THINKING_LAYOUT[6]
 		const p = thinkingSVs[6].value
 		const x = item.startX + (item.peakX - item.startX) * p
@@ -318,35 +320,35 @@ export function Mascot({ state = 'idle', size = 'md', onFinish, style }: MascotP
 		const cosR = Math.cos(r * Math.PI / 180)
 		const sinR = Math.sin(r * Math.PI / 180)
 		const opacity = p < 0.2 ? p * 5 : p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1
-		return { opacity, matrix: `${s * cosR} ${s * sinR} ${-s * sinR} ${s * cosR} ${x} ${y}` }
+		return { opacity, matrix: [s * cosR, s * sinR, -s * sinR, s * cosR, x, y] }
 	})
 
 	const narratingAP0 = useAnimatedProps(() => {
-		if (NARRATING_COUNT === 0) return { opacity: 0, matrix: '0 0 0 0 0 0' }
+		if (NARRATING_COUNT === 0) return { opacity: 0, matrix: [0, 0, 0, 0, 0, 0] }
 		const item = NARRATING_LAYOUT[0]
 		const p = narratingSVs[0].value
 		const y = item.startY + (item.endY - item.startY) * p
 		const s = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
 		const opacity = p < 0.15 ? p / 0.15 : p > 0.6 ? Math.max(0, (1 - p) / 0.4) : 1
-		return { opacity, matrix: `${s} 0 0 ${s} ${item.x} ${y}` }
+		return { opacity, matrix: [s, 0, 0, s, item.x, y] }
 	})
 	const narratingAP1 = useAnimatedProps(() => {
-		if (NARRATING_COUNT <= 1) return { opacity: 0, matrix: '0 0 0 0 0 0' }
+		if (NARRATING_COUNT <= 1) return { opacity: 0, matrix: [0, 0, 0, 0, 0, 0] }
 		const item = NARRATING_LAYOUT[1]
 		const p = narratingSVs[1].value
 		const y = item.startY + (item.endY - item.startY) * p
 		const s = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
 		const opacity = p < 0.15 ? p / 0.15 : p > 0.6 ? Math.max(0, (1 - p) / 0.4) : 1
-		return { opacity, matrix: `${s} 0 0 ${s} ${item.x} ${y}` }
+		return { opacity, matrix: [s, 0, 0, s, item.x, y] }
 	})
 	const narratingAP2 = useAnimatedProps(() => {
-		if (NARRATING_COUNT <= 2) return { opacity: 0, matrix: '0 0 0 0 0 0' }
+		if (NARRATING_COUNT <= 2) return { opacity: 0, matrix: [0, 0, 0, 0, 0, 0] }
 		const item = NARRATING_LAYOUT[2]
 		const p = narratingSVs[2].value
 		const y = item.startY + (item.endY - item.startY) * p
 		const s = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
 		const opacity = p < 0.15 ? p / 0.15 : p > 0.6 ? Math.max(0, (1 - p) / 0.4) : 1
-		return { opacity, matrix: `${s} 0 0 ${s} ${item.x} ${y}` }
+		return { opacity, matrix: [s, 0, 0, s, item.x, y] }
 	})
 
 	// Slice to actual used length
