@@ -94,16 +94,18 @@ export const ICON_NARRATING_GLOW =
 
 // ─── 布局参数（错峰 200ms / 单次 1800ms）───
 
-export const THINKING_LAYOUT: ThinkingItem[] = [
-	{ iconD: ICON_THINKING_AUDIO_LINES,  startX: 88,  peakX: 68,  startY: 110, peakY: 30, scaleStart: 1, scaleEnd: 0.7, rotateEnd: -25, delay: 0,    durationMs: 1800 },
-	{ iconD: ICON_THINKING_BINOCULARS,   startX: 112, peakX: 132, startY: 110, peakY: 25, scaleStart: 1, scaleEnd: 0.7, rotateEnd:  20, delay: 200,  durationMs: 1800 },
-	{ iconD: ICON_THINKING_COG,          startX: 92,  peakX: 72,  startY: 110, peakY: 35, scaleStart: 1, scaleEnd: 0.7, rotateEnd: -18, delay: 400,  durationMs: 1800 },
-	{ iconD: ICON_THINKING_FILE_SEARCH,  startX: 108, peakX: 128, startY: 110, peakY: 28, scaleStart: 1, scaleEnd: 0.7, rotateEnd:  15, delay: 600,  durationMs: 1800 },
-	{ iconD: ICON_THINKING_HEART_PULSE,  startX: 90,  peakX: 70,  startY: 110, peakY: 32, scaleStart: 1, scaleEnd: 0.7, rotateEnd: -12, delay: 800,  durationMs: 1800 },
-	{ iconD: ICON_THINKING_LIGHTBULB,    startX: 110, peakX: 130, startY: 110, peakY: 33, scaleStart: 1, scaleEnd: 0.7, rotateEnd:  18, delay: 1000, durationMs: 1800 },
-	{ iconD: ICON_THINKING_WRENCH,       startX: 100, peakX: 85,  startY: 110, peakY: 24, scaleStart: 1, scaleEnd: 0.7, rotateEnd:  -8, delay: 1200, durationMs: 1800 },
+export const NARRATING_LAYOUT: NarratingItem[] = [
+	{ iconD: ICON_NARRATING_GLOW, x: 74.7,  startY: 125.2, endY: 35, scaleStart: 1, scaleEnd: 0.6, delay: 0,   durationMs: 1000 },
+	{ iconD: ICON_NARRATING_GLOW, x: 66.7,  startY: 125.2, endY: 30, scaleStart: 1, scaleEnd: 0.5, delay: 250, durationMs: 1000 },
+	{ iconD: ICON_NARRATING_GLOW, x: 82.7,  startY: 125.2, endY: 32, scaleStart: 1, scaleEnd: 0.5, delay: 500, durationMs: 1000 },
 ]
 
-export const NARRATING_LAYOUT: NarratingItem[] = [
-	{ iconD: ICON_NARRATING_GLOW, x: 100, startY: 20, endY: 5, scaleStart: 0, scaleEnd: 1, delay: 0, durationMs: 600 },
+export const THINKING_LAYOUT: ThinkingItem[] = [
+	{ iconD: ICON_THINKING_AUDIO_LINES,  startX: 88,  peakX: 68,  startY: 125, peakY: 30, scaleStart: 1, scaleEnd: 0.7, rotateEnd: -25, delay: 0,    durationMs: 1800 },
+	{ iconD: ICON_THINKING_BINOCULARS,   startX: 112, peakX: 132, startY: 125, peakY: 25, scaleStart: 1, scaleEnd: 0.7, rotateEnd:  20, delay: 200,  durationMs: 1800 },
+	{ iconD: ICON_THINKING_COG,          startX: 92,  peakX: 72,  startY: 125, peakY: 35, scaleStart: 1, scaleEnd: 0.7, rotateEnd: -18, delay: 400,  durationMs: 1800 },
+	{ iconD: ICON_THINKING_FILE_SEARCH,  startX: 108, peakX: 128, startY: 125, peakY: 28, scaleStart: 1, scaleEnd: 0.7, rotateEnd:  15, delay: 600,  durationMs: 1800 },
+	{ iconD: ICON_THINKING_HEART_PULSE,  startX: 90,  peakX: 70,  startY: 125, peakY: 32, scaleStart: 1, scaleEnd: 0.7, rotateEnd: -12, delay: 800,  durationMs: 1800 },
+	{ iconD: ICON_THINKING_LIGHTBULB,    startX: 110, peakX: 130, startY: 125, peakY: 33, scaleStart: 1, scaleEnd: 0.7, rotateEnd:  18, delay: 1000, durationMs: 1800 },
+	{ iconD: ICON_THINKING_WRENCH,       startX: 100, peakX: 85,  startY: 125, peakY: 24, scaleStart: 1, scaleEnd: 0.7, rotateEnd:  -8, delay: 1200, durationMs: 1800 },
 ]

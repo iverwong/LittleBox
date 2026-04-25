@@ -9,7 +9,7 @@ import type { MascotProps, MascotSize } from './Mascot.types'
 import { MascotSvg } from './MascotSvg'
 import {
 	STATE_PARAMS, EASING,
-	BLINK_PERIOD_MS, BLINK_DURATION_MS,
+	BLINK_PERIOD_MS, BLINK_DURATION_MS, EYE_CENTER_Y,
 } from './animations'
 import { THINKING_LAYOUT, NARRATING_LAYOUT } from './icons'
 
@@ -47,7 +47,9 @@ export function Mascot({ state = 'idle', size = 'md', onFinish, style }: MascotP
 
 	// All narrating SVs — always called
 	const narratingSV0 = useSharedValue(0)
-	const narratingSVs = [narratingSV0]
+	const narratingSV1 = useSharedValue(0)
+	const narratingSV2 = useSharedValue(0)
+	const narratingSVs = [narratingSV0, narratingSV1, narratingSV2]
 
 	useEffect(() => {
 		const params = STATE_PARAMS[state]
@@ -213,8 +215,9 @@ export function Mascot({ state = 'idle', size = 'md', onFinish, style }: MascotP
 
 	const blinkAnimatedProps = useAnimatedProps(() => ({
 		transform: [
-			{ scaleX: 1 },
+			{ translateY: EYE_CENTER_Y },
 			{ scaleY: blinkScaleY.value },
+			{ translateY: -EYE_CENTER_Y },
 		],
 	}))
 
@@ -327,10 +330,28 @@ export function Mascot({ state = 'idle', size = 'md', onFinish, style }: MascotP
 		const opacity = p < 0.15 ? p / 0.15 : p > 0.6 ? Math.max(0, (1 - p) / 0.4) : 1
 		return { opacity, matrix: `${s} 0 0 ${s} ${item.x} ${y}` }
 	})
+	const narratingAP1 = useAnimatedProps(() => {
+		if (NARRATING_COUNT <= 1) return { opacity: 0, matrix: '0 0 0 0 0 0' }
+		const item = NARRATING_LAYOUT[1]
+		const p = narratingSVs[1].value
+		const y = item.startY + (item.endY - item.startY) * p
+		const s = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
+		const opacity = p < 0.15 ? p / 0.15 : p > 0.6 ? Math.max(0, (1 - p) / 0.4) : 1
+		return { opacity, matrix: `${s} 0 0 ${s} ${item.x} ${y}` }
+	})
+	const narratingAP2 = useAnimatedProps(() => {
+		if (NARRATING_COUNT <= 2) return { opacity: 0, matrix: '0 0 0 0 0 0' }
+		const item = NARRATING_LAYOUT[2]
+		const p = narratingSVs[2].value
+		const y = item.startY + (item.endY - item.startY) * p
+		const s = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
+		const opacity = p < 0.15 ? p / 0.15 : p > 0.6 ? Math.max(0, (1 - p) / 0.4) : 1
+		return { opacity, matrix: `${s} 0 0 ${s} ${item.x} ${y}` }
+	})
 
 	// Slice to actual used length
 	const thinkingAnimatedProps = [thinkingAP0, thinkingAP1, thinkingAP2, thinkingAP3, thinkingAP4, thinkingAP5, thinkingAP6].slice(0, THINKING_COUNT)
-	const narratingAnimatedProps = [narratingAP0].slice(0, NARRATING_COUNT)
+	const narratingAnimatedProps = [narratingAP0, narratingAP1, narratingAP2].slice(0, NARRATING_COUNT)
 
 	return (
 		<View style={[{ width: px, height: px }, style]}>

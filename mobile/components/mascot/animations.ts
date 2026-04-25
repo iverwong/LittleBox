@@ -91,17 +91,19 @@ export const EASING = {
 
 /**
  * 眼睛 4 形态 d（基于 viewBox 200×200）。
- * 实测 mascot.svg eyes 分组（1024 viewBox）：
- *   Vector_2（左眼）：外包 (449–488, 662–724)，中心 (469, 694.5)
- *   Vector_3（右眼）：外包 (274–341, 649–709)，中心 (308, 679)
- * 1024→200 换算：除以 5.12
- * 左眼中心 (91.6, 135.7)，右眼中心 (60.2, 132.6)，眼距 31.4，y 差 3.1
+ * 实测 mascot.svg <g id="eyes"> 分组：
+ *   Vector_2（左眼）：外包 (449–488, 662–724) → 1024中心 (468.5, 693.0)
+ *   Vector_3（右眼）：外包 (274–341, 649–708) → 1024中心 (307.5, 678.5)
+ * 1024→200（×0.1953125）：
+ *   左眼 (91.5, 135.4)，右眼 (60.1, 132.5)，眼距 31.4，y 差 2.9
  * 4 形态半径/弧高沿用 plan 默认值（圆 r=6、squint h-line 12、smile/crescent q ±8）
  */
-export const EYE_OPEN_D     = "M85.6 135.7 a6 6 0 1 0 12 0 a6 6 0 1 0 -12 0 M54.2 132.6 a6 6 0 1 0 12 0 a6 6 0 1 0 -12 0"
-export const EYE_SQUINT_D   = "M85.6 135.7 h12 M54.2 132.6 h12"
-export const EYE_SMILE_D    = "M85.6 131.7 q6 -8 12 0 M54.2 128.6 q6 -8 12 0"
-export const EYE_CRESCENT_D = "M85.6 139.7 q6 8 12 0 M54.2 136.6 q6 8 12 0"
+export const EYE_CENTER_Y = 134.0  // 近似中值（两口 y 不同，取平均）
+
+export const EYE_OPEN_D     = "M85.5 135.4 a6 6 0 1 0 12 0 a6 6 0 1 0 -12 0 M54.1 132.5 a6 6 0 1 0 12 0 a6 6 0 1 0 -12 0"
+export const EYE_SQUINT_D   = "M85.5 135.4 h12 M54.1 132.5 h12"
+export const EYE_SMILE_D    = "M85.5 131.4 q6 -8 12 0 M54.1 128.5 q6 -8 12 0"
+export const EYE_CRESCENT_D = "M85.5 139.4 q6 8 12 0 M54.1 136.5 q6 8 12 0"
 
 // idle 眨眼参数：scaleY 1 → 0.1 → 1，单次 200ms，每 4s 触发一次
 export const BLINK_PERIOD_MS = 4000
