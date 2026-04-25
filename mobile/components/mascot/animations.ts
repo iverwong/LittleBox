@@ -90,13 +90,18 @@ export const EASING = {
 }
 
 /**
- * 眼睛 4 形态 d（基于 viewBox 200×200，盒脸中心 y≈100；左眼中心 (88,100)，右眼中心 (112,100)）。
- * 首版草案：Iver 真机看到 mascot.svg 实际盒脸位置后，按实际坐标微调。
+ * 眼睛 4 形态 d（基于 viewBox 200×200）。
+ * 实测 mascot.svg eyes 分组（1024 viewBox）：
+ *   Vector_2（左眼）：外包 (449–488, 662–724)，中心 (469, 694.5)
+ *   Vector_3（右眼）：外包 (274–341, 649–709)，中心 (308, 679)
+ * 1024→200 换算：除以 5.12
+ * 左眼中心 (91.6, 135.7)，右眼中心 (60.2, 132.6)，眼距 31.4，y 差 3.1
+ * 4 形态半径/弧高沿用 plan 默认值（圆 r=6、squint h-line 12、smile/crescent q ±8）
  */
-export const EYE_OPEN_D     = "M82 100 a6 6 0 1 0 12 0 a6 6 0 1 0 -12 0 M106 100 a6 6 0 1 0 12 0 a6 6 0 1 0 -12 0"
-export const EYE_SQUINT_D   = "M82 100 h12 M106 100 h12"
-export const EYE_SMILE_D    = "M82 96 q6 8 12 0 M106 96 q6 8 12 0"
-export const EYE_CRESCENT_D = "M82 102 q6 -8 12 0 M106 102 q6 -8 12 0"
+export const EYE_OPEN_D     = "M85.6 135.7 a6 6 0 1 0 12 0 a6 6 0 1 0 -12 0 M54.2 132.6 a6 6 0 1 0 12 0 a6 6 0 1 0 -12 0"
+export const EYE_SQUINT_D   = "M85.6 135.7 h12 M54.2 132.6 h12"
+export const EYE_SMILE_D    = "M85.6 131.7 q6 -8 12 0 M54.2 128.6 q6 -8 12 0"
+export const EYE_CRESCENT_D = "M85.6 139.7 q6 8 12 0 M54.2 136.6 q6 8 12 0"
 
 // idle 眨眼参数：scaleY 1 → 0.1 → 1，单次 200ms，每 4s 触发一次
 export const BLINK_PERIOD_MS = 4000
