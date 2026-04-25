@@ -188,109 +188,144 @@ export function Mascot({ state = 'idle', size = 'md', onFinish, style }: MascotP
 		}
 	}, [state])
 
-	// —— animatedProps ——
+	// ─── animatedProps ──────────────────────────────────────────────────────────
+	// Fabric 模式下 react-native-svg 的 transform 属性需要数组形式
+	// { prop: sharedValue } 句法让 Reanimated 自动 unwrap SharedValue
+
 	const bodyAnimatedProps = useAnimatedProps(() => ({
-		transform: `translate(0 ${bodyTranslateY.value}) scale(${bodyScaleX.value} ${bodyScaleY.value})`,
+		opacity: 1,
+		transform: [
+			{ translateX: 0 },
+			{ translateY: bodyTranslateY.value },
+			{ scaleX: bodyScaleX.value },
+			{ scaleY: bodyScaleY.value },
+		],
 	}))
+
 	const shadowAnimatedProps = useAnimatedProps(() => ({
 		opacity: shadowOpacity.value,
-		transform: `translate(100 195) scale(${shadowScale.value})`,
+		transform: [
+			{ translateX: 100 },
+			{ translateY: 195 },
+			{ scale: shadowScale.value },
+		],
 	}))
+
 	const blinkAnimatedProps = useAnimatedProps(() => ({
-		transform: `scale(1 ${blinkScaleY.value})`,
+		transform: [
+			{ scaleX: 1 },
+			{ scaleY: blinkScaleY.value },
+		],
 	}))
+
 	const eyesOpenAnimatedProps     = useAnimatedProps(() => ({ opacity: eyesOpenOpacity.value }))
 	const eyesSquintAnimatedProps   = useAnimatedProps(() => ({ opacity: eyesSquintOpacity.value }))
 	const eyesSmileAnimatedProps   = useAnimatedProps(() => ({ opacity: eyesSmileOpacity.value }))
 	const eyesCrescentAnimatedProps = useAnimatedProps(() => ({ opacity: eyesCrescentOpacity.value }))
 
-	// thinking — one useAnimatedProps per slot, always called (slots > actual count are no-ops at runtime)
+	// thinking — one useAnimatedProps per slot, always called
+	// matrix: "scaleX skewY skewX scaleY translateX translateY"
+	// Use string matrix so TypeScript infers single type; Fabric accepts matrix=[...]
 	const thinkingAP0 = useAnimatedProps(() => {
-		if (THINKING_COUNT === 0) return { opacity: 0, transform: '' }
 		const item = THINKING_LAYOUT[0]
 		const p = thinkingSVs[0].value
 		const x = item.startX + (item.peakX - item.startX) * p
 		const y = item.startY + (item.peakY - item.startY) * p
-		const scale = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
-		const rotate = item.rotateEnd * p
+		const s = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
+		const r = item.rotateEnd * p
+		const cosR = Math.cos(r * Math.PI / 180)
+		const sinR = Math.sin(r * Math.PI / 180)
 		const opacity = p < 0.2 ? p * 5 : p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1
-		return { opacity, transform: `translate(${x} ${y}) rotate(${rotate}) scale(${scale})` }
+		// matrix(a,b,c,d,e,f) = scaleX·rotate | scaleY·rotate | translateX | translateY
+		return { opacity, matrix: `${s * cosR} ${s * sinR} ${-s * sinR} ${s * cosR} ${x} ${y}` }
 	})
 	const thinkingAP1 = useAnimatedProps(() => {
-		if (THINKING_COUNT <= 1) return { opacity: 0, transform: '' }
+		if (THINKING_COUNT <= 1) return { opacity: 0, matrix: '0 0 0 0 0 0' }
 		const item = THINKING_LAYOUT[1]
 		const p = thinkingSVs[1].value
 		const x = item.startX + (item.peakX - item.startX) * p
 		const y = item.startY + (item.peakY - item.startY) * p
-		const scale = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
-		const rotate = item.rotateEnd * p
+		const s = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
+		const r = item.rotateEnd * p
+		const cosR = Math.cos(r * Math.PI / 180)
+		const sinR = Math.sin(r * Math.PI / 180)
 		const opacity = p < 0.2 ? p * 5 : p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1
-		return { opacity, transform: `translate(${x} ${y}) rotate(${rotate}) scale(${scale})` }
+		return { opacity, matrix: `${s * cosR} ${s * sinR} ${-s * sinR} ${s * cosR} ${x} ${y}` }
 	})
 	const thinkingAP2 = useAnimatedProps(() => {
-		if (THINKING_COUNT <= 2) return { opacity: 0, transform: '' }
+		if (THINKING_COUNT <= 2) return { opacity: 0, matrix: '0 0 0 0 0 0' }
 		const item = THINKING_LAYOUT[2]
 		const p = thinkingSVs[2].value
 		const x = item.startX + (item.peakX - item.startX) * p
 		const y = item.startY + (item.peakY - item.startY) * p
-		const scale = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
-		const rotate = item.rotateEnd * p
+		const s = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
+		const r = item.rotateEnd * p
+		const cosR = Math.cos(r * Math.PI / 180)
+		const sinR = Math.sin(r * Math.PI / 180)
 		const opacity = p < 0.2 ? p * 5 : p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1
-		return { opacity, transform: `translate(${x} ${y}) rotate(${rotate}) scale(${scale})` }
+		return { opacity, matrix: `${s * cosR} ${s * sinR} ${-s * sinR} ${s * cosR} ${x} ${y}` }
 	})
 	const thinkingAP3 = useAnimatedProps(() => {
-		if (THINKING_COUNT <= 3) return { opacity: 0, transform: '' }
+		if (THINKING_COUNT <= 3) return { opacity: 0, matrix: '0 0 0 0 0 0' }
 		const item = THINKING_LAYOUT[3]
 		const p = thinkingSVs[3].value
 		const x = item.startX + (item.peakX - item.startX) * p
 		const y = item.startY + (item.peakY - item.startY) * p
-		const scale = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
-		const rotate = item.rotateEnd * p
+		const s = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
+		const r = item.rotateEnd * p
+		const cosR = Math.cos(r * Math.PI / 180)
+		const sinR = Math.sin(r * Math.PI / 180)
 		const opacity = p < 0.2 ? p * 5 : p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1
-		return { opacity, transform: `translate(${x} ${y}) rotate(${rotate}) scale(${scale})` }
+		return { opacity, matrix: `${s * cosR} ${s * sinR} ${-s * sinR} ${s * cosR} ${x} ${y}` }
 	})
 	const thinkingAP4 = useAnimatedProps(() => {
-		if (THINKING_COUNT <= 4) return { opacity: 0, transform: '' }
+		if (THINKING_COUNT <= 4) return { opacity: 0, matrix: '0 0 0 0 0 0' }
 		const item = THINKING_LAYOUT[4]
 		const p = thinkingSVs[4].value
 		const x = item.startX + (item.peakX - item.startX) * p
 		const y = item.startY + (item.peakY - item.startY) * p
-		const scale = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
-		const rotate = item.rotateEnd * p
+		const s = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
+		const r = item.rotateEnd * p
+		const cosR = Math.cos(r * Math.PI / 180)
+		const sinR = Math.sin(r * Math.PI / 180)
 		const opacity = p < 0.2 ? p * 5 : p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1
-		return { opacity, transform: `translate(${x} ${y}) rotate(${rotate}) scale(${scale})` }
+		return { opacity, matrix: `${s * cosR} ${s * sinR} ${-s * sinR} ${s * cosR} ${x} ${y}` }
 	})
 	const thinkingAP5 = useAnimatedProps(() => {
-		if (THINKING_COUNT <= 5) return { opacity: 0, transform: '' }
+		if (THINKING_COUNT <= 5) return { opacity: 0, matrix: '0 0 0 0 0 0' }
 		const item = THINKING_LAYOUT[5]
 		const p = thinkingSVs[5].value
 		const x = item.startX + (item.peakX - item.startX) * p
 		const y = item.startY + (item.peakY - item.startY) * p
-		const scale = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
-		const rotate = item.rotateEnd * p
+		const s = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
+		const r = item.rotateEnd * p
+		const cosR = Math.cos(r * Math.PI / 180)
+		const sinR = Math.sin(r * Math.PI / 180)
 		const opacity = p < 0.2 ? p * 5 : p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1
-		return { opacity, transform: `translate(${x} ${y}) rotate(${rotate}) scale(${scale})` }
+		return { opacity, matrix: `${s * cosR} ${s * sinR} ${-s * sinR} ${s * cosR} ${x} ${y}` }
 	})
 	const thinkingAP6 = useAnimatedProps(() => {
-		if (THINKING_COUNT <= 6) return { opacity: 0, transform: '' }
+		if (THINKING_COUNT <= 6) return { opacity: 0, matrix: '0 0 0 0 0 0' }
 		const item = THINKING_LAYOUT[6]
 		const p = thinkingSVs[6].value
 		const x = item.startX + (item.peakX - item.startX) * p
 		const y = item.startY + (item.peakY - item.startY) * p
-		const scale = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
-		const rotate = item.rotateEnd * p
+		const s = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
+		const r = item.rotateEnd * p
+		const cosR = Math.cos(r * Math.PI / 180)
+		const sinR = Math.sin(r * Math.PI / 180)
 		const opacity = p < 0.2 ? p * 5 : p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1
-		return { opacity, transform: `translate(${x} ${y}) rotate(${rotate}) scale(${scale})` }
+		return { opacity, matrix: `${s * cosR} ${s * sinR} ${-s * sinR} ${s * cosR} ${x} ${y}` }
 	})
 
 	const narratingAP0 = useAnimatedProps(() => {
-		if (NARRATING_COUNT === 0) return { opacity: 0, transform: '' }
+		if (NARRATING_COUNT === 0) return { opacity: 0, matrix: '0 0 0 0 0 0' }
 		const item = NARRATING_LAYOUT[0]
 		const p = narratingSVs[0].value
 		const y = item.startY + (item.endY - item.startY) * p
-		const scale = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
+		const s = item.scaleStart + (item.scaleEnd - item.scaleStart) * p
 		const opacity = p < 0.15 ? p / 0.15 : p > 0.6 ? Math.max(0, (1 - p) / 0.4) : 1
-		return { opacity, transform: `translate(${item.x} ${y}) scale(${scale})` }
+		return { opacity, matrix: `${s} 0 0 ${s} ${item.x} ${y}` }
 	})
 
 	// Slice to actual used length
