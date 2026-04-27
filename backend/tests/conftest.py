@@ -63,11 +63,10 @@ def _test_url() -> str:
 async def _bootstrap_test_db() -> AsyncGenerator[None, None]:
     """每跑一轮测试：断开测试库残留连接 → DROP → CREATE → Base.metadata.create_all。
 
-    B1 合规修复：schema 来源从 alembic upgrade head 切换为 Base.metadata.create_all。
-    原因：ORM 层 nickname 字段（String(32), nullable=False）存在于模型定义，但不存在于
-    alembic migration（已 applied 的 revision 文件不可修改）。
-    使用 create_all 让 ORM 模型定义成为 schema 来源，避免 migration / ORM 不一致。
-    B7 baseline 重建后恢复 alembic upgrade 方式（届时 migration 文件会包含 nickname 列）。
+    B7 验收通过：alembic baseline upgrade head 与 Base.metadata.create_all 在当前
+    ORM metadata 下等价（13 表 + 9 FK CASCADE + NOT NULL 约束全部一致）。
+    使用 create_all 而非 alembic upgrade：避免 asyncio.run() 在 pytest event loop 内冲突；
+    且 create_all 速度更快（~10ms vs ~100ms+）。
     """
     # TODO(xdist): 开 pytest-xdist 时按 worker 隔离库名（TEST_DB_NAME + worker id）
     admin_engine = create_async_engine(_admin_url(), isolation_level="AUTOCOMMIT")
@@ -84,8 +83,8 @@ async def _bootstrap_test_db() -> AsyncGenerator[None, None]:
     finally:
         await admin_engine.dispose()
 
-    # 使用 Base.metadata.create_all 而非 alembic upgrade：
-    # ORM 模型定义即为 schema 来源，alembic migration 文件不受依赖。
+    # 使用 Base.metadata.create_all：
+    # B7 验证 alembic baseline 与 ORM metadata 等价后，create_all 更快速且不冲突。
     test_engine = create_async_engine(_test_url(), poolclass=NullPool)
     try:
         async with test_engine.begin() as conn:
@@ -183,8 +182,9 @@ async def api_client(app: FastAPI) -> AsyncGenerator[AsyncClient, None]:
 
 # ---------- 业务高层便捷 fixtures（后续 Step 复用） ----------
 
+
 @pytest_asyncio.fixture
-async def seeded_parent(db_session: AsyncSession) -> tuple[User, str]:
+async def seeded_parent(db_session: AsyncSession) -> tuple:
     """种一个 active parent + family + family_members。返回 (user, plaintext_password)。"""
     from app.auth.password import generate_password, generate_phone, hash_password
     from app.models.accounts import Family, FamilyMember, User
@@ -211,7 +211,7 @@ async def seeded_parent(db_session: AsyncSession) -> tuple[User, str]:
 
 
 @pytest_asyncio.fixture
-async def inactive_parent(db_session: AsyncSession) -> tuple[User, str]:
+async def inactive_parent(db_session: AsyncSession) -> tuple:
     """种一个 is_active=False 的 parent。返回 (user, plaintext_password)。"""
     from app.auth.password import generate_password, generate_phone, hash_password
     from app.models.accounts import Family, FamilyMember, User
@@ -238,7 +238,7 @@ async def inactive_parent(db_session: AsyncSession) -> tuple[User, str]:
 
 
 @pytest_asyncio.fixture
-async def child_user(db_session: AsyncSession) -> User:
+async def child_user(db_session: AsyncSession):
     """种一个 child + family（无 password_hash）。"""
     from app.models.accounts import Family, FamilyMember, User
     from app.models.enums import UserRole
@@ -262,7 +262,7 @@ async def child_user(db_session: AsyncSession) -> User:
 
 
 @pytest_asyncio.fixture
-async def rate_limit_parent(db_session: AsyncSession) -> tuple[User, str]:
+async def rate_limit_parent(db_session: AsyncSession) -> tuple:
     """种一个固定 phone='abcd' 的 active parent，用于 rate-limit 计数测试。"""
     from app.auth.password import generate_password, hash_password
     from app.models.accounts import Family, FamilyMember, User
