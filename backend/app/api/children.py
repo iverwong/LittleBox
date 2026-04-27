@@ -1,4 +1,4 @@
-"""children 路由：创建 child / 吊销 child tokens / 列表查询。"""
+"""children 路由：创建 child / 吊销 child tokens / 列表查询 / 删除 child。"""
 from __future__ import annotations
 
 import uuid
@@ -20,6 +20,7 @@ from app.models.enums import UserRole
 from app.schemas.accounts import CurrentAccount
 from app.schemas.children import ChildSummary, CreateChildRequest, ListChildrenResponse
 from app.services.age_converter import age_to_birth_date
+from app.services.child_deletion import hard_delete_child
 
 router = APIRouter(prefix="/api/v1/children", tags=["children"])
 
@@ -128,4 +129,33 @@ async def revoke_child_tokens(
     if child is None:
         raise HTTPException(404, "child not found in family")
     await revoke_all_active_tokens(db, child.id)
+    await commit_with_redis(db, redis)
+
+
+@router.delete("/{child_user_id}", status_code=204)
+async def delete_child(
+    child_user_id: uuid.UUID,
+    parent: Annotated[CurrentAccount, Depends(require_parent)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> None:
+    """硬删 child 账号及全部关联数据（DB CASCADE + Redis 缓存清理 + 审计写入）。
+
+    错误码矩阵：
+    - 401：未登录（依赖链 require_parent）
+    - 403：非 parent 角色（require_parent 抛出）
+    - 404：目标 child 不存在 / 非本 family / role 不是 child（不暴露存在性）
+    - 204：成功
+    """
+    stmt = select(User).where(
+        User.id == child_user_id,
+        User.role == UserRole.child,
+        User.family_id == parent.family_id,
+        User.is_active.is_(True),
+    )
+    child = (await db.execute(stmt)).scalar_one_or_none()
+    if child is None:
+        raise HTTPException(404, "child not found in family")
+
+    await hard_delete_child(db, child_user_id=child_user_id, requested_by=parent.id)
     await commit_with_redis(db, redis)

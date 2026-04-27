@@ -27,12 +27,6 @@ class NotificationType(str, enum.Enum):
     daily_summary = "daily_summary"
 
 
-class DeletionStatus(str, enum.Enum):
-    pending = "pending"
-    completed = "completed"
-    failed = "failed"
-
-
 class InterventionType(str, enum.Enum):
     crisis = "crisis"  # 系统硬底线触发的三级接管
     redline = "redline"  # 家长红线触发的三级接管

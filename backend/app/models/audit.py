@@ -17,7 +17,7 @@ class AuditRecord(BaseMixin, Base):
 
     session_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("sessions.id"),
+        ForeignKey("sessions.id", ondelete="CASCADE"),
         nullable=False,
     )
     turn_number: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -63,7 +63,7 @@ class RollingSummary(BaseMixin, Base):
 
     session_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("sessions.id"),
+        ForeignKey("sessions.id", ondelete="CASCADE"),
         unique=True,
         nullable=False,
     )

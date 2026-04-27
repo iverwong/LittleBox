@@ -18,7 +18,7 @@ class Session(BaseMixin, Base):
 
     child_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id"),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
     title: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
@@ -48,7 +48,7 @@ class Message(BaseMixin, Base):
 
     session_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("sessions.id"),
+        ForeignKey("sessions.id", ondelete="CASCADE"),
         nullable=False,
     )
     role: Mapped[MessageRole] = mapped_column(nullable=False)

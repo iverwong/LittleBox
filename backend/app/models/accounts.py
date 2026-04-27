@@ -91,13 +91,13 @@ class ChildProfile(BaseMixin, Base):
 
     child_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id"),
+        ForeignKey("users.id", ondelete="CASCADE"),
         unique=True,
         nullable=False,
     )
     created_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id"),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         comment="创建者（审计用途；权限通过 family_id 控制）",
     )
@@ -143,7 +143,7 @@ class AuthToken(BaseMixin, Base):
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id"),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
     token_hash: Mapped[str] = mapped_column(Text, nullable=False)
@@ -172,7 +172,7 @@ class DeviceToken(BaseMixin, Base):
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id"),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
     platform: Mapped[DevicePlatform] = mapped_column(nullable=False)
@@ -197,7 +197,7 @@ class FamilyMember(BaseMixin, Base):
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id"),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
     role: Mapped[UserRole] = mapped_column(nullable=False)

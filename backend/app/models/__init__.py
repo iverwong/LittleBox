@@ -4,7 +4,6 @@ from app.models.base import Base
 from app.models.chat import Message, Session
 from app.models.enums import (
     DailyStatus,
-    DeletionStatus,
     DevicePlatform,
     Gender,
     InterventionType,
@@ -36,7 +35,6 @@ __all__ = [
     "SessionStatus",
     "MessageRole",
     "NotificationType",
-    "DeletionStatus",
     "InterventionType",
     "Gender",
     "DevicePlatform",
