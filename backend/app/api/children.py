@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -14,25 +15,23 @@ from app.auth.redis_client import get_redis
 from app.auth.redis_ops import commit_with_redis
 from app.auth.tokens import revoke_all_active_tokens
 from app.db import get_db
-from app.models.accounts import ChildProfile, User
+from app.models.accounts import ChildProfile, FamilyMember, User
 from app.models.enums import UserRole
-from app.schemas.accounts import (
-    AccountOut,
-    CreateChildRequest,
-    CurrentAccount,
-)
+from app.schemas.accounts import CurrentAccount
+from app.schemas.children import ChildSummary, CreateChildRequest
+from app.services.age_converter import age_to_birth_date
 
 router = APIRouter(prefix="/api/v1/children", tags=["children"])
 
 
-@router.post("", response_model=AccountOut, status_code=201)
+@router.post("", response_model=ChildSummary, status_code=201)
 async def create_child(
     payload: CreateChildRequest,
     parent: Annotated[CurrentAccount, Depends(require_parent)],
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
-) -> AccountOut:
-    """父账号创建一个子账号：users(role=child) + child_profiles。"""
+) -> ChildSummary:
+    """父账号创建一个子账号：users(role=child) + child_profiles + family_members。"""
     child = User(
         family_id=parent.family_id,
         role=UserRole.child,
@@ -42,22 +41,30 @@ async def create_child(
     db.add(child)
     await db.flush()
 
+    birth_date = age_to_birth_date(payload.age)  # ref 默认为 today()
+
     db.add(ChildProfile(
         child_user_id=child.id,
         created_by=parent.id,
-        birth_date=payload.birth_date,
+        birth_date=birth_date,
         gender=payload.gender,
-        nickname="",  # B1 占位，B3 替换为 payload.nickname
+        nickname=payload.nickname,
     ))
 
-    # 无 Redis ops 也走统一入口
+    db.add(FamilyMember(
+        family_id=parent.family_id,
+        user_id=child.id,
+        role=UserRole.child,
+        joined_at=datetime.now(timezone.utc),
+    ))
+
     await commit_with_redis(db, redis)
-    return AccountOut(
+    return ChildSummary(
         id=child.id,
-        role=child.role,
-        family_id=child.family_id,
-        phone=None,
-        is_active=True,
+        nickname=payload.nickname,
+        birth_date=birth_date,
+        gender=payload.gender,
+        is_bound=False,  # 硬编码：刚创建的 child 必然无 AuthToken
     )
 
 

@@ -161,7 +161,7 @@ class TestFullAuthFlow:
             "/api/v1/children",
             token=parent_token,
             device_id="parent-e2e",
-            json_body={"nickname": "e2e-child"},
+            json_body={"nickname": "e2e-child", "age": 10, "gender": "unknown"},
         )
         assert child_resp.status_code == 201, child_resp.text
         child_id = child_resp.json()["id"]

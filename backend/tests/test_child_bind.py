@@ -76,15 +76,16 @@ class TestCreateChild:
 
         resp = await api_client.post(
             "/api/v1/children",
-            json={"nickname": "小明"},
+            json={"nickname": "小明", "age": 10, "gender": "unknown"},
             headers={"Authorization": f"Bearer {token}", "X-Device-Id": device_id},
         )
         assert resp.status_code == 201, resp.json()
         data = resp.json()
-        assert data["role"] == "child"
-        assert data["family_id"] == str(user.family_id)
-        assert data["id"]  # UUID 格式
-        _assert_no_secret_fields(data)
+        assert data["nickname"] == "小明"
+        assert data["gender"] == "unknown"
+        assert data["is_bound"] is False
+        assert "birth_date" in data
+
 
         child_user_id = uuid.UUID(data["id"])
 
@@ -105,9 +106,9 @@ class TestCreateChild:
             )
         ).scalar_one()
         assert profile_row.created_by == user.id
-        # 请求 payload birth_date=None, gender=None
-        assert profile_row.birth_date is None
-        assert profile_row.gender is None
+        # B3: birth_date from age_to_birth_date, gender from payload
+        assert profile_row.birth_date is not None
+        assert profile_row.gender == "unknown"
 
     @pytest.mark.asyncio
     async def test_child_cannot_call_create_child(
@@ -127,7 +128,7 @@ class TestCreateChild:
 
         resp = await api_client.post(
             "/api/v1/children",
-            json={},
+            json={"nickname": "test_child", "age": 10, "gender": "unknown"},
             headers={"Authorization": f"Bearer {token}", "X-Device-Id": device_id},
         )
         assert resp.status_code == 403
@@ -152,7 +153,7 @@ class TestBindToken:
         # 先创建一个 child
         child_resp = await api_client.post(
             "/api/v1/children",
-            json={"nickname": "小红"},
+            json={"nickname": "小红", "age": 10, "gender": "unknown"},
             headers={"Authorization": f"Bearer {token}", "X-Device-Id": device_id},
         )
         assert child_resp.status_code == 201
@@ -223,7 +224,7 @@ class TestRedeemBindToken:
         # 创建 child
         child_resp = await api_client.post(
             "/api/v1/children",
-            json={},
+            json={"nickname": "test_child", "age": 10, "gender": "unknown"},
             headers={"Authorization": f"Bearer {token}", "X-Device-Id": device_id},
         )
         assert child_resp.status_code == 201
@@ -276,7 +277,7 @@ class TestRedeemBindToken:
 
         child_resp = await api_client.post(
             "/api/v1/children",
-            json={},
+            json={"nickname": "test_child", "age": 10, "gender": "unknown"},
             headers={"Authorization": f"Bearer {token}", "X-Device-Id": device_id},
         )
         assert child_resp.status_code == 201
@@ -368,7 +369,7 @@ class TestRedeemBindToken:
         # 创建 child
         child_resp = await api_client.post(
             "/api/v1/children",
-            json={},
+            json={"nickname": "test_child", "age": 10, "gender": "unknown"},
             headers={"Authorization": f"Bearer {parent_token}", "X-Device-Id": device_id},
         )
         assert child_resp.status_code == 201
@@ -495,7 +496,7 @@ class TestRedeemBindToken:
 
         child_resp = await api_client.post(
             "/api/v1/children",
-            json={},
+            json={"nickname": "test_child", "age": 10, "gender": "unknown"},
             headers={"Authorization": f"Bearer {parent_token}", "X-Device-Id": device_id},
         )
         child_id = child_resp.json()["id"]
@@ -584,7 +585,7 @@ class TestRedeemBindToken:
 
         child_resp = await api_client.post(
             "/api/v1/children",
-            json={},
+            json={"nickname": "test_child", "age": 10, "gender": "unknown"},
             headers={"Authorization": f"Bearer {parent_token}", "X-Device-Id": device_id},
         )
         child_id = child_resp.json()["id"]
@@ -637,7 +638,7 @@ class TestRedeemBindToken:
 
         child_resp = await api_client.post(
             "/api/v1/children",
-            json={},
+            json={"nickname": "test_child", "age": 10, "gender": "unknown"},
             headers={"Authorization": f"Bearer {token}", "X-Device-Id": device_id},
         )
         assert child_resp.status_code == 201
@@ -696,7 +697,7 @@ class TestRevokeChildTokens:
         # 创建 child 并给 child 发行 token
         child_resp = await api_client.post(
             "/api/v1/children",
-            json={},
+            json={"nickname": "test_child", "age": 10, "gender": "unknown"},
             headers={"Authorization": f"Bearer {token}", "X-Device-Id": device_id},
         )
         assert child_resp.status_code == 201
@@ -774,7 +775,7 @@ class TestRevokeChildTokens:
         # 创建 child
         child_resp = await api_client.post(
             "/api/v1/children",
-            json={},
+            json={"nickname": "test_child", "age": 10, "gender": "unknown"},
             headers={"Authorization": f"Bearer {token}", "X-Device-Id": device_id},
         )
         assert child_resp.status_code == 201
@@ -817,7 +818,7 @@ class TestBindTokenStatus:
 
         child_id = (await api_client.post(
             "/api/v1/children",
-            json={},
+            json={"nickname": "test_child", "age": 10, "gender": "unknown"},
             headers={"Authorization": f"Bearer {token}", "X-Device-Id": device_id},
         )).json()["id"]
 
@@ -849,7 +850,7 @@ class TestBindTokenStatus:
 
         child_id = (await api_client.post(
             "/api/v1/children",
-            json={},
+            json={"nickname": "test_child", "age": 10, "gender": "unknown"},
             headers={"Authorization": f"Bearer {token}", "X-Device-Id": device_id},
         )).json()["id"]
 
@@ -889,7 +890,7 @@ class TestBindTokenStatus:
 
         child_id = (await api_client.post(
             "/api/v1/children",
-            json={},
+            json={"nickname": "test_child", "age": 10, "gender": "unknown"},
             headers={"Authorization": f"Bearer {token}", "X-Device-Id": device_id},
         )).json()["id"]
 

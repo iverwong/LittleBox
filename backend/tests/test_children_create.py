@@ -1,0 +1,174 @@
+"""M4.8 B3 TDD：POST /children 契约测试。"""
+from __future__ import annotations
+
+from datetime import date
+
+import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.accounts import Family, FamilyMember, User
+from app.models.enums import UserRole
+from app.services.age_converter import age_to_birth_date
+
+
+async def _login(api_client, user: User, pw: str, device_id: str = "test_device") -> str:
+    login_resp = await api_client.post(
+        "/api/v1/auth/login",
+        json={"phone": user.phone, "password": pw, "device_id": device_id},
+    )
+    return login_resp.json()["token"]
+
+
+def make_payload(
+    nickname: str = "小明",
+    age: int = 10,
+    gender: str = "unknown",
+) -> dict:
+    return {"nickname": nickname, "age": age, "gender": gender}
+
+
+class TestCreateChildSuccess:
+    @pytest.mark.asyncio
+    async def test_success(
+        self,
+        api_client,
+        seeded_parent: tuple[User, str],
+    ) -> None:
+        parent, pw = seeded_parent
+        token = await _login(api_client, parent, pw)
+
+        resp = await api_client.post(
+            "/api/v1/children",
+            json=make_payload(age=10, gender="male"),
+            headers={"Authorization": f"Bearer {token}", "X-Device-Id": "test_device"},
+        )
+        assert resp.status_code == 201, resp.json()
+        data = resp.json()
+        assert data["nickname"] == "小明"
+        assert data["gender"] == "male"
+        assert data["is_bound"] is False
+        assert "birth_date" in data
+        assert data["birth_date"] is not None
+        expected_bd = age_to_birth_date(10, date.today())
+        assert data["birth_date"] == expected_bd.isoformat()
+
+
+class TestCreateChildMissingFields:
+    @pytest.mark.asyncio
+    async def test_missing_nickname(self, api_client, seeded_parent: tuple[User, str]) -> None:
+        parent, pw = seeded_parent
+        token = await _login(api_client, parent, pw)
+        resp = await api_client.post(
+            "/api/v1/children",
+            json={"age": 10, "gender": "male"},
+            headers={"Authorization": f"Bearer {token}", "X-Device-Id": "test_device"},
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_missing_age(self, api_client, seeded_parent: tuple[User, str]) -> None:
+        parent, pw = seeded_parent
+        token = await _login(api_client, parent, pw)
+        resp = await api_client.post(
+            "/api/v1/children",
+            json={"nickname": "小明", "gender": "female"},
+            headers={"Authorization": f"Bearer {token}", "X-Device-Id": "test_device"},
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_missing_gender(self, api_client, seeded_parent: tuple[User, str]) -> None:
+        parent, pw = seeded_parent
+        token = await _login(api_client, parent, pw)
+        resp = await api_client.post(
+            "/api/v1/children",
+            json={"nickname": "小明", "age": 10},
+            headers={"Authorization": f"Bearer {token}", "X-Device-Id": "test_device"},
+        )
+        assert resp.status_code == 422
+
+
+class TestCreateChildValidation:
+    @pytest.mark.asyncio
+    async def test_age_too_low(self, api_client, seeded_parent: tuple[User, str]) -> None:
+        parent, pw = seeded_parent
+        token = await _login(api_client, parent, pw)
+        resp = await api_client.post(
+            "/api/v1/children",
+            json=make_payload(age=2),
+            headers={"Authorization": f"Bearer {token}", "X-Device-Id": "test_device"},
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_age_too_high(self, api_client, seeded_parent: tuple[User, str]) -> None:
+        parent, pw = seeded_parent
+        token = await _login(api_client, parent, pw)
+        resp = await api_client.post(
+            "/api/v1/children",
+            json=make_payload(age=22),
+            headers={"Authorization": f"Bearer {token}", "X-Device-Id": "test_device"},
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_gender_invalid(self, api_client, seeded_parent: tuple[User, str]) -> None:
+        parent, pw = seeded_parent
+        token = await _login(api_client, parent, pw)
+        resp = await api_client.post(
+            "/api/v1/children",
+            json=make_payload(gender="other"),
+            headers={"Authorization": f"Bearer {token}", "X-Device-Id": "test_device"},
+        )
+        assert resp.status_code == 422
+
+
+class TestCreateChildAuth:
+    @pytest.mark.asyncio
+    async def test_child_role_forbidden(
+        self,
+        api_client,
+        seeded_parent: tuple[User, str],
+    ) -> None:
+        """child token → POST /children → 403。"""
+        parent, pw = seeded_parent
+        parent_token = await _login(api_client, parent, pw)
+
+        # parent 创建 child
+        child_resp = await api_client.post(
+            "/api/v1/children",
+            json={"nickname": "temp", "age": 10, "gender": "unknown"},
+            headers={"Authorization": f"Bearer {parent_token}", "X-Device-Id": "test_device"},
+        )
+        assert child_resp.status_code == 201
+        child_id = child_resp.json()["id"]
+
+        # parent 创建 bind-token
+        bind_resp = await api_client.post(
+            "/api/v1/bind-tokens",
+            json={"child_user_id": str(child_id)},
+            headers={"Authorization": f"Bearer {parent_token}", "X-Device-Id": "test_device"},
+        )
+        bind_token = bind_resp.json()["bind_token"]
+
+        # child redeem → child token
+        redeem_resp = await api_client.post(
+            f"/api/v1/bind-tokens/{bind_token}/redeem",
+            json={"device_id": "child_test_device"},
+        )
+        child_token = redeem_resp.json()["token"]
+
+        # child token → POST /children → 403
+        resp = await api_client.post(
+            "/api/v1/children",
+            json=make_payload(),
+            headers={"Authorization": f"Bearer {child_token}", "X-Device-Id": "child_test_device"},
+        )
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_unauthenticated_401(self, api_client) -> None:
+        """未登录 → 401。"""
+        resp = await api_client.post("/api/v1/children", json=make_payload())
+        assert resp.status_code == 401
