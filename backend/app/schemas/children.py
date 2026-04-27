@@ -32,3 +32,12 @@ class ListChildrenResponse(BaseModel):
     """GET /children 响应体。"""
 
     children: list[ChildSummary]
+
+
+class ChildProfileOut(BaseModel):
+    """GET /me/profile 响应体。id = child user id（ChildProfile.child_user_id）。"""
+
+    id: uuid.UUID
+    nickname: str
+    gender: Literal["male", "female", "unknown"]
+    birth_date: date
