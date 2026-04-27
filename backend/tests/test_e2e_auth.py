@@ -11,10 +11,10 @@
 2. login → parent token
 3. /me (parent token) → 200
 4. POST /children → child_id
-5. POST /children/{id}/bind-token → bind_token
-6. POST /redeem-bind-token → child token（永不过期）
+5. POST /bind-tokens body:{ child_user_id } → bind_token
+6. POST /bind-tokens/{bind_token}/redeem body:{ device_id } → child token（永不过期）
 7. /me (child token) → 200
-8. POST /children/{id}/bind-token (child token) → 403
+8. POST /bind-tokens body:{ child_user_id } (child token) → 403
 9. POST /auth/logout (parent token) → 204
 10. 老 parent token → 401
 11. re-login → 新 parent token
@@ -109,10 +109,10 @@ class TestFullAuthFlow:
         2. login → parent token
         3. /me (parent) → 200 + role=parent
         4. POST /children → child_id
-        5. POST /children/{id}/bind-token → bind_token
-        6. POST /redeem-bind-token → child token
+        5. POST /bind-tokens body:{ child_user_id } → bind_token
+        6. POST /bind-tokens/{bind_token}/redeem body:{ device_id } → child token
         7. /me (child) → 200 + role=child
-        8. POST /children/{id}/bind-token (child token) → 403
+        8. POST /bind-tokens body:{ child_user_id } (child token) → 403
         9. POST /auth/logout (parent token) → 204
         10. 老 parent token → 401
         11. re-login → 新 parent token
@@ -166,25 +166,23 @@ class TestFullAuthFlow:
         assert child_resp.status_code == 201, child_resp.text
         child_id = child_resp.json()["id"]
 
-        # ── 5. POST /children/{id}/bind-token ─────────────────────────────────
+        # ── 5. POST /bind-tokens body:{ child_user_id } ────────────────────────
         bind_resp = _http(
             "POST",
-            f"/api/v1/children/{child_id}/bind-token",
+            "/api/v1/bind-tokens",
             token=parent_token,
             device_id="parent-e2e",
+            json_body={"child_user_id": child_id},
         )
-        assert bind_resp.status_code == 200, bind_resp.text
+        assert bind_resp.status_code == 201, bind_resp.text
         bind_token = bind_resp.json()["bind_token"]
         assert len(bind_token) > 16  # urlsafe base64
 
-        # ── 6. POST /auth/redeem-bind-token ───────────────────────────────────
+        # ── 6. POST /bind-tokens/{bind_token}/redeem body:{ device_id } ───────
         redeem_resp = _http(
             "POST",
-            "/api/v1/auth/redeem-bind-token",
-            json_body={
-                "bind_token": bind_token,
-                "device_id": "child-e2e",
-            },
+            f"/api/v1/bind-tokens/{bind_token}/redeem",
+            json_body={"device_id": "child-e2e"},
         )
         assert redeem_resp.status_code == 200, redeem_resp.text
         child_token = redeem_resp.json()["token"]
@@ -205,9 +203,10 @@ class TestFullAuthFlow:
         # ── 8. child token 尝试 parent-only 端点 → 403 ───────────────────────
         child_forbidden_resp = _http(
             "POST",
-            f"/api/v1/children/{child_id}/bind-token",
+            "/api/v1/bind-tokens",
             token=child_token,
             device_id="child-e2e",
+            json_body={"child_user_id": child_id},
         )
         assert child_forbidden_resp.status_code == 403, (
             f"expected 403, got {child_forbidden_resp.status_code}; "

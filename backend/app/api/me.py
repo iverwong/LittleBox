@@ -11,10 +11,10 @@ from app.db import get_db
 from app.models.accounts import User
 from app.schemas.accounts import AccountOut, CurrentAccount
 
-router = APIRouter(prefix="/api/v1", tags=["me"])
+router = APIRouter(prefix="/api/v1/me", tags=["me"])
 
 
-@router.get("/me", response_model=AccountOut)
+@router.get("", response_model=AccountOut)
 async def get_me(
     current: Annotated[CurrentAccount, Depends(get_current_account)],
     db: Annotated[AsyncSession, Depends(get_db)],
