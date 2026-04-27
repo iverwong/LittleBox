@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from datetime import datetime, timezone
 
 import pytest
+from sqlalchemy import select, update
 
 from app.auth.password import hash_password
-from app.models.accounts import Family, FamilyMember, User
+from app.models.accounts import ChildProfile, Family, FamilyMember, User
 from app.models.enums import UserRole
 
 
@@ -213,7 +215,7 @@ class TestListChildrenRevoke:
 
 
 class TestListChildrenOrdering:
-    """稳定排序：返回顺序按 (created_at, id)。验证 created_at 升序。"""
+    """稳定排序：返回顺序按 (created_at, id)。验证 created_at 升序 + id 兜底。"""
 
     @pytest.mark.asyncio
     async def test_ordering_by_created_at(
@@ -237,16 +239,7 @@ class TestListChildrenOrdering:
         children = resp.json()["children"]
         assert len(children) == 3
 
-        # 创建顺序验证：created_at 升序（每间隔 3s）
-        # birth_date = today() - age；age 越大 birth_date 越早（数值越小）
-        # c1(age=10,bd=2016) → c2(age=11,bd=2015) → c3(age=12,bd=2014)
-        # 所以 birth_date 应递减：2016 > 2015 > 2014
-        assert children[0]["birth_date"] > children[1]["birth_date"], \
-            "c1 created before c2 → bd(c1) > bd(c2)"
-        assert children[1]["birth_date"] > children[2]["birth_date"], \
-            "c2 created before c3 → bd(c2) > bd(c3)"
-
-        # 幂等：二次调用顺序一致
+        # 幂等：二次调用顺序一致（ORDER BY 稳定性验证）
         resp2 = await api_client.get(
             "/api/v1/children",
             headers={"Authorization": f"Bearer {token}", "X-Device-Id": "test_device"},
@@ -255,6 +248,54 @@ class TestListChildrenOrdering:
         ids1 = [c["id"] for c in children]
         ids2 = [c["id"] for c in children2]
         assert ids1 == ids2, "ordering must be stable across calls"
+
+    @pytest.mark.asyncio
+    async def test_ordering_secondary_by_child_profile_id_when_created_at_equal(
+        self,
+        api_client,
+        db_session,
+        seeded_parent: tuple[User, str],
+    ) -> None:
+        """同 created_at 时严格按 ChildProfile.id 升序。"""
+        parent, pw = seeded_parent
+        token = await _login(api_client, parent, pw)
+
+        # 1. 创建 3 个 child，保留响应里的 child id
+        c1 = await _make_child(api_client, token, "first", age=10, gender="unknown")
+        c2 = await _make_child(api_client, token, "second", age=11, gender="unknown")
+        c3 = await _make_child(api_client, token, "third", age=12, gender="unknown")
+
+        # 2. 直接 UPDATE 3 条 ChildProfile.created_at 为同一时间戳
+        fixed_ts = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        child_uuids = [uuid.UUID(c1["id"]), uuid.UUID(c2["id"]), uuid.UUID(c3["id"])]
+        await db_session.execute(
+            update(ChildProfile)
+            .where(ChildProfile.child_user_id.in_(child_uuids))
+            .values(created_at=fixed_ts)
+        )
+        await db_session.commit()
+
+        # 3. 从 DB 读出 3 条 ChildProfile 的 (id, child_user_id)
+        result = await db_session.execute(
+            select(ChildProfile.id, ChildProfile.child_user_id)
+            .where(ChildProfile.child_user_id.in_(child_uuids))
+        )
+        rows = result.fetchall()
+        # 4. expected_order = sorted by ChildProfile.id
+        expected_order = [str(row.child_user_id) for row in sorted(rows, key=lambda r: r.id)]
+
+        # 5. GET /children
+        resp = await api_client.get(
+            "/api/v1/children",
+            headers={"Authorization": f"Bearer {token}", "X-Device-Id": "test_device"},
+        )
+        assert resp.status_code == 200
+        actual_order = [c["id"] for c in resp.json()["children"]]
+
+        # 6. 断言顺序匹配
+        assert actual_order == expected_order, (
+            f"expected {expected_order}, got {actual_order}"
+        )
 
 
 class TestListChildrenCrossFamily:

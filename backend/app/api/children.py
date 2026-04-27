@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from redis.asyncio import Redis
-from sqlalchemy import case, func, select
+from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import require_parent
@@ -76,10 +76,10 @@ async def list_children(
     """父账号查询本 family 下所有 child。is_bound 通过 EXISTS 动态构造，不落库。"""
     # TODO: 后续若启用有限期 token，需在此补判 expires_at > now()
     is_bound_sub = (
-        select(case((func.count(AuthToken.id) > 0, True), else_=False))
+        exists()
         .where(AuthToken.user_id == User.id, AuthToken.revoked_at.is_(None))
         .correlate(User)
-        .scalar_subquery()
+        .label("is_bound")
     )
 
     stmt = (
@@ -89,7 +89,7 @@ async def list_children(
             ChildProfile.birth_date,
             ChildProfile.gender,
             ChildProfile.created_at,
-            is_bound_sub.label("is_bound"),
+            is_bound_sub,
         )
         .outerjoin(ChildProfile, ChildProfile.child_user_id == User.id)
         .where(User.family_id == parent.family_id, User.role == UserRole.child)
