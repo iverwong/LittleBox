@@ -101,12 +101,12 @@ class ChildProfile(BaseMixin, Base):
         nullable=False,
         comment="创建者（审计用途；权限通过 family_id 控制）",
     )
-    birth_date: Mapped[Optional[date]] = mapped_column(
+    birth_date: Mapped[date] = mapped_column(
         Date,
-        nullable=True,
-        comment="家长输入 age，存近似生日 today - age years",
+        nullable=False,
+        comment="家长输入 age，存 today - age years",
     )
-    gender: Mapped[Optional[Gender]] = mapped_column(nullable=True)
+    gender: Mapped[Gender] = mapped_column(nullable=False)
     nickname: Mapped[str] = mapped_column(
         String(32),
         nullable=False,
