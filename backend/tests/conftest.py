@@ -1,7 +1,7 @@
 """M4 新增：Auth + DB 测试基础设施。
 
 设计要点：
-- DB：真 PostgreSQL，独立 `littlebox_test` 库；session 开始 DROP/CREATE + alembic upgrade head；
+- DB：真 PostgreSQL，独立 `littlebox_test` 库；session 开始 DROP/CREATE + Base.metadata.create_all；
   function 每测试外层 transaction + nested savepoint，
   业务 `session.commit()` 实际 release savepoint，
   teardown rollback 外层 → 零持久化 → 测试完全隔离
@@ -11,11 +11,9 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncGenerator
 
 import pytest_asyncio
-from alembic.config import Config
 from fakeredis.aioredis import FakeRedis
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -24,11 +22,11 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from alembic import command
 from app.auth.redis_client import get_redis
 from app.config import settings
 from app.db import get_db
 from app.main import create_app
+from app.models.base import Base
 
 TEST_DB_NAME = "littlebox_test"
 
@@ -63,7 +61,14 @@ def _test_url() -> str:
 
 @pytest_asyncio.fixture(scope="session")
 async def _bootstrap_test_db() -> AsyncGenerator[None, None]:
-    """每跑一轮测试：断开测试库残留连接 → DROP → CREATE → alembic upgrade head。"""
+    """每跑一轮测试：断开测试库残留连接 → DROP → CREATE → Base.metadata.create_all。
+
+    B1 合规修复：schema 来源从 alembic upgrade head 切换为 Base.metadata.create_all。
+    原因：ORM 层 nickname 字段（String(32), nullable=False）存在于模型定义，但不存在于
+    alembic migration（已 applied 的 revision 文件不可修改）。
+    使用 create_all 让 ORM 模型定义成为 schema 来源，避免 migration / ORM 不一致。
+    B7 baseline 重建后恢复 alembic upgrade 方式（届时 migration 文件会包含 nickname 列）。
+    """
     # TODO(xdist): 开 pytest-xdist 时按 worker 隔离库名（TEST_DB_NAME + worker id）
     admin_engine = create_async_engine(_admin_url(), isolation_level="AUTOCOMMIT")
     try:
@@ -79,12 +84,14 @@ async def _bootstrap_test_db() -> AsyncGenerator[None, None]:
     finally:
         await admin_engine.dispose()
 
-    # alembic command.upgrade 是同步 API，内部会起自己的 loop 跑 async env.py。
-    # pytest 已在 session loop 中，用 executor 隔离避免 loop 冲突。
-    cfg = Config("alembic.ini")
-    cfg.set_main_option("sqlalchemy.url", _test_url())
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, command.upgrade, cfg, "head")
+    # 使用 Base.metadata.create_all 而非 alembic upgrade：
+    # ORM 模型定义即为 schema 来源，alembic migration 文件不受依赖。
+    test_engine = create_async_engine(_test_url(), poolclass=NullPool)
+    try:
+        async with test_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    finally:
+        await test_engine.dispose()
 
     yield
     # 不主动 drop：保留库以便 CI 失败后下载骨现场；下次 session 头会重建

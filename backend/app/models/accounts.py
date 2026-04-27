@@ -107,6 +107,11 @@ class ChildProfile(BaseMixin, Base):
         comment="家长输入 age，存近似生日 today - age years",
     )
     gender: Mapped[Optional[Gender]] = mapped_column(nullable=True)
+    nickname: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        comment="家长设置的子女昵称，B1 占位，B3 替换为 payload.nickname",
+    )
     concerns: Mapped[Optional[str]] = mapped_column(
         Text,
         nullable=True,

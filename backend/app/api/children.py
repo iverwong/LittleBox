@@ -47,6 +47,7 @@ async def create_child(
         created_by=parent.id,
         birth_date=payload.birth_date,
         gender=payload.gender,
+        nickname="",  # B1 占位，B3 替换为 payload.nickname
     ))
 
     # 无 Redis ops 也走统一入口
