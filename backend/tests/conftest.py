@@ -1,7 +1,7 @@
 """M4 新增：Auth + DB 测试基础设施。
 
 设计要点：
-- DB：真 PostgreSQL，独立 `littlebox_test` 库；session 开始 DROP/CREATE + Base.metadata.create_all；
+- DB：真 PostgreSQL，独立 `littlebox_test` 库；session 开始 DROP/CREATE + alembic upgrade head；
   function 每测试外层 transaction + nested savepoint，
   业务 `session.commit()` 实际 release savepoint，
   teardown rollback 外层 → 零持久化 → 测试完全隔离
@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 from collections.abc import AsyncGenerator
 
 import pytest_asyncio
@@ -26,7 +28,6 @@ from app.auth.redis_client import get_redis
 from app.config import settings
 from app.db import get_db
 from app.main import create_app
-from app.models.base import Base
 
 TEST_DB_NAME = "littlebox_test"
 
@@ -61,12 +62,10 @@ def _test_url() -> str:
 
 @pytest_asyncio.fixture(scope="session")
 async def _bootstrap_test_db() -> AsyncGenerator[None, None]:
-    """每跑一轮测试：断开测试库残留连接 → DROP → CREATE → Base.metadata.create_all。
+    """每跑一轮测试：断开测试库残留连接 → DROP → CREATE → alembic upgrade head。
 
-    B7 验收通过：alembic baseline upgrade head 与 Base.metadata.create_all 在当前
-    ORM metadata 下等价（13 表 + 9 FK CASCADE + NOT NULL 约束全部一致）。
-    使用 create_all 而非 alembic upgrade：避免 asyncio.run() 在 pytest event loop 内冲突；
-    且 create_all 速度更快（~10ms vs ~100ms+）。
+    使用 subprocess 调 alembic CLI：绕开 pytest-asyncio event loop 与 env.py 中
+    asyncio.run() 的冲突。alembic 进程有独立 Python 解释器，不共享 pytest 的 event loop。
     """
     # TODO(xdist): 开 pytest-xdist 时按 worker 隔离库名（TEST_DB_NAME + worker id）
     admin_engine = create_async_engine(_admin_url(), isolation_level="AUTOCOMMIT")
@@ -83,14 +82,20 @@ async def _bootstrap_test_db() -> AsyncGenerator[None, None]:
     finally:
         await admin_engine.dispose()
 
-    # 使用 Base.metadata.create_all：
-    # B7 验证 alembic baseline 与 ORM metadata 等价后，create_all 更快速且不冲突。
-    test_engine = create_async_engine(_test_url(), poolclass=NullPool)
-    try:
-        async with test_engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-    finally:
-        await test_engine.dispose()
+    # subprocess 调 alembic：alembic.ini 通过 settings 读取 LB_DATABASE_URL，
+    # 在 env 中显式传入 test DB URL 以覆盖默认值。
+    test_db_url = _test_url()
+    result = subprocess.run(
+        ["alembic", "upgrade", "head"],
+        env={**os.environ, "LB_DATABASE_URL": test_db_url},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"alembic upgrade head failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
 
     yield
     # 不主动 drop：保留库以便 CI 失败后下载骨现场；下次 session 头会重建

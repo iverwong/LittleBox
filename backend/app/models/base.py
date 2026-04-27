@@ -15,14 +15,11 @@ class Base(DeclarativeBase):
 # 设置全局 naming convention（必须在模型定义之前生效）
 # 所有 FK/Index/UniqueConstraint 将按此约定命名
 Base.metadata.naming_convention = {
-    "ix": "ix_%(column_0_N_label)s",
-    "uq": "uq_%(table_name)s_%(column_0_N_label)s",
+    "ix": "ix_%(table_name)s_%(column_0_name)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
     "ck": "ck_%(table_name)s_%(constraint_name)s",
     "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
     "pk": "pk_%(table_name)s",
-    "deferred_unique": "unique_%(table_name)s_%(column_0_name)s",
-    "column": "col_%(table_name)s_%(column_0_N_label)s",
-    "table": "tbl_%(table_name)s",
 }
 
 

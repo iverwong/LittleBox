@@ -1,8 +1,8 @@
 """m4.8 baseline
 
-Revision ID: e99e8b83deea
+Revision ID: 1d8a14cc596f
 Revises: 
-Create Date: 2026-04-27 10:46:48.301953
+Create Date: 2026-04-27 11:25:13.590856
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = 'e99e8b83deea'
+revision: str = '1d8a14cc596f'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -67,7 +67,7 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['child_user_id'], ['users.id'], name=op.f('fk_child_profiles_child_user_id_users'), ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['created_by'], ['users.id'], name=op.f('fk_child_profiles_created_by_users'), ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id', name=op.f('pk_child_profiles')),
-    sa.UniqueConstraint('child_user_id', name=op.f('uq_child_profiles_child_profiles_child_user_id'))
+    sa.UniqueConstraint('child_user_id', name=op.f('uq_child_profiles_child_user_id'))
     )
     op.create_table('daily_reports',
     sa.Column('child_user_id', sa.UUID(), nullable=False),
@@ -175,7 +175,7 @@ def upgrade() -> None:
     sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['session_id'], ['sessions.id'], name=op.f('fk_rolling_summaries_session_id_sessions'), ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id', name=op.f('pk_rolling_summaries')),
-    sa.UniqueConstraint('session_id', name=op.f('uq_rolling_summaries_rolling_summaries_session_id'))
+    sa.UniqueConstraint('session_id', name=op.f('uq_rolling_summaries_session_id'))
     )
     # ### end Alembic commands ###
 
