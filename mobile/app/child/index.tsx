@@ -4,7 +4,7 @@ import { useAuthStore } from '../../stores/auth'
 
 export default function ChildIndexScreen() {
   const router = useRouter()
-  const logout = useAuthStore((state) => state.logout)
+  const clearSession = useAuthStore((state) => state.clearSession)
 
   return (
     <View style={styles.container}>
@@ -20,7 +20,7 @@ export default function ChildIndexScreen() {
         <Text style={styles.sessionPreview}>今天想听什么故事呀？</Text>
       </Pressable>
 
-      <Pressable style={styles.logoutButton} onPress={logout}>
+      <Pressable style={styles.logoutButton} onPress={clearSession}>
         <Text style={styles.logoutText}>退出登录</Text>
       </Pressable>
     </View>

@@ -12,18 +12,18 @@ export default function Index() {
   }
 
   if (__DEV__ && START_AT_DEV_HUB) {
-    return <Redirect href="/dev/hub" />;
+    return <Redirect href={'/dev/hub' as never} />;
   }
 
   if (!role) {
-    return <Redirect href="/auth/landing" />;
+    return <Redirect href={'/auth/landing' as never} />;
   }
   if (role === 'parent') {
-    return <Redirect href="/parent/children" />;
+    return <Redirect href={'/parent/children' as never} />;
   }
   if (role === 'child') {
-    return <Redirect href="/child/welcome" />;
+    return <Redirect href={'/child/welcome' as never} />;
   }
 
-  return <Redirect href="/auth/landing" />;
+  return <Redirect href={'/auth/landing' as never} />;
 }

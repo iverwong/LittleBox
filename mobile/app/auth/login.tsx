@@ -4,7 +4,7 @@ import { useAuthStore } from '../../stores/auth'
 
 export default function LoginScreen() {
   const router = useRouter()
-  const setAuth = useAuthStore((state) => state.setAuth)
+  const setSession = useAuthStore((state) => state.setSession)
 
   return (
     <View style={styles.container}>
@@ -14,8 +14,8 @@ export default function LoginScreen() {
       <Pressable
         style={styles.button}
         onPress={() => {
-          setAuth('parent', 'mock-token-parent')
-          router.replace('/(parent)/children' as never)
+          setSession({ role: 'parent', token: 'mock-token-parent', userId: 'mock-user-id' })
+          router.replace('/parent/children' as never)
         }}
       >
         <Text style={styles.buttonText}>模拟家长登录</Text>
@@ -24,8 +24,8 @@ export default function LoginScreen() {
       <Pressable
         style={[styles.button, styles.buttonSecondary]}
         onPress={() => {
-          setAuth('child', 'mock-token-child')
-          router.replace('/(child)')
+          setSession({ role: 'child', token: 'mock-token-child', userId: 'mock-user-id' })
+          router.replace('/child/welcome' as never)
         }}
       >
         <Text style={[styles.buttonText, styles.buttonTextSecondary]}>

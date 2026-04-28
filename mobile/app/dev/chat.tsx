@@ -55,7 +55,7 @@ export default function DevChat() {
 		<View style={styles.container}>
 			<Text style={styles.title}>M3 Streaming Demo（M7 后删除）</Text>
 			{/* [M15-TEMP] 临时入口，展厅验收完成后删除 */}
-			<Button title="开发展厅" onPress={() => router.push('/components')} />
+			<Button title="开发展厅" onPress={() => router.push('/dev/components' as never)} />
 			<TextInput
 				style={styles.input}
 				value={input}

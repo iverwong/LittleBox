@@ -31,6 +31,11 @@ export default function RootLayout() {
     if (loaded) SplashScreen.hideAsync();
   }, [loaded]);
 
+  // F1: 手动触发 authStore hydrate（替换 F0.5.2 hydrated stub）
+  useEffect(() => {
+    useAuthStore.getState().hydrate()
+  }, [])
+
   if (!loaded) return null;
 
   return <RootLayoutNav />;
@@ -49,21 +54,21 @@ function RootLayoutNav() {
   useEffect(() => {
     if (!hydrated || isDevRoute) return;
 
-    const currentSegment = segments[0] as string;
+    const currentSegment = segments[0]
     const isAuthGroup = currentSegment === 'auth';
     const isParentGroup = currentSegment === 'parent';
     const isChildGroup = currentSegment === 'child';
 
     if (role === null && !isAuthGroup) {
-      router.replace('/auth/landing');
+      router.replace('/auth/landing' as never);
       return;
     }
     if (role === 'parent' && !isParentGroup) {
-      router.replace('/parent/children');
+      router.replace('/parent/children' as never);
       return;
     }
     if (role === 'child' && !isChildGroup) {
-      router.replace('/child/welcome');
+      router.replace('/child/welcome' as never);
       return;
     }
   }, [role, segments, router, isDevRoute, hydrated]);
