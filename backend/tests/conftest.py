@@ -11,11 +11,11 @@
 
 from __future__ import annotations
 
-import asyncio
+import os
+import subprocess
 from collections.abc import AsyncGenerator
 
 import pytest_asyncio
-from alembic.config import Config
 from fakeredis.aioredis import FakeRedis
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -24,7 +24,6 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from alembic import command
 from app.auth.redis_client import get_redis
 from app.config import settings
 from app.db import get_db
@@ -63,7 +62,11 @@ def _test_url() -> str:
 
 @pytest_asyncio.fixture(scope="session")
 async def _bootstrap_test_db() -> AsyncGenerator[None, None]:
-    """每跑一轮测试：断开测试库残留连接 → DROP → CREATE → alembic upgrade head。"""
+    """每跑一轮测试：断开测试库残留连接 → DROP → CREATE → alembic upgrade head。
+
+    使用 subprocess 调 alembic CLI：绕开 pytest-asyncio event loop 与 env.py 中
+    asyncio.run() 的冲突。alembic 进程有独立 Python 解释器，不共享 pytest 的 event loop。
+    """
     # TODO(xdist): 开 pytest-xdist 时按 worker 隔离库名（TEST_DB_NAME + worker id）
     admin_engine = create_async_engine(_admin_url(), isolation_level="AUTOCOMMIT")
     try:
@@ -79,12 +82,20 @@ async def _bootstrap_test_db() -> AsyncGenerator[None, None]:
     finally:
         await admin_engine.dispose()
 
-    # alembic command.upgrade 是同步 API，内部会起自己的 loop 跑 async env.py。
-    # pytest 已在 session loop 中，用 executor 隔离避免 loop 冲突。
-    cfg = Config("alembic.ini")
-    cfg.set_main_option("sqlalchemy.url", _test_url())
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, command.upgrade, cfg, "head")
+    # subprocess 调 alembic：alembic.ini 通过 settings 读取 LB_DATABASE_URL，
+    # 在 env 中显式传入 test DB URL 以覆盖默认值。
+    test_db_url = _test_url()
+    result = subprocess.run(
+        ["alembic", "upgrade", "head"],
+        env={**os.environ, "LB_DATABASE_URL": test_db_url},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"alembic upgrade head failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
 
     yield
     # 不主动 drop：保留库以便 CI 失败后下载骨现场；下次 session 头会重建
@@ -176,8 +187,9 @@ async def api_client(app: FastAPI) -> AsyncGenerator[AsyncClient, None]:
 
 # ---------- 业务高层便捷 fixtures（后续 Step 复用） ----------
 
+
 @pytest_asyncio.fixture
-async def seeded_parent(db_session: AsyncSession) -> tuple[User, str]:
+async def seeded_parent(db_session: AsyncSession) -> tuple:
     """种一个 active parent + family + family_members。返回 (user, plaintext_password)。"""
     from app.auth.password import generate_password, generate_phone, hash_password
     from app.models.accounts import Family, FamilyMember, User
@@ -204,7 +216,7 @@ async def seeded_parent(db_session: AsyncSession) -> tuple[User, str]:
 
 
 @pytest_asyncio.fixture
-async def inactive_parent(db_session: AsyncSession) -> tuple[User, str]:
+async def inactive_parent(db_session: AsyncSession) -> tuple:
     """种一个 is_active=False 的 parent。返回 (user, plaintext_password)。"""
     from app.auth.password import generate_password, generate_phone, hash_password
     from app.models.accounts import Family, FamilyMember, User
@@ -231,7 +243,7 @@ async def inactive_parent(db_session: AsyncSession) -> tuple[User, str]:
 
 
 @pytest_asyncio.fixture
-async def child_user(db_session: AsyncSession) -> User:
+async def child_user(db_session: AsyncSession):
     """种一个 child + family（无 password_hash）。"""
     from app.models.accounts import Family, FamilyMember, User
     from app.models.enums import UserRole
@@ -255,7 +267,7 @@ async def child_user(db_session: AsyncSession) -> User:
 
 
 @pytest_asyncio.fixture
-async def rate_limit_parent(db_session: AsyncSession) -> tuple[User, str]:
+async def rate_limit_parent(db_session: AsyncSession) -> tuple:
     """种一个固定 phone='abcd' 的 active parent，用于 rate-limit 计数测试。"""
     from app.auth.password import generate_password, hash_password
     from app.models.accounts import Family, FamilyMember, User

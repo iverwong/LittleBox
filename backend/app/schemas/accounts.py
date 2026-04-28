@@ -69,16 +69,21 @@ class BindTokenResponse(BaseModel):
     expires_in_seconds: Literal[300] = 300
 
 
+class CreateBindTokenRequest(BaseModel):
+    """POST /bind-tokens：parent 为指定 child 创建绑定 token。"""
+
+    child_user_id: uuid.UUID = Field(
+        description="目标 child 的 user id；必须在当前 parent 的 family 内",
+    )
+
+
 class RedeemBindTokenRequest(BaseModel):
-    bind_token: str
+    """POST /bind-tokens/{bind_token}/redeem：子端扫码后兑换 token。"""
+
     device_id: str = Field(
         min_length=1,
         max_length=255,
         description="子端设备 UUID；持久化到 auth_tokens.device_id（NOT NULL）",
-    )
-    device_info: Optional[dict] = Field(
-        default=None,
-        description="可选元数据（ua / platform / ip），存入 auth_tokens.device_info 审计用",
     )
 
 

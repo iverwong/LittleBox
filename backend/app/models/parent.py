@@ -2,12 +2,12 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Date, ForeignKey, Index, Text
+from sqlalchemy import Date, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, BaseMixin
-from app.models.enums import DailyStatus, DeletionStatus, NotificationType
+from app.models.enums import DailyStatus, NotificationType
 
 
 class DailyReport(BaseMixin, Base):
@@ -18,7 +18,7 @@ class DailyReport(BaseMixin, Base):
 
     child_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id"),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
     report_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -54,8 +54,18 @@ class Notification(BaseMixin, Base):
         ForeignKey("users.id"),
         nullable=False,
     )
+    child_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        comment="关联的 child（可选）；child 删除时 CASCADE 清空，系统通知为 NULL",
+    )
     type: Mapped[NotificationType] = mapped_column(nullable=False)
-    payload: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    payload: Mapped[Optional[dict]] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="MVP 不约束 schema，消费方按 type 解构",
+    )
     sent_at: Mapped[Optional[datetime]] = mapped_column(
         TIMESTAMP(timezone=True),
         nullable=True,
@@ -67,27 +77,28 @@ class Notification(BaseMixin, Base):
 
 
 class DataDeletionRequest(BaseMixin, Base):
-    """数据删除请求追踪，合规要求。"""
+    """数据删除请求审计（合规）。仅记录已完成的硬删。"""
 
     __tablename__ = "data_deletion_requests"
 
-    child_user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("users.id"),
-        nullable=False,
-    )
     requested_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id"),
+        ForeignKey("users.id"),  # 保留 FK：parent 不会被删
         nullable=False,
         comment="发起删除的家长",
     )
-    status: Mapped[DeletionStatus] = mapped_column(
-        default=DeletionStatus.pending,
-        server_default="pending",
+    child_id_snapshot: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),  # 无 FK：child 已 CASCADE 删除，仅留 UUID 快照
         nullable=False,
+        comment="被删 child 的 user.id（快照）",
     )
-    completed_at: Mapped[Optional[datetime]] = mapped_column(
-        TIMESTAMP(timezone=True),
-        nullable=True,
+    deleted_tables: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        comment="{table: count} 各表删除行数",
+    )
+    reason: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        comment="触发原因，MVP 固定 'parent_request'",
     )

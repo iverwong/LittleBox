@@ -1,47 +1,38 @@
-"""children 路由：创建 child / 生成 bind_token / 查询绑定状态 / 吊销 child tokens。"""
+"""children 路由：创建 child / 吊销 child tokens / 列表查询 / 删除 child。"""
 from __future__ import annotations
 
-import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from redis.asyncio import Redis
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.bind import (
-    BIND_KEY_PREFIX,
-    BIND_RESULT_KEY_PREFIX,
-    issue_bind_token,
-)
 from app.auth.deps import require_parent
 from app.auth.redis_client import get_redis
 from app.auth.redis_ops import commit_with_redis
 from app.auth.tokens import revoke_all_active_tokens
 from app.db import get_db
-from app.models.accounts import ChildProfile, User
+from app.models.accounts import AuthToken, ChildProfile, FamilyMember, User
 from app.models.enums import UserRole
-from app.schemas.accounts import (
-    AccountOut,
-    BindTokenResponse,
-    BindTokenStatusOut,
-    CreateChildRequest,
-    CurrentAccount,
-)
+from app.schemas.accounts import CurrentAccount
+from app.schemas.children import ChildSummary, CreateChildRequest, ListChildrenResponse
+from app.services.age_converter import age_to_birth_date
+from app.services.child_deletion import hard_delete_child
 
-router = APIRouter(prefix="/api/v1", tags=["children"])
+router = APIRouter(prefix="/api/v1/children", tags=["children"])
 
 
-@router.post("/children", response_model=AccountOut, status_code=201)
+@router.post("", response_model=ChildSummary, status_code=201)
 async def create_child(
     payload: CreateChildRequest,
     parent: Annotated[CurrentAccount, Depends(require_parent)],
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
-) -> AccountOut:
-    """父账号创建一个子账号：users(role=child) + child_profiles。"""
+) -> ChildSummary:
+    """父账号创建一个子账号：users(role=child) + child_profiles + family_members。"""
     child = User(
         family_id=parent.family_id,
         role=UserRole.child,
@@ -51,75 +42,76 @@ async def create_child(
     db.add(child)
     await db.flush()
 
+    birth_date = age_to_birth_date(payload.age)  # ref 默认为 today()
+
     db.add(ChildProfile(
         child_user_id=child.id,
         created_by=parent.id,
-        birth_date=payload.birth_date,
+        birth_date=birth_date,
         gender=payload.gender,
+        nickname=payload.nickname,
     ))
 
-    # 无 Redis ops 也走统一入口
+    db.add(FamilyMember(
+        family_id=parent.family_id,
+        user_id=child.id,
+        role=UserRole.child,
+        joined_at=datetime.now(timezone.utc),
+    ))
+
     await commit_with_redis(db, redis)
-    return AccountOut(
+    return ChildSummary(
         id=child.id,
-        role=child.role,
-        family_id=child.family_id,
-        phone=None,
-        is_active=True,
+        nickname=payload.nickname,
+        birth_date=birth_date,
+        gender=payload.gender,
+        is_bound=False,  # 硬编码：刚创建的 child 必然无 AuthToken
     )
 
 
-@router.post("/children/{child_user_id}/bind-token", response_model=BindTokenResponse)
-async def create_bind_token(
-    child_user_id: uuid.UUID,
+@router.get("", response_model=ListChildrenResponse)
+async def list_children(
     parent: Annotated[CurrentAccount, Depends(require_parent)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],
-) -> BindTokenResponse:
-    """为指定子账号生成一次性绑定 token。"""
-    # 家庭边界检查
-    stmt = select(User).where(
-        User.id == child_user_id,
-        User.role == UserRole.child,
-        User.family_id == parent.family_id,
-        User.is_active.is_(True),
+) -> ListChildrenResponse:
+    """父账号查询本 family 下所有 child。is_bound 通过 EXISTS 动态构造，不落库。"""
+    # TODO: 后续若启用有限期 token，需在此补判 expires_at > now()
+    is_bound_sub = (
+        exists()
+        .where(AuthToken.user_id == User.id, AuthToken.revoked_at.is_(None))
+        .correlate(User)
+        .label("is_bound")
     )
-    child = (await db.execute(stmt)).scalar_one_or_none()
-    if child is None:
-        raise HTTPException(404, "child not found in family")
-    token = await issue_bind_token(
-        redis, parent_user_id=parent.id, child_user_id=child.id,
-    )
-    return BindTokenResponse(bind_token=token)
 
-
-@router.get("/bind-tokens/{bind_token}/status", response_model=BindTokenStatusOut)
-async def get_bind_token_status(
-    bind_token: str,
-    redis: Annotated[Redis, Depends(get_redis)],
-) -> BindTokenStatusOut:
-    """轮询 bind_result:{bind_token} Redis key；无结果再看 bind_token 本身是否活着。
-
-    **不鉴权**：bind_token 本身是一次性机密凭证（5min TTL + 16 字节 urlsafe 随机），
-    持有即算父端——与「生成 bind_token」端点的 require_parent 对称闭合。
-    """
-    # 1) 已兑换 → status=bound
-    result_raw = await redis.get(f"{BIND_RESULT_KEY_PREFIX}{bind_token}")
-    if result_raw is not None:
-        data = json.loads(result_raw)
-        return BindTokenStatusOut(
-            status="bound",
-            child_user_id=uuid.UUID(data["child_user_id"]),
-            bound_at=datetime.fromisoformat(data["bound_at"]),
+    stmt = (
+        select(
+            User.id,
+            ChildProfile.nickname,
+            ChildProfile.birth_date,
+            ChildProfile.gender,
+            ChildProfile.created_at,
+            is_bound_sub,
         )
-    # 2) 未兑换但 bind_token 还活着 → status=pending
-    if await redis.exists(f"{BIND_KEY_PREFIX}{bind_token}"):
-        return BindTokenStatusOut(status="pending")
-    # 3) 两者皆无 → bind_token 已过期且未兑换（或根本不存在）
-    raise HTTPException(404, "bind token not found or expired")
+        .outerjoin(ChildProfile, ChildProfile.child_user_id == User.id)
+        .where(User.family_id == parent.family_id, User.role == UserRole.child)
+        .order_by(ChildProfile.created_at, ChildProfile.id)
+    )
+    rows = (await db.execute(stmt)).fetchall()
+    return ListChildrenResponse(
+        children=[
+            ChildSummary(
+                id=row.id,
+                nickname=row.nickname,
+                birth_date=row.birth_date,
+                gender=row.gender,
+                is_bound=row.is_bound,
+            )
+            for row in rows
+        ]
+    )
 
 
-@router.post("/children/{child_user_id}/revoke-tokens", status_code=204)
+@router.post("/{child_user_id}/revoke-tokens", status_code=204)
 async def revoke_child_tokens(
     child_user_id: uuid.UUID,
     parent: Annotated[CurrentAccount, Depends(require_parent)],
@@ -137,4 +129,33 @@ async def revoke_child_tokens(
     if child is None:
         raise HTTPException(404, "child not found in family")
     await revoke_all_active_tokens(db, child.id)
+    await commit_with_redis(db, redis)
+
+
+@router.delete("/{child_user_id}", status_code=204)
+async def delete_child(
+    child_user_id: uuid.UUID,
+    parent: Annotated[CurrentAccount, Depends(require_parent)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> None:
+    """硬删 child 账号及全部关联数据（DB CASCADE + Redis 缓存清理 + 审计写入）。
+
+    错误码矩阵：
+    - 401：未登录（依赖链 require_parent）
+    - 403：非 parent 角色（require_parent 抛出）
+    - 404：目标 child 不存在 / 非本 family / role 不是 child（不暴露存在性）
+    - 204：成功
+    """
+    stmt = select(User).where(
+        User.id == child_user_id,
+        User.role == UserRole.child,
+        User.family_id == parent.family_id,
+        User.is_active.is_(True),
+    )
+    child = (await db.execute(stmt)).scalar_one_or_none()
+    if child is None:
+        raise HTTPException(404, "child not found in family")
+
+    await hard_delete_child(db, child_user_id=child_user_id, requested_by=parent.id)
     await commit_with_redis(db, redis)

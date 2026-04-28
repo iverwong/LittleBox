@@ -91,22 +91,27 @@ class ChildProfile(BaseMixin, Base):
 
     child_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id"),
+        ForeignKey("users.id", ondelete="CASCADE"),
         unique=True,
         nullable=False,
     )
     created_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id"),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         comment="创建者（审计用途；权限通过 family_id 控制）",
     )
-    birth_date: Mapped[Optional[date]] = mapped_column(
+    birth_date: Mapped[date] = mapped_column(
         Date,
-        nullable=True,
-        comment="家长输入 age，存近似生日 today - age years",
+        nullable=False,
+        comment="家长输入 age，存 today - age years",
     )
-    gender: Mapped[Optional[Gender]] = mapped_column(nullable=True)
+    gender: Mapped[Gender] = mapped_column(nullable=False)
+    nickname: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        comment="家长设置的子女昵称，B1 占位，B3 替换为 payload.nickname",
+    )
     concerns: Mapped[Optional[str]] = mapped_column(
         Text,
         nullable=True,
@@ -138,7 +143,7 @@ class AuthToken(BaseMixin, Base):
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id"),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
     token_hash: Mapped[str] = mapped_column(Text, nullable=False)
@@ -167,7 +172,7 @@ class DeviceToken(BaseMixin, Base):
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id"),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
     platform: Mapped[DevicePlatform] = mapped_column(nullable=False)
@@ -192,7 +197,7 @@ class FamilyMember(BaseMixin, Base):
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id"),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
     role: Mapped[UserRole] = mapped_column(nullable=False)
