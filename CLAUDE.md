@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 LittleBox is a parent-child AI chat application. Parents monitor children via an AI chat interface, with AI-powered safety auditing and daily reporting. The child runs a minimal chat client; the parent has a management dashboard.
 
-**Current milestone: M4** (account system & auth). The project follows a 17-milestone plan documented in `docs/M1-plan.md` through `docs/M4-plan.md`.
+**Current milestone: M4.8** (account backend completion). The project follows a 17-milestone plan documented in `docs/M1-plan.md` through `docs/M4.8-plan.md`.
 
 ## Development Commands
 
@@ -81,9 +81,10 @@ backend/
 │   ├── config.py            # pydantic-settings (env var prefix: LB_)
 │   ├── api/
 │   │   ├── health.py        # GET /health
-│   │   ├── auth.py          # POST /auth/login, /auth/logout, /auth/redeem-bind-token
+│   │   ├── auth.py          # POST /api/v1/auth/login, /api/v1/auth/logout
+│   │   ├── bind_tokens.py   # POST /api/v1/bind-tokens, GET /api/v1/bind-tokens/{bind_token}/status, POST /api/v1/bind-tokens/{bind_token}/redeem
 │   │   ├── children.py      # Parent: list/add children, generate bind QR
-│   │   ├── me.py            # GET /me (current account info)
+│   │   ├── me.py            # GET /api/v1/me, GET /api/v1/me/profile
 │   │   └── dev_chat.py      # ⚠️ TEMPORARY M3 demo route (deleted at M7)
 │   ├── schemas/
 │   │   └── accounts.py      # Pydantic request/response schemas for accounts
@@ -109,19 +110,37 @@ backend/
 mobile/
 ├── app/                    # expo-router file-based routing
 │   ├── _layout.tsx         # Root layout with role-based routing
-│   ├── (auth)/             # Login routes
-│   ├── (child)/            # Child client routes (session list + chat)
-│   ├── (parent)/           # Parent dashboard routes (3 tabs)
-│   └── dev-chat.tsx        # ⚠️ TEMPORARY M3 demo page (deleted at M7)
+│   ├── index.tsx           # Entry point
+│   ├── +html.tsx           # HTML fallback
+│   ├── +not-found.tsx      # 404 handler
+│   ├── dev-chat.tsx        # ⚠️ TEMPORARY M3 demo page (deleted at M7)
+│   ├── (auth)/             # Login routes (group - no URL prefix)
+│   │   ├── _layout.tsx
+│   │   ├── login.tsx
+│   │   └── scan.tsx        # QR scan for child bind
+│   ├── (child)/            # Child client (group - no URL prefix)
+│   │   ├── _layout.tsx
+│   │   ├── index.tsx       # Session list
+│   │   └── chat/[sessionId].tsx
+│   ├── (parent)/           # Parent dashboard (group - no URL prefix)
+│   │   ├── _layout.tsx
+│   │   ├── children/
+│   │   ├── notifications/
+│   │   └── settings/
+│   └── (dev)/              # Dev tools (group - no URL prefix)
+│       ├── _layout.tsx
+│       └── components.tsx
 ├── stores/auth.ts          # zustand auth store
 └── lib/sseClient.ts        # SSE client wrapper (react-native-sse)
 ```
+
+Note: `(group)` directories are expo-router groups — they group routes without adding to the URL path.
 
 ### Auth Architecture (M4 Decision)
 
 - **Opaque tokens**: 32-byte `secrets.token_urlsafe(32)`, stored as sha256 hash in DB, cached in Redis (`auth:{sha256(token)}` → JSON payload, TTL 10min rolling)
 - **Parent token**: 7-day rolling, renewed on each request if last_rolled_date != today (Asia/Shanghai); child tokens never expire
-- **Child bind flow**: Parent generates `bind_token` (16-byte, 5min TTL in Redis) → QR code → child scans via `POST /auth/redeem-bind-token`
+- **Child bind flow**: Parent generates `bind_token` (16-byte, 5min TTL in Redis) → QR code → child scans via `POST /api/v1/bind-tokens/{bind_token}/redeem`
 - **Auth depends**: `get_current_account` → `require_parent` / `require_child` role guards
 - **Device binding**: All tokens bound to `X-Device-Id` header; mismatches trigger immediate revocation
 
