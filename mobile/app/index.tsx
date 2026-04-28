@@ -1,7 +1,29 @@
 import { Redirect } from 'expo-router';
 
-// [M3-TEMP] 根路由直跳 dev-chat，便于 Expo Go 扫码即进入 Demo。
-// 恢复时机：M4 登录界面里程碑实施时，改为根据 role 状态分发到 (auth) / (parent) / (child)。
+import { useAuthStore } from '../stores/auth';
+
+const START_AT_DEV_HUB = true as const;
+
 export default function Index() {
-  return <Redirect href="/dev-chat" />;
+  const { role, hydrated } = useAuthStore();
+
+  if (!hydrated) {
+    return null;
+  }
+
+  if (__DEV__ && START_AT_DEV_HUB) {
+    return <Redirect href="/dev/hub" />;
+  }
+
+  if (!role) {
+    return <Redirect href="/auth/landing" />;
+  }
+  if (role === 'parent') {
+    return <Redirect href="/parent/children" />;
+  }
+  if (role === 'child') {
+    return <Redirect href="/child/welcome" />;
+  }
+
+  return <Redirect href="/auth/landing" />;
 }

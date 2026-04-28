@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import { Button, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { router } from 'expo-router'
 
-import { ChatSseHandle, openChatStream } from '../lib/sseClient'
+import { ChatSseHandle, openChatStream } from '../../lib/sseClient'
 
 type Status = 'idle' | 'streaming' | 'done' | 'error'
 
