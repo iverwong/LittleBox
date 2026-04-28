@@ -124,6 +124,62 @@ class TestCreateChildValidation:
         assert resp.status_code == 422
 
 
+class TestCreateChildQuota:
+    @pytest.mark.asyncio
+    async def test_quota_boundary_n_minus_1_succeeds(
+        self,
+        api_client,
+        seeded_parent: tuple,
+    ) -> None:
+        """N=2 时第 3 次 POST 仍 201（确认边界值不误伤）。"""
+        parent, pw = seeded_parent
+        token = await _login(api_client, parent, pw)
+
+        for i in range(2):
+            resp = await api_client.post(
+                "/api/v1/children",
+                json=make_payload(nickname=f"child{i}"),
+                headers={"Authorization": f"Bearer {token}", "X-Device-Id": "test_device"},
+            )
+            assert resp.status_code == 201, f"child {i} should succeed: {resp.json()}"
+
+        # 第3个仍成功
+        resp = await api_client.post(
+            "/api/v1/children",
+            json=make_payload(nickname="child3rd"),
+            headers={"Authorization": f"Bearer {token}", "X-Device-Id": "test_device"},
+        )
+        assert resp.status_code == 201, f"3rd child should succeed: {resp.json()}"
+
+    @pytest.mark.asyncio
+    async def test_quota_exceeded_returns_409(
+        self,
+        api_client,
+        seeded_parent: tuple,
+    ) -> None:
+        """建 3 个孩子后第 4 个 → 409 + body {"detail": "child quota exceeded"}。"""
+        parent, pw = seeded_parent
+        token = await _login(api_client, parent, pw)
+
+        # 建满 3 个
+        for i in range(3):
+            resp = await api_client.post(
+                "/api/v1/children",
+                json=make_payload(nickname=f"child{i}"),
+                headers={"Authorization": f"Bearer {token}", "X-Device-Id": "test_device"},
+            )
+            assert resp.status_code == 201, f"child {i} should succeed: {resp.json()}"
+
+        # 第 4 个被拒绝
+        resp = await api_client.post(
+            "/api/v1/children",
+            json=make_payload(nickname="child4th"),
+            headers={"Authorization": f"Bearer {token}", "X-Device-Id": "test_device"},
+        )
+        assert resp.status_code == 409, f"4th child should be 409, got {resp.status_code}: {resp.json()}"
+        assert resp.json() == {"detail": "child quota exceeded"}
+
+
 class TestCreateChildAuth:
     @pytest.mark.asyncio
     async def test_child_role_forbidden(

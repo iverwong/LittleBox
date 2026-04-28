@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from redis.asyncio import Redis
-from sqlalchemy import exists, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import require_parent
@@ -22,6 +22,8 @@ from app.schemas.children import ChildSummary, CreateChildRequest, ListChildrenR
 from app.services.age_converter import age_to_birth_date
 from app.services.child_deletion import hard_delete_child
 
+CHILD_QUOTA_PER_FAMILY = 3
+
 router = APIRouter(prefix="/api/v1/children", tags=["children"])
 
 
@@ -33,6 +35,16 @@ async def create_child(
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> ChildSummary:
     """父账号创建一个子账号：users(role=child) + child_profiles + family_members。"""
+    # quota check before session.add to avoid autoflush counting uncommitted record
+    count = await db.scalar(
+        select(func.count(User.id)).where(
+            User.family_id == parent.family_id,
+            User.role == UserRole.child,
+        )
+    )
+    if (count or 0) >= CHILD_QUOTA_PER_FAMILY:
+        raise HTTPException(409, "child quota exceeded")
+
     child = User(
         family_id=parent.family_id,
         role=UserRole.child,
