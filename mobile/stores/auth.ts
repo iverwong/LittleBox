@@ -3,12 +3,13 @@
  * 按 F1 闸门 A 必修项 M3：手动 hydrate（非 zustand persist）。
  */
 import { create } from 'zustand'
+import * as SecureStore from 'expo-secure-store'
 import { hydrateFromSecureStore, resetDeviceId, clearSecureStore } from '@/services/api/client'
 
-export type Role = 'parent' | 'child' | null
+export type Role = 'parent' | 'child'
 
 interface AuthState {
-  role: Role
+  role: Role | null  // 字段允许 null（hydrate 前 / clearSession 后）
   token: string | null
   userId: string | null
   deviceId: string | null
@@ -38,11 +39,10 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   setSession: async ({ role, token, userId }) => {
-    const SecureStore = await import('expo-secure-store')
     await Promise.all([
-      SecureStore.setItemAsync('auth.token', token as string),
-      SecureStore.setItemAsync('auth.role', role as string),
-      SecureStore.setItemAsync('auth.userId', userId as string),
+      SecureStore.setItemAsync('auth.token', token),
+      SecureStore.setItemAsync('auth.role', role),
+      SecureStore.setItemAsync('auth.userId', userId),
     ])
     set({ role, token, userId })
   },

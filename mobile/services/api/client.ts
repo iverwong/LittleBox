@@ -12,11 +12,12 @@ export type ApiResult<T> =
   | { ok: true; data: T }
   | { ok: false; status: number; body: unknown }
 
-const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://localhost:8000/api/v1'
-
-if (!process.env.EXPO_PUBLIC_API_BASE_URL && process.env.NODE_ENV === 'production') {
+const BASE_URL = (() => {
+  const fromEnv = process.env.EXPO_PUBLIC_API_BASE_URL
+  if (fromEnv) return fromEnv
+  if (__DEV__) return 'http://localhost:8000/api/v1'
   throw new Error('EXPO_PUBLIC_API_BASE_URL must be set in production')
-}
+})()
 
 /**
  * 并发从 SecureStore 取 4 个 auth keys。
@@ -85,8 +86,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
 
   if (res.status === 401) {
-    const { clearSession } = useAuthStore.getState()
-    clearSession()
+    await useAuthStore.getState().clearSession()
     router.replace('/auth/landing' as never)
     throw { status: 401 }
   }
