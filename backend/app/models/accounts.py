@@ -164,6 +164,15 @@ class AuthToken(BaseMixin, Base):
         comment="审计用：{ua, ip, platform}",
     )
 
+    __table_args__ = (
+        Index("ix_auth_tokens_token_hash", "token_hash", unique=True),
+        Index(
+            "ix_auth_tokens_user_id_active",
+            "user_id",
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+    )
+
 
 class DeviceToken(BaseMixin, Base):
     """设备推送令牌，用于向父账号设备发送通知。"""
