@@ -4,8 +4,7 @@
  * 契约来源：M5-plan.md F1 审查意见（重发版）。
  */
 import * as SecureStore from 'expo-secure-store'
-import { router } from 'expo-router'
-import { useAuthStore } from '@/stores/auth'
+import * as Crypto from 'expo-crypto'
 import { toast } from '@/components/ui/Toast/toastStore'
 
 export type ApiResult<T> =
@@ -18,6 +17,24 @@ const BASE_URL = (() => {
   if (__DEV__) return 'http://localhost:8000/api/v1'
   throw new Error('EXPO_PUBLIC_API_BASE_URL must be set in production')
 })()
+
+// ---------------------------------------------------------------------------
+// 401 callback injection（打破 auth.ts ↔ client.ts 循环依赖）
+// ---------------------------------------------------------------------------
+let on401Handler: (() => Promise<void>) | null = null
+let onUnauthorizedRedirect: (() => void) | null = null
+
+export function setOn401Handler(cb: () => Promise<void>) {
+  on401Handler = cb
+}
+
+export function setOnUnauthorizedRedirect(cb: () => void) {
+  onUnauthorizedRedirect = cb
+}
+
+// ---------------------------------------------------------------------------
+// SecureStore hydration
+// ---------------------------------------------------------------------------
 
 /**
  * 并发从 SecureStore 取 4 个 auth keys。
@@ -43,15 +60,16 @@ async function hydrateFromSecureStore(): Promise<{
 
 /**
  * SecureStore 缺失 deviceId 时生成 UUID 并写入。
+ * 使用 expo-crypto 而非全局 crypto.randomUUID（Hermes 无此 API）。
  */
 export async function ensureDeviceId(): Promise<string> {
-  const id = crypto.randomUUID()
+  const id = Crypto.randomUUID()
   await SecureStore.setItemAsync('auth.deviceId', id)
   return id
 }
 
 export async function resetDeviceId(): Promise<string> {
-  const id = crypto.randomUUID()
+  const id = Crypto.randomUUID()
   await SecureStore.setItemAsync('auth.deviceId', id)
   return id
 }
@@ -65,7 +83,15 @@ export async function clearSecureStore(): Promise<void> {
   ])
 }
 
+// ---------------------------------------------------------------------------
+// Request dispatcher
+// ---------------------------------------------------------------------------
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<ApiResult<T>> {
+  // 延迟 import，避免循环依赖
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { useAuthStore } = require('@/stores/auth')
+
   const { token, deviceId } = useAuthStore.getState()
 
   const headers: Record<string, string> = {
@@ -86,8 +112,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
 
   if (res.status === 401) {
-    await useAuthStore.getState().clearSession()
-    router.replace('/auth/landing' as never)
+    if (on401Handler) await on401Handler()
+    if (onUnauthorizedRedirect) onUnauthorizedRedirect()
     throw { status: 401 }
   }
 

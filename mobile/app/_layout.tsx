@@ -12,6 +12,13 @@ import { ThemeProvider } from '../theme/ThemeProvider';
 import { useColorScheme } from '@/components/useColorScheme';
 import { ToastContainer } from '@/components/ui/Toast';
 import { useAuthStore } from '../stores/auth';
+import { setOn401Handler, setOnUnauthorizedRedirect } from '../services/api/client';
+
+// Module-level injection: runs once when this module is first evaluated (HMR also re-runs).
+// This is intentionally placed before any component definition to guarantee the handlers
+// are registered before the first API call can happen (even if it somehow precedes hydrate).
+setOn401Handler(() => useAuthStore.getState().clearSession());
+setOnUnauthorizedRedirect(() => router.replace('/auth/landing' as never));
 
 export { ErrorBoundary } from 'expo-router';
 
