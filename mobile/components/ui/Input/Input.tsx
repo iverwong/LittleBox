@@ -20,6 +20,7 @@ export function Input({
 	autoCapitalize = 'sentences',
 	autoCorrect = true,
 	disabled = false,
+	onBlur,
 	style,
 }: InputProps) {
 	const theme = useTheme()
@@ -34,7 +35,10 @@ export function Input({
 	]
 
 	const onFocus = useCallback(() => setFocused(true), [])
-	const onBlur = useCallback(() => setFocused(false), [])
+	const handleBlur = useCallback(() => {
+		setFocused(false)
+		onBlur?.()
+	}, [onBlur])
 
 	const iconColor = disabled ? theme.palette.neutral[400] : theme.palette.neutral[500]
 	const textColor = disabled ? theme.palette.neutral[500] : theme.palette.neutral[800]
@@ -66,7 +70,7 @@ export function Input({
 					autoCorrect={autoCorrect}
 					editable={!disabled}
 					onFocus={onFocus}
-					onBlur={onBlur}
+					onBlur={handleBlur}
 					style={[styles.input, size === 'lg' ? styles.size_lg : styles.size_md, { color: textColor }]}
 				/>
 				{rightIcon && (

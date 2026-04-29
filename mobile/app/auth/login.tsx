@@ -17,6 +17,19 @@ interface LoginResponse {
   }
 }
 
+// ── 校验 helper（与后端 LoginRequest schema 对齐）─────────────────────
+function validatePhone(v: string): string {
+  if (v.length < 4) return '用户名至少 4 位'
+  if (v.length > 32) return '用户名最多 32 位'
+  return ''
+}
+
+function validatePassword(v: string): string {
+  if (v.length < 8) return '密码至少 8 位'
+  if (v.length > 128) return '密码最多 128 位'
+  return ''
+}
+
 export default function LoginScreen() {
   const { setSession, deviceId } = useAuthStore()
 
@@ -27,26 +40,21 @@ export default function LoginScreen() {
   const [isPending, setIsPending] = useState(false)
 
   const handleLogin = async () => {
-    // 前端校验
-    let valid = true
-    if (!phone.trim()) {
-      setPhoneError('请输入手机号')
-      valid = false
-    } else {
-      setPhoneError('')
+    const trimmedPhone = phone.trim()
+
+    // handleLogin 兜底校验（防用户清空后直接点提交）
+    const phoneErr = validatePhone(trimmedPhone)
+    const pwdErr = validatePassword(password)
+    if (phoneErr || pwdErr) {
+      setPhoneError(phoneErr)
+      setPasswordError(pwdErr)
+      return
     }
-    if (!password) {
-      setPasswordError('请输入密码')
-      valid = false
-    } else {
-      setPasswordError('')
-    }
-    if (!valid) return
 
     setIsPending(true)
     try {
       const resp = await api.post<LoginResponse>('/auth/login', {
-        phone,
+        phone: trimmedPhone,
         password,
         device_id: deviceId,
       })
@@ -64,7 +72,7 @@ export default function LoginScreen() {
           return
         }
         if (status >= 400 && status < 500) {
-          toast.show({ message: '登录失败，请检查输入', variant: 'error', duration: 3000 })
+          toast.show({ message: '输入格式不正确', variant: 'error', duration: 3000 })
           return
         }
         // 5xx：client 已 toast，这里 return 防止进入成功分支
@@ -102,7 +110,7 @@ export default function LoginScreen() {
                 value={phone}
                 onChangeText={(text) => {
                   setPhone(text)
-                  if (phoneError) setPhoneError('')
+                  setPhoneError(text.length === 0 ? '' : validatePhone(text))
                 }}
                 placeholder="请输入用户名"
                 autoCapitalize="none"
@@ -115,7 +123,7 @@ export default function LoginScreen() {
                 value={password}
                 onChangeText={(text) => {
                   setPassword(text)
-                  if (passwordError) setPasswordError('')
+                  setPasswordError(text.length === 0 ? '' : validatePassword(text))
                 }}
                 placeholder="请输入密码"
                 secureTextEntry
