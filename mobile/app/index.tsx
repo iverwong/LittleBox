@@ -2,7 +2,15 @@ import { Redirect } from 'expo-router';
 
 import { useAuthStore } from '../stores/auth';
 
-const START_AT_DEV_HUB = true as const;
+/**
+ * Module-level flag: allows dev tools to switch dev-hub on/off at runtime.
+ * Reload (HMR / full refresh) resets to true because the module is re-evaluated.
+ * M15: remove alongside Dev Hub deletion.
+ */
+let START_AT_DEV_HUB = true;
+export function setStartAtDevHub(value: boolean): void {
+  START_AT_DEV_HUB = value;
+}
 
 export default function Index() {
   const { role, hydrated } = useAuthStore();

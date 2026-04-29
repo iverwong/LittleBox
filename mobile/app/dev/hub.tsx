@@ -6,6 +6,7 @@
 import { useState } from 'react'
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { router, useSegments } from 'expo-router'
+import { setStartAtDevHub } from '../index'
 
 import { useAuthStore } from '@/stores/auth'
 import { BASE_URL } from '@/services/api/client'
@@ -89,8 +90,10 @@ async function handleClearSession() {
 }
 
 async function handleStartTest() {
-	await handleClearSession()
-	router.replace('/auth/landing' as never)
+	// Switch off dev-hub flag so / bootstrap routes naturally by hydrated+role.
+	// Module will re-evaluate to true on reload (HMR / full refresh).
+	setStartAtDevHub(false)
+	router.replace('/' as never)
 }
 
 async function handleResetDevice() {
@@ -115,28 +118,28 @@ export default function DevHub() {
 			<View style={styles.buttonGroup}>
 				<ActionButton
 					label="开始测试"
-					sublabel="清会话 + 跳转 landing"
+					sublabel="切换到自然路由"
 					variant="primary"
 					onPress={async () => {
-						log('开始测试: 清会话 + 跳转 landing')
+						log('开始测试: 跳转 /')
 						await handleStartTest()
 					}}
 				/>
 				<ActionButton
-					label="清会话"
-					sublabel="仅清除本地会话"
+					label="重置会话"
+					sublabel="清除登录状态，保留设备 ID"
 					variant="secondary"
 					onPress={async () => {
-						log('清会话')
+						log('重置会话')
 						await handleClearSession()
 					}}
 				/>
 				<ActionButton
-					label="重置 device"
-					sublabel="生成新 deviceId"
+					label="重置设备"
+					sublabel="清除登录状态并生成新设备 ID"
 					variant="secondary"
 					onPress={async () => {
-						log('重置 device')
+						log('重置设备')
 						await handleResetDevice()
 					}}
 				/>
