@@ -14,7 +14,7 @@ export type ApiResult<T> =
 const BASE_URL = (() => {
   const fromEnv = process.env.EXPO_PUBLIC_API_BASE_URL
   if (fromEnv) return fromEnv
-  if (__DEV__) return 'http://localhost:8000/api/v1'
+  if (__DEV__) return 'http://localhost:50060/api/v1'
   throw new Error('EXPO_PUBLIC_API_BASE_URL must be set in production')
 })()
 
