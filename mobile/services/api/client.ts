@@ -112,7 +112,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    // token 为 null/undefined/falsy 时不注入 Authorization，避免 "Bearer undefined"
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    // deviceId 始终注入（ensureDeviceId 在 hydrate 时已保证有值）
     ...(deviceId ? { 'X-Device-Id': deviceId } : {}),
   }
 
@@ -127,9 +129,12 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     return { ok: true, data }
   }
 
+  // ── 401：auth 端点由调用方自己处理（避免全局 clearSession 打断登录流程）──
   if (res.status === 401) {
-    if (on401Handler) await on401Handler()
-    if (onUnauthorizedRedirect) onUnauthorizedRedirect()
+    if (!path.startsWith('/auth/')) {
+      if (on401Handler) await on401Handler()
+      if (onUnauthorizedRedirect) onUnauthorizedRedirect()
+    }
     throw { status: 401 }
   }
 
