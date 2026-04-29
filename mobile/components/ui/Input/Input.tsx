@@ -17,6 +17,8 @@ export function Input({
 	size = 'md',
 	secureTextEntry = false,
 	keyboardType = 'default',
+	autoCapitalize = 'sentences',
+	autoCorrect = true,
 	disabled = false,
 	style,
 }: InputProps) {
@@ -60,6 +62,8 @@ export function Input({
 					placeholderTextColor={theme.palette.neutral[400]}
 					secureTextEntry={secureTextEntry}
 					keyboardType={keyboardType}
+					autoCapitalize={autoCapitalize}
+					autoCorrect={autoCorrect}
 					editable={!disabled}
 					onFocus={onFocus}
 					onBlur={onBlur}

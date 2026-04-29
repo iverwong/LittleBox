@@ -14,6 +14,8 @@ export interface InputProps {
 	size?: InputSize
 	secureTextEntry?: boolean
 	keyboardType?: 'default' | 'email-address' | 'numeric' | 'phone-pad' | 'url'
+	autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters'
+	autoCorrect?: boolean
 	disabled?: boolean
 	style?: StyleProp<ViewStyle>
 }
