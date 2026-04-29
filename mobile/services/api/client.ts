@@ -103,6 +103,16 @@ export async function clearSecureStore(): Promise<void> {
 // Request dispatcher
 // ---------------------------------------------------------------------------
 
+/**
+ * 401 不触发全局 clearSession + 跳 landing 的端点。
+ * - /auth/login：登录页自己处理 401 显示"账号或密码错误"
+ * - /bind-tokens/*：子端扫码 redeem 前没有 session，401 也不该清空父端会话
+ */
+const NO_AUTO_REDIRECT = new Set([
+  '/auth/login',
+  '/bind-tokens/',
+])
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<ApiResult<T>> {
   // 延迟 import，避免循环依赖
   // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -129,9 +139,10 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     return { ok: true, data }
   }
 
-  // ── 401：auth 端点由调用方自己处理（避免全局 clearSession 打断登录流程）──
+  // ── 401：白名单端点由调用方自己处理（避免全局 clearSession 打断登录/绑定流程）──
   if (res.status === 401) {
-    if (!path.startsWith('/auth/')) {
+    const shouldSkip = [...NO_AUTO_REDIRECT].some((p) => path === p || path.startsWith(p as string))
+    if (!shouldSkip) {
       if (on401Handler) await on401Handler()
       if (onUnauthorizedRedirect) onUnauthorizedRedirect()
     }

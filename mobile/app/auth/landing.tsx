@@ -10,7 +10,7 @@ export default function LandingScreen() {
       <View style={styles.content}>
         {/* Mascot */}
         <View style={styles.mascotWrap}>
-          <Mascot size="xl" state="idle" />
+          <Mascot size="xl" />
         </View>
 
         {/* Brand */}
