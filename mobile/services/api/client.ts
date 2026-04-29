@@ -151,4 +151,5 @@ export const api = {
   },
 }
 
+export { BASE_URL }
 export { hydrateFromSecureStore }

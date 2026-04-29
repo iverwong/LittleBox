@@ -1,7 +1,7 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { DarkTheme, DefaultTheme, ThemeProvider as NavThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
-import { Stack , useRouter, useSegments } from 'expo-router';
+import { Stack, useRouter, useSegments, router } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -54,14 +54,19 @@ function RootLayoutNav() {
   const router = useRouter();
   const { role, hydrated } = useAuthStore();
 
-  // dev 路由游离于 role guard 外（即使未登录也能访问）
-  const isDevRoute = segments[0] === 'dev';
-
-  // useEffect 必须位于所有 hooks 之后、return 之前，确保条件返回不改变 hooks 调用顺序
+  // useEffect must be placed after all hooks and before return, ensures hooks call order is stable
   useEffect(() => {
-    if (!hydrated || isDevRoute) return;
+    // Cold-start transient: segments not yet hydrate (useSegments can return
+    // [] before router hydrates). Guard against stale fallback redirect that
+    // would cover the initial route (START_AT_DEV_HUB → /dev/hub).
+    const seg = segments as string[];
+    if (seg.length === 0) return;
+    if (!hydrated) return;
+    const first = seg[0];
+    // dev and +not-found routes are exempt from role guard
+    if (first === 'dev' || first === '+not-found') return;
 
-    const currentSegment = segments[0]
+    const currentSegment = first
     const isAuthGroup = currentSegment === 'auth';
     const isParentGroup = currentSegment === 'parent';
     const isChildGroup = currentSegment === 'child';
@@ -78,7 +83,7 @@ function RootLayoutNav() {
       router.replace('/child/welcome' as never);
       return;
     }
-  }, [role, segments, router, isDevRoute, hydrated]);
+  }, [role, segments, router, hydrated]);
 
   // hydrated 过渡态（hooks 已全部调用完毕，此处仅控制渲染）
   if (!hydrated) return null;
