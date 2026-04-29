@@ -53,7 +53,6 @@ export default function LoginScreen() {
 
       if (!resp.ok) {
         const status = resp.status
-        // 清空密码
         setPassword('')
 
         if (status === 401) {
@@ -68,15 +67,15 @@ export default function LoginScreen() {
           toast.show({ message: '登录失败，请检查输入', variant: 'error', duration: 3000 })
           return
         }
-        // 5xx：client 已 toast
+        // 5xx：client 已 toast，这里 return 防止进入成功分支
         return
       }
 
       await setSession({ role: 'parent', token: resp.data.token, userId: resp.data.account.id })
     } catch {
       setPassword('')
-      // 5xx 或网络异常 client 已 toast
-      // 这里不重复弹
+      // 网络异常（fetch 抛出的异常不经过 client 5xx 分支）需要兜底 toast
+      toast.show({ message: '网络异常，稍后重试', variant: 'error', duration: 3000 })
     } finally {
       setIsPending(false)
     }
