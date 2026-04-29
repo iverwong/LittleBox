@@ -5,16 +5,28 @@
  */
 import * as SecureStore from 'expo-secure-store'
 import * as Crypto from 'expo-crypto'
+import Constants from 'expo-constants'
 import { toast } from '@/components/ui/Toast/toastStore'
 
 export type ApiResult<T> =
   | { ok: true; data: T }
   | { ok: false; status: number; body: unknown }
 
+/**
+ * 解析开发期 Metro 所在机器的 hostname。
+ * Expo SDK：Constants.expoConfig.hostUri = "192.168.x.x:8081"（真机）或 "localhost:8081"（模拟器）。
+ * 真机跑 LAN IP，模拟器跑 localhost，自动适配。
+ */
+function getDevHost(): string {
+  const hostUri = Constants.expoConfig?.hostUri
+  if (!hostUri) return 'localhost'
+  return hostUri.split(':')[0]
+}
+
 const BASE_URL = (() => {
   const fromEnv = process.env.EXPO_PUBLIC_API_BASE_URL
   if (fromEnv) return fromEnv
-  if (__DEV__) return 'http://localhost:50060/api/v1'
+  if (__DEV__) return `http://${getDevHost()}:50060/api/v1`
   throw new Error('EXPO_PUBLIC_API_BASE_URL must be set in production')
 })()
 

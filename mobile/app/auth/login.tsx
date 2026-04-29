@@ -98,17 +98,17 @@ export default function LoginScreen() {
 
             <View style={styles.fields}>
               <Input
-                label="手机号"
+                label="用户名"
                 value={phone}
                 onChangeText={(text) => {
                   setPhone(text)
                   if (phoneError) setPhoneError('')
                 }}
-                placeholder="请输入手机号"
+                placeholder="请输入用户名"
                 autoCapitalize="none"
                 autoCorrect={false}
                 error={phoneError}
-                leftIcon="phone"
+                leftIcon="user"
               />
               <Input
                 label="密码"
@@ -136,7 +136,7 @@ export default function LoginScreen() {
             </Button>
 
             <Text style={styles.hint}>
-              家长账号由管理员创建，请使用收到的手机号和初始密码登录
+              测试期间家长账号由管理员创建，请使用收到的用户名和初始密码登录
             </Text>
           </View>
         </ScrollView>
