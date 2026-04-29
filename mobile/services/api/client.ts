@@ -6,7 +6,6 @@
 import * as SecureStore from 'expo-secure-store'
 import * as Crypto from 'expo-crypto'
 import Constants from 'expo-constants'
-import { toast } from '@/components/ui/Toast/toastStore'
 
 export type ApiResult<T> =
   | { ok: true; data: T }
@@ -140,15 +139,16 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     ...(deviceId ? { 'X-Device-Id': deviceId } : {}),
   }
 
-  const res = await fetch(`${BASE_URL}${path}`, {
-    method,
-    headers,
-    body: body != null ? JSON.stringify(body) : undefined,
-  })
-
-  if (res.ok) {
-    const data = await res.json()
-    return { ok: true, data }
+  let res: Response
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      method,
+      headers,
+      body: body != null ? JSON.stringify(body) : undefined,
+    })
+  } catch (e) {
+    // 唯一 throw 路径：网络层错误（DNS / TCP / TLS / fetch reject）
+    throw e
   }
 
   // ── 401：白名单端点由调用方自己处理（避免全局 clearSession 打断登录/绑定流程）──
@@ -158,21 +158,12 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
       if (on401Handler) await on401Handler()
       if (onUnauthorizedRedirect) onUnauthorizedRedirect()
     }
-    throw { status: 401 }
   }
 
-  if (res.status === 429) {
-    toast.show({ message: '请求过于频繁，请稍后重试', variant: 'error', duration: 3000 })
-    throw { status: 429 }
+  if (res.ok) {
+    return { ok: true, data: await res.json() }
   }
 
-  if (res.status >= 500) {
-    toast.show({ message: '网络异常，稍后重试', variant: 'error', duration: 3000 })
-    const errBody = await res.json().catch(() => null)
-    throw { status: res.status, body: errBody }
-  }
-
-  // 其他 4xx（含 409 / 422）：resolve 给调用方处理，不弹 toast
   const errBody = await res.json().catch(() => null)
   return { ok: false, status: res.status, body: errBody }
 }

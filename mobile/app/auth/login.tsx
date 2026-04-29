@@ -52,41 +52,47 @@ export default function LoginScreen() {
     }
 
     setIsPending(true)
+    let resp
     try {
-      const resp = await api.post<LoginResponse>('/auth/login', {
+      resp = await api.post<LoginResponse>('/auth/login', {
         phone: trimmedPhone,
         password,
         device_id: deviceId,
       })
+    } catch {
+      // 网络层错误（DNS / TCP / TLS / fetch reject）
+      setPassword('')
+      toast.show({ message: '网络异常，稍后重试', variant: 'error', duration: 3000 })
+      setIsPending(false)
+      return
+    }
 
-      if (!resp.ok) {
-        const status = resp.status
-        setPassword('')
+    if (!resp.ok) {
+      setPassword('')
 
-        if (status === 401) {
-          setPhoneError('账号或密码错误')
-          return
-        }
-        if (status === 429) {
-          toast.show({ message: '登录过于频繁，请稍后重试', variant: 'error', duration: 3000 })
-          return
-        }
-        if (status >= 400 && status < 500) {
-          toast.show({ message: '输入格式不正确', variant: 'error', duration: 3000 })
-          return
-        }
-        // 5xx：client 已 toast，这里 return 防止进入成功分支
+      if (resp.status === 401) {
+        setPhoneError('账号或密码错误')
+        setIsPending(false)
         return
       }
-
-      await setSession({ role: 'parent', token: resp.data.token, userId: resp.data.account.id })
-    } catch {
-      setPassword('')
-      // 网络异常（fetch 抛出的异常不经过 client 5xx 分支）需要兜底 toast
-      toast.show({ message: '网络异常，稍后重试', variant: 'error', duration: 3000 })
-    } finally {
+      if (resp.status === 429) {
+        toast.show({ message: '登录过于频繁，请稍后重试', variant: 'error', duration: 3000 })
+        setIsPending(false)
+        return
+      }
+      if (resp.status >= 500) {
+        toast.show({ message: '网络异常，稍后重试', variant: 'error', duration: 3000 })
+        setIsPending(false)
+        return
+      }
+      // 其他 4xx（含 422 / 400 / 403）兜底
+      toast.show({ message: '输入格式不正确', variant: 'error', duration: 3000 })
       setIsPending(false)
+      return
     }
+
+    await setSession({ role: 'parent', token: resp.data.token, userId: resp.data.account.id })
+    setIsPending(false)
   }
 
   return (
