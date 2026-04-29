@@ -74,6 +74,22 @@ export async function resetDeviceId(): Promise<string> {
   return id
 }
 
+/**
+ * Clears only session-level keys (token, role, userId), preserves deviceId.
+ * Used by clearSession (session-only) and resetDevice (full wipe triggers this first).
+ */
+export async function clearSessionSecureStore(): Promise<void> {
+  await Promise.all([
+    SecureStore.deleteItemAsync('auth.token'),
+    SecureStore.deleteItemAsync('auth.role'),
+    SecureStore.deleteItemAsync('auth.userId'),
+  ])
+}
+
+/**
+ * Clears all auth keys including deviceId.
+ * Used by resetDevice for full wipe.
+ */
 export async function clearSecureStore(): Promise<void> {
   await Promise.all([
     SecureStore.deleteItemAsync('auth.token'),

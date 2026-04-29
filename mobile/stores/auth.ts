@@ -4,7 +4,7 @@
  */
 import { create } from 'zustand'
 import * as SecureStore from 'expo-secure-store'
-import { hydrateFromSecureStore, resetDeviceId, clearSecureStore } from '@/services/api/client'
+import { hydrateFromSecureStore, resetDeviceId, clearSessionSecureStore } from '@/services/api/client'
 
 export type Role = 'parent' | 'child'
 
@@ -48,12 +48,13 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   clearSession: async () => {
-    await clearSecureStore()
-    set({ role: null, token: null, userId: null, deviceId: null })
+    await clearSessionSecureStore()
+    set({ role: null, token: null, userId: null })
   },
 
   resetDevice: async () => {
+    await clearSessionSecureStore()
     const newDeviceId = await resetDeviceId()
-    set({ deviceId: newDeviceId })
+    set({ role: null, token: null, userId: null, deviceId: newDeviceId })
   },
 }))

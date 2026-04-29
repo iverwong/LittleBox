@@ -8,7 +8,7 @@ import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { router, useSegments } from 'expo-router'
 
 import { useAuthStore } from '@/stores/auth'
-import { resetDeviceId, BASE_URL } from '@/services/api/client'
+import { BASE_URL } from '@/services/api/client'
 
 // ─── Debug Info ──────────────────────────────────────────────────────────────
 
@@ -94,7 +94,7 @@ async function handleStartTest() {
 }
 
 async function handleResetDevice() {
-	await resetDeviceId()
+	await useAuthStore.getState().resetDevice()
 	// Re-read from store after reset
 	const { deviceId } = useAuthStore.getState()
 	Alert.alert('设备已重置', `新 deviceId: ${deviceId?.slice(0, 8)}...`)
