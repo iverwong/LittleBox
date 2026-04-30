@@ -192,7 +192,7 @@ export default function ChildrenIndexScreen() {
       toast.show({ message: '最多 3 个孩子，请先删除已有', variant: 'error', duration: 3000 })
       return
     }
-    ;(router.push as (href: string) => void)('/parent/children/new')
+    ; (router.push as (href: string) => void)('/parent/children/new')
   }, [children, router])
 
   const renderItem = useCallback(
@@ -249,15 +249,15 @@ export default function ChildrenIndexScreen() {
           headerRight: () => (
             <Pressable
               onPress={handleAddPress}
-              hitSlop={8}
-              disabled={atQuota}
-              style={{ opacity: atQuota ? 0.4 : 1 }}
+              accessibilityRole="button"
+              accessibilityLabel={atQuota ? '已达孩子数量上限' : '添加孩子'}
+              hitSlop={12}
+              style={({ pressed }) => [
+                styles.headerAddButton,
+                { opacity: pressed ? 0.5 : 1 },
+              ]}
             >
-              <Ionicons
-                name="add"
-                size={24}
-                color={theme.palette.secondary[700]}
-              />
+              <Ionicons name="add" size={26} color="white" />
             </Pressable>
           ),
         }}
@@ -324,5 +324,12 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 14,
     textAlign: 'center',
+  },
+  headerAddButton: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
   },
 })
