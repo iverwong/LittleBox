@@ -25,7 +25,10 @@ import { Input } from '@/components/ui/Input'
 import { toast } from '@/components/ui/Toast'
 import { api } from '@/services/api/client'
 import { AgePicker } from '@/components/business/AgePicker'
-import { GenderAvatar } from '@/components/business/GenderAvatar'
+
+import { GenderBoy } from '@/components/icons/GenderBoy'
+import { GenderGirl } from '@/components/icons/GenderGirl'
+import { GenderUnknown } from '@/components/icons/GenderUnknown'
 
 // ---------------------------------------------------------------------------
 
@@ -143,38 +146,63 @@ export default function NewChildScreen() {
             </View>
 
             {/* 性别 */}
-            <View style={styles.field}>
-              <FieldLabel>性别</FieldLabel>
-              <View style={styles.genderRow}>
-                {GENDER_OPTIONS.map((opt) => {
-                  const selected = gender === opt.value
-                  return (
-                    <Pressable
-                      key={opt.value}
-                      onPress={() => setGender(opt.value)}
-                      style={styles.genderItem}
-                      accessibilityRole="radio"
-                      accessibilityState={{ selected }}
-                      accessibilityLabel={opt.label}
+            <View style={styles.genderRow}>
+              {GENDER_OPTIONS.map((opt) => {
+                const selected = gender === opt.value
+                const iconColor = selected
+                  ? theme.palette.primary[600]
+                  : theme.palette.neutral[500]
+                const bgColor = selected
+                  ? theme.palette.primary[100]
+                  : theme.palette.neutral[100]
+
+                return (
+                  <Pressable
+                    key={opt.value}
+                    onPress={() => setGender(opt.value)}
+                    style={styles.genderItem}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected }}
+                    accessibilityLabel={opt.label}
+                  >
+                    <View
+                      style={[
+                        styles.genderIconCircle,
+                        {
+                          backgroundColor: bgColor,
+                          borderColor: selected
+                            ? theme.palette.primary[500]
+                            : 'transparent',
+                        },
+                      ]}
                     >
-                      <GenderAvatar gender={opt.value} size={64} selected={selected} />
-                      <Text
-                        style={[
-                          styles.genderLabel,
-                          {
-                            color: selected
-                              ? theme.palette.primary[600]
-                              : theme.palette.neutral[500],
-                            fontWeight: selected ? '700' : '500',
-                          },
-                        ]}
-                      >
-                        {opt.label}
-                      </Text>
-                    </Pressable>
-                  )
-                })}
-              </View>
+                      {opt.value === 'female' ? (
+                        <GenderGirl color={iconColor} size={36} />
+                      ) : opt.value === 'male' ?
+                        (
+                          // male 与 unknown 暂时都用 GenderBoy 占位
+                          <GenderBoy color={iconColor} size={36} />
+                        ) : (
+                          <GenderUnknown color={iconColor} size={36} />
+                        )
+                      }
+                    </View>
+                    <Text
+                      style={[
+                        styles.genderLabel,
+                        {
+                          color: selected
+                            ? theme.palette.primary[600]
+                            : theme.palette.neutral[500],
+                          fontWeight: selected ? '700' : '500',
+                        },
+                      ]}
+                    >
+                      {opt.label}
+                    </Text>
+                  </Pressable>
+                )
+              })}
             </View>
 
             <View style={styles.spacer} />
@@ -225,6 +253,14 @@ const styles = StyleSheet.create({
   },
   genderLabel: {
     fontSize: 14,
+  },
+  genderIconCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   // 底部
   spacer: { flex: 1, minHeight: 16 },
