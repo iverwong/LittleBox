@@ -21,6 +21,8 @@ import {
   RefreshControl,
   Pressable,
   StyleSheet,
+  ActivityIndicator,
+
 } from 'react-native'
 import { Stack, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
@@ -146,6 +148,8 @@ export default function ChildrenIndexScreen() {
 
   // In-flight request controller for cleanup on unmount / re-run
   const abortRef = useRef<AbortController | null>(null)
+  const isInitialLoadRef = useRef(true)
+
 
   const fetchChildren = useCallback(async () => {
     if (abortRef.current) abortRef.current.abort()
@@ -154,10 +158,13 @@ export default function ChildrenIndexScreen() {
 
     const res = await api.get<{ children: ChildSummary[] }>('/children')
     if (!res.ok) {
-      // 4xx / 5xx — non-ok response
       if (!controller.signal.aborted) {
-        setError(true)
-        setLoading(false)
+        if (isInitialLoadRef.current) {
+          setError(true)
+          setLoading(false)
+        } else {
+          toast.show({ message: '刷新失败', variant: 'error', duration: 2000 })
+        }
       }
       return
     }
@@ -165,19 +172,18 @@ export default function ChildrenIndexScreen() {
       setChildren(res.data.children)
       setLoading(false)
       setError(false)
+      isInitialLoadRef.current = false
     }
   }, [])
 
-  // useFocusEffect: re-fetch whenever the screen gains focus
-  // (covers return from new.tsx / modal close)
   useFocusEffect(
     useCallback(() => {
-      setLoading(true)
-      setError(false)
-      fetchChildren()
-      return () => {
-        abortRef.current?.abort()
+      if (isInitialLoadRef.current) {
+        setLoading(true)
+        setError(false)
       }
+      fetchChildren()
+      return () => { abortRef.current?.abort() }
     }, [fetchChildren]),
   )
 
@@ -265,13 +271,9 @@ export default function ChildrenIndexScreen() {
 
       <View style={[styles.container, { backgroundColor: theme.surface.paper }]}>
         {loading && !refreshing ? (
-          <FlatList
-            data={[]}
-            renderItem={renderItem}
-            ListHeaderComponent={renderSkeleton}
-            keyExtractor={() => 'skeleton'}
-            contentContainerStyle={styles.listContent}
-          />
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={theme.palette.primary[500]} />
+          </View>
         ) : (
           <FlatList
             data={children ?? []}
@@ -331,5 +333,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 8,
+  },
+  loadingContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 })

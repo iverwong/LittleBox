@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/auth'
 import { toast } from '@/components/ui/Toast/toastStore'
 import { Button } from '@/components/ui/Button/Button'
 import { Input } from '@/components/ui/Input/Input'
+import { Mascot } from '@/components/mascot/Mascot'
 
 interface LoginResponse {
   token: string
@@ -107,6 +108,9 @@ export default function LoginScreen() {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.form}>
+            <View style={styles.mascotWrapper}>
+              <Mascot size="xl" />
+            </View>
             <Text style={styles.title}>登录</Text>
             <Text style={styles.subtitle}>输入您的账号信息</Text>
 
@@ -175,6 +179,10 @@ const styles = StyleSheet.create({
   },
   form: {
     width: '100%',
+  },
+  mascotWrapper: {
+    alignItems: 'center',
+    marginBottom: 24,
   },
   title: {
     fontSize: 32,

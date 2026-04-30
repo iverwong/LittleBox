@@ -25,7 +25,7 @@ import { Input } from '@/components/ui/Input'
 import { toast } from '@/components/ui/Toast'
 import { api } from '@/services/api/client'
 import { AgePicker } from '@/components/business/AgePicker'
-
+import { Mascot } from '@/components/mascot/Mascot'
 import { GenderAvatar } from '@/components/business/GenderAvatar'
 
 // ---------------------------------------------------------------------------
@@ -123,6 +123,9 @@ export default function NewChildScreen() {
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
+            <View style={styles.mascotWrapper}>
+              <Mascot size="md" />
+            </View>
             {/* 昵称 */}
             <View style={styles.field}>
               <FieldLabel>昵称</FieldLabel>
@@ -208,6 +211,11 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 14,
     fontWeight: '500',
+  },
+  // mascot
+  mascotWrapper: {
+    alignItems: 'center',
+    paddingVertical: 4,
   },
   // 性别
   genderRow: {
