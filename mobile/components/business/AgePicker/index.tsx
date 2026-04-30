@@ -1,0 +1,50 @@
+/**
+ * AgePicker — discrete slider for selecting a child's age (3–21 years).
+ *
+ * Built on top of the M4.6 DiscreteSlider component.
+ * Exports `formatAgeLabel(age)` as a utility for use in the surrounding UI
+ * (AgePicker boundary labels only — list cards MUST NOT use this function;
+ * they render plain "{age}岁" from birthDateToAge).
+ *
+ * Usage:
+ *   const [age, setAge] = useState(12)
+ *   <AgePicker value={age} onValueChange={setAge} />
+ */
+import { DiscreteSlider } from '@/components/ui/DiscreteSlider'
+
+/** Age nodes: 3, 4, 5, …, 21 (inclusive). */
+export const AGE_NODES = Array.from({ length: 19 }, (_, i) => i + 3) // [3..21]
+
+/**
+ * Format an age value for display in the slider's centre label.
+ * Used ONLY inside AgePicker and its surrounding UI (left/right boundary labels).
+ * List cards render plain "{age}岁" — they MUST NOT call this function.
+ */
+export function formatAgeLabel(age: number): string {
+  if (age <= 3) return '3-'
+  if (age >= 21) return '20+'
+  return `${age}岁`
+}
+
+interface AgePickerProps {
+  value: number
+  onValueChange: (age: number) => void
+  disabled?: boolean
+}
+
+export function AgePicker({ value, onValueChange, disabled = false }: AgePickerProps) {
+  return (
+    <DiscreteSlider
+      nodes={AGE_NODES}
+      value={value}
+      onValueChange={onValueChange}
+      disabled={disabled}
+      leftLabel={formatAgeLabel(AGE_NODES[0])}
+      rightLabel={formatAgeLabel(AGE_NODES[AGE_NODES.length - 1])}
+      centerLabel={formatAgeLabel(value)}
+      showLeftLabel
+      showRightLabel
+      showCenterLabel
+    />
+  )
+}
