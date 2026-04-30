@@ -115,7 +115,7 @@ export default function NewChildScreen() {
 
   return (
     <>
-      <Stack.Screen options={{ title: '添加孩子', headerLeft: () => null }} />
+      <Stack.Screen options={{ title: '添加孩子' }} />
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
@@ -142,11 +142,6 @@ export default function NewChildScreen() {
               autoCorrect={false}
               maxLength={NICKNAME_MAX}
             />
-            {nicknameErr && (
-              <Text style={[styles.fieldError, { color: theme.ui.error }]}>
-                {nicknameErr}
-              </Text>
-            )}
           </View>
 
           {/* ── 年龄 ── */}
@@ -207,10 +202,6 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 14,
     fontWeight: '500',
-  },
-  fieldError: {
-    fontSize: 12,
-    marginTop: -4,
   },
   genderRow: {
     flexDirection: 'row',

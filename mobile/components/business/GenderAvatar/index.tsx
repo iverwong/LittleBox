@@ -53,8 +53,8 @@ export function GenderAvatar({ gender, size = 48, selected = false }: GenderAvat
       break
     case 'unknown':
     default:
-      bg = theme.palette.secondary[100]
-      iconColor = theme.palette.secondary[500]
+      bg = theme.palette.neutral[100]
+      iconColor = theme.palette.neutral[500]
       iconName = 'help'
       break
   }
