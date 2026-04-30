@@ -26,9 +26,7 @@ import { toast } from '@/components/ui/Toast'
 import { api } from '@/services/api/client'
 import { AgePicker } from '@/components/business/AgePicker'
 
-import { GenderBoy } from '@/components/icons/GenderBoy'
-import { GenderGirl } from '@/components/icons/GenderGirl'
-import { GenderUnknown } from '@/components/icons/GenderUnknown'
+import { GenderAvatar } from '@/components/business/GenderAvatar'
 
 // ---------------------------------------------------------------------------
 
@@ -149,13 +147,6 @@ export default function NewChildScreen() {
             <View style={styles.genderRow}>
               {GENDER_OPTIONS.map((opt) => {
                 const selected = gender === opt.value
-                const iconColor = selected
-                  ? theme.palette.primary[600]
-                  : theme.palette.neutral[500]
-                const bgColor = selected
-                  ? theme.palette.primary[100]
-                  : theme.palette.neutral[100]
-
                 return (
                   <Pressable
                     key={opt.value}
@@ -165,28 +156,7 @@ export default function NewChildScreen() {
                     accessibilityState={{ selected }}
                     accessibilityLabel={opt.label}
                   >
-                    <View
-                      style={[
-                        styles.genderIconCircle,
-                        {
-                          backgroundColor: bgColor,
-                          borderColor: selected
-                            ? theme.palette.primary[500]
-                            : 'transparent',
-                        },
-                      ]}
-                    >
-                      {opt.value === 'female' ? (
-                        <GenderGirl color={iconColor} size={36} />
-                      ) : opt.value === 'male' ?
-                        (
-                          // male 与 unknown 暂时都用 GenderBoy 占位
-                          <GenderBoy color={iconColor} size={36} />
-                        ) : (
-                          <GenderUnknown color={iconColor} size={36} />
-                        )
-                      }
-                    </View>
+                    <GenderAvatar gender={opt.value} size={64} selected={selected} />
                     <Text
                       style={[
                         styles.genderLabel,
