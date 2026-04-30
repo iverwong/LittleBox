@@ -20,6 +20,7 @@ export function Input({
 	autoCapitalize = 'sentences',
 	autoCorrect = true,
 	disabled = false,
+	maxLength,
 	onBlur,
 	style,
 }: InputProps) {
@@ -69,6 +70,7 @@ export function Input({
 					autoCapitalize={autoCapitalize}
 					autoCorrect={autoCorrect}
 					editable={!disabled}
+					maxLength={maxLength}
 					onFocus={onFocus}
 					onBlur={handleBlur}
 					style={[styles.input, size === 'lg' ? styles.size_lg : styles.size_md, { color: textColor }]}

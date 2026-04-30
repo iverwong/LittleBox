@@ -17,6 +17,7 @@ export interface InputProps {
 	autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters'
 	autoCorrect?: boolean
 	disabled?: boolean
+	maxLength?: number
 	onBlur?: () => void
 	style?: StyleProp<ViewStyle>
 }
