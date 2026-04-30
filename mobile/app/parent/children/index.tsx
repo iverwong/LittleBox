@@ -80,7 +80,7 @@ function ChildCard({ child }: ChildCardProps) {
   const redline = theme.report.redline
 
   const handleListItemPress = useCallback(() => {
-    toast.show({ message: '信息区，开发中', variant: 'info', duration: 1500 })
+    toast.show({ message: '孩子详情页 F5 上线', variant: 'info', duration: 1500 })
   }, [])
 
   const handlePrimaryAction = useCallback(() => {
