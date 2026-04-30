@@ -3,13 +3,13 @@
  * 按 §七前端「API client 错误契约」（2026-04-28）落地。
  * 契约来源：M5-plan.md F1 审查意见（重发版）。
  */
-import * as SecureStore from 'expo-secure-store'
-import * as Crypto from 'expo-crypto'
-import Constants from 'expo-constants'
+import * as SecureStore from 'expo-secure-store';
+import * as Crypto from 'expo-crypto';
+import Constants from 'expo-constants';
 
 export type ApiResult<T> =
   | { ok: true; data: T }
-  | { ok: false; status: number; body: unknown }
+  | { ok: false; status: number; body: unknown };
 
 /**
  * 解析开发期 Metro 所在机器的 hostname。
@@ -17,30 +17,30 @@ export type ApiResult<T> =
  * 真机跑 LAN IP，模拟器跑 localhost，自动适配。
  */
 function getDevHost(): string {
-  const hostUri = Constants.expoConfig?.hostUri
-  if (!hostUri) return 'localhost'
-  return hostUri.split(':')[0]
+  const hostUri = Constants.expoConfig?.hostUri;
+  if (!hostUri) return 'localhost';
+  return hostUri.split(':')[0];
 }
 
 const BASE_URL = (() => {
-  const fromEnv = process.env.EXPO_PUBLIC_API_BASE_URL
-  if (fromEnv) return fromEnv
-  if (__DEV__) return `http://${getDevHost()}:50060/api/v1`
-  throw new Error('EXPO_PUBLIC_API_BASE_URL must be set in production')
-})()
+  const fromEnv = process.env.EXPO_PUBLIC_API_BASE_URL;
+  if (fromEnv) return fromEnv;
+  if (__DEV__) return `http://${getDevHost()}:50060/api/v1`;
+  throw new Error('EXPO_PUBLIC_API_BASE_URL must be set in production');
+})();
 
 // ---------------------------------------------------------------------------
 // 401 callback injection（打破 auth.ts ↔ client.ts 循环依赖）
 // ---------------------------------------------------------------------------
-let on401Handler: (() => Promise<void>) | null = null
-let onUnauthorizedRedirect: (() => void) | null = null
+let on401Handler: (() => Promise<void>) | null = null;
+let onUnauthorizedRedirect: (() => void) | null = null;
 
 export function setOn401Handler(cb: () => Promise<void>) {
-  on401Handler = cb
+  on401Handler = cb;
 }
 
 export function setOnUnauthorizedRedirect(cb: () => void) {
-  onUnauthorizedRedirect = cb
+  onUnauthorizedRedirect = cb;
 }
 
 // ---------------------------------------------------------------------------
@@ -52,21 +52,21 @@ export function setOnUnauthorizedRedirect(cb: () => void) {
  * deviceId 缺失时调用 ensureDeviceId 生成并写入。
  */
 async function hydrateFromSecureStore(): Promise<{
-  token: string | null
-  role: string | null
-  userId: string | null
-  deviceId: string
+  token: string | null;
+  role: string | null;
+  userId: string | null;
+  deviceId: string;
 }> {
   const [token, role, userId, deviceId] = await Promise.all([
     SecureStore.getItemAsync('auth.token'),
     SecureStore.getItemAsync('auth.role'),
     SecureStore.getItemAsync('auth.userId'),
     SecureStore.getItemAsync('auth.deviceId'),
-  ])
+  ]);
 
-  let finalDeviceId: string = deviceId ?? (await ensureDeviceId())
+  let finalDeviceId: string = deviceId ?? (await ensureDeviceId());
 
-  return { token, role, userId, deviceId: finalDeviceId }
+  return { token, role, userId, deviceId: finalDeviceId };
 }
 
 /**
@@ -74,15 +74,15 @@ async function hydrateFromSecureStore(): Promise<{
  * 使用 expo-crypto 而非全局 crypto.randomUUID（Hermes 无此 API）。
  */
 export async function ensureDeviceId(): Promise<string> {
-  const id = Crypto.randomUUID()
-  await SecureStore.setItemAsync('auth.deviceId', id)
-  return id
+  const id = Crypto.randomUUID();
+  await SecureStore.setItemAsync('auth.deviceId', id);
+  return id;
 }
 
 export async function resetDeviceId(): Promise<string> {
-  const id = Crypto.randomUUID()
-  await SecureStore.setItemAsync('auth.deviceId', id)
-  return id
+  const id = Crypto.randomUUID();
+  await SecureStore.setItemAsync('auth.deviceId', id);
+  return id;
 }
 
 /**
@@ -94,7 +94,7 @@ export async function clearSessionSecureStore(): Promise<void> {
     SecureStore.deleteItemAsync('auth.token'),
     SecureStore.deleteItemAsync('auth.role'),
     SecureStore.deleteItemAsync('auth.userId'),
-  ])
+  ]);
 }
 
 /**
@@ -107,7 +107,7 @@ export async function clearSecureStore(): Promise<void> {
     SecureStore.deleteItemAsync('auth.role'),
     SecureStore.deleteItemAsync('auth.userId'),
     SecureStore.deleteItemAsync('auth.deviceId'),
-  ])
+  ]);
 }
 
 // ---------------------------------------------------------------------------
@@ -119,17 +119,18 @@ export async function clearSecureStore(): Promise<void> {
  * - /auth/login：登录页自己处理 401 显示"账号或密码错误"
  * - /bind-tokens/*：子端扫码 redeem 前没有 session，401 也不该清空父端会话
  */
-const NO_AUTO_REDIRECT = new Set([
-  '/auth/login',
-  '/bind-tokens/',
-])
+const NO_AUTO_REDIRECT = new Set(['/auth/login', '/bind-tokens/']);
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<ApiResult<T>> {
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<ApiResult<T>> {
   // 延迟 import，避免循环依赖
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { useAuthStore } = require('@/stores/auth')
+  const { useAuthStore } = require('@/stores/auth');
 
-  const { token, deviceId } = useAuthStore.getState()
+  const { token, deviceId } = useAuthStore.getState();
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -137,54 +138,57 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     // deviceId 始终注入（ensureDeviceId 在 hydrate 时已保证有值）
     ...(deviceId ? { 'X-Device-Id': deviceId } : {}),
-  }
+  };
 
-  let res: Response
+  let res: Response;
   try {
     res = await fetch(`${BASE_URL}${path}`, {
       method,
       headers,
       body: body != null ? JSON.stringify(body) : undefined,
-    })
-  } catch (e) {
-    // 唯一 throw 路径：网络层错误（DNS / TCP / TLS / fetch reject）
-    throw e
+    });
+  } catch {
+    // 网络层失败（DNS / TCP / TLS / fetch reject）→ 统一转 status=0，
+    // 调用方按 5xx 同档兜底，不再抛异常。
+    return { ok: false, status: 0, body: null };
   }
 
   // ── 401：白名单端点由调用方自己处理（避免全局 clearSession 打断登录/绑定流程）──
   if (res.status === 401) {
-    const shouldSkip = [...NO_AUTO_REDIRECT].some((p) => path === p || path.startsWith(p as string))
+    const shouldSkip = [...NO_AUTO_REDIRECT].some(
+      (p) => path === p || path.startsWith(p as string),
+    );
     if (!shouldSkip) {
-      if (on401Handler) await on401Handler()
-      if (onUnauthorizedRedirect) onUnauthorizedRedirect()
+      if (on401Handler) await on401Handler();
+      if (onUnauthorizedRedirect) onUnauthorizedRedirect();
     }
   }
 
   if (res.ok) {
-    return { ok: true, data: await res.json() }
+    return { ok: true, data: await res.json() };
   }
 
-  const errBody = await res.json().catch(() => null)
-  return { ok: false, status: res.status, body: errBody }
+  const errBody = await res.json().catch(() => null);
+  return { ok: false, status: res.status, body: errBody };
 }
 
 export const api = {
   get<T>(path: string): Promise<ApiResult<T>> {
-    return request<T>('GET', path)
+    return request<T>('GET', path);
   },
 
   post<T>(path: string, body: unknown): Promise<ApiResult<T>> {
-    return request<T>('POST', path, body)
+    return request<T>('POST', path, body);
   },
 
   patch<T>(path: string, body: unknown): Promise<ApiResult<T>> {
-    return request<T>('PATCH', path, body)
+    return request<T>('PATCH', path, body);
   },
 
   delete<T>(path: string): Promise<ApiResult<T>> {
-    return request<T>('DELETE', path)
+    return request<T>('DELETE', path);
   },
-}
+};
 
-export { BASE_URL }
-export { hydrateFromSecureStore }
+export { BASE_URL };
+export { hydrateFromSecureStore };

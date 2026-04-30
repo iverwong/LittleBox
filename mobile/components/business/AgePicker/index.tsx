@@ -42,43 +42,16 @@ export function AgePicker({ value, onValueChange, disabled = false }: AgePickerP
   const theme = useTheme()
 
   return (
-    <View style={labelStyles.row}>
-      {/* Left boundary label — rendered outside DiscreteSlider */}
-      <Text style={[labelStyles.boundary, { color: theme.palette.neutral[500] }]}>
-        {formatAgeLabel(AGE_NODES[0])}
-      </Text>
-
-      <View style={{ flex: 1 }}>
-        <DiscreteSlider
-          nodes={AGE_NODES}
-          value={value}
-          onValueChange={onValueChange}
-          disabled={disabled}
-          centerLabel={formatAgeLabel(value)}
-          showLeftLabel={false}
-          showRightLabel={false}
-          showCenterLabel={false}
-        />
-      </View>
-
-      {/* Right boundary label — rendered outside DiscreteSlider */}
-      <Text style={[labelStyles.boundary, { color: theme.palette.neutral[500] }]}>
-        {formatAgeLabel(AGE_NODES[AGE_NODES.length - 1])}
-      </Text>
-    </View>
+    <DiscreteSlider
+      nodes={AGE_NODES}
+      value={value}
+      onValueChange={onValueChange}
+      disabled={disabled}
+      centerLabel={formatAgeLabel(value)}
+      showLeftLabel={true}
+      showRightLabel={true}
+      showCenterLabel={true}
+    />
   )
 }
-
-const labelStyles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  boundary: {
-    fontSize: 12,
-    minWidth: 24,
-    textAlign: 'center',
-  },
-})
 

@@ -1,22 +1,12 @@
 /**
- * parent/children/new.tsx — new child creation form (M5 F4).
+ * parent/children/new.tsx — 添加孩子表单（M5 F4 重写 v2）。
  *
- * Fields: nickname (Input) + age (AgePicker) + gender (GenderAvatar × 3)
- * Submit: POST /children { nickname, age, gender }
- *
- * Pre-validation: nickname.trim().length must be in [1, 32] before submit.
- * 422 from backend is a fallback only (schema drift).
- *
- * Success: Toast "已添加" 1.5s + router.back()
- * 409 quota: Toast "最多 3 个孩子，请先删除已有" 3s, stay on form
- * 422: highlight field (nickname error state)
- * Other 4xx: Toast "创建失败，请检查输入" 3s
- * 5xx: Toast "网络异常，稍后重试" 3s
- *
- * Backend contract (schemas/children.py:11-18):
- *   nickname: str (min=1, max=32)
- *   age: int (ge=3, le=21)
- *   gender: "male" | "female" | "unknown"
+ * 调整：
+ *   - 三个字段统一使用顶部 Text label（昵称/年龄/性别），不再用 Input 自带 label
+ *   - 年龄当前值由 DiscreteSlider 的 centerLabel 显示（在 AgePicker 中透传）
+ *   - 年龄区域去掉卡片包装，避免视觉拥挤
+ *   - 性别三个选项居中分布；选中态额外用底部加粗大字标签强化
+ *   - 整页米杏底色铺满，杜绝下半屏黑底
  */
 import { useCallback, useState } from 'react'
 import {
@@ -38,23 +28,25 @@ import { AgePicker } from '@/components/business/AgePicker'
 import { GenderAvatar } from '@/components/business/GenderAvatar'
 
 // ---------------------------------------------------------------------------
-// Types & constants
-// ---------------------------------------------------------------------------
 
 type Gender = 'male' | 'female' | 'unknown'
 
-// Backend constraint (schemas/children.py)
 const NICKNAME_MAX = 32
+const DEFAULT_AGE = 12
+
+const GENDER_OPTIONS: Array<{ value: Gender; label: string }> = [
+  { value: 'male', label: '男孩' },
+  { value: 'female', label: '女孩' },
+  { value: 'unknown', label: '保密' },
+]
 
 function validateNickname(value: string): string | null {
   const t = value.trim()
   if (t.length < 1) return '请输入昵称'
-  if (t.length > NICKNAME_MAX) return `昵称最多 ${NICKNAME_MAX} 个字符`
+  if (t.length > NICKNAME_MAX) return `昵称最多 ${NICKNAME_MAX} 个字`
   return null
 }
 
-// ---------------------------------------------------------------------------
-// Screen
 // ---------------------------------------------------------------------------
 
 export default function NewChildScreen() {
@@ -63,25 +55,24 @@ export default function NewChildScreen() {
 
   const [nickname, setNickname] = useState('')
   const [nicknameErr, setNicknameErr] = useState<string | null>(null)
-  const [age, setAge] = useState(12) // default to mid-teen (补正 3)
+  const [age, setAge] = useState<number>(DEFAULT_AGE)
   const [gender, setGender] = useState<Gender>('unknown')
   const [submitting, setSubmitting] = useState(false)
 
-  const handleNicknameChange = useCallback((text: string) => {
-    setNickname(text)
-    // Real-time pre-validation feedback
-    const err = validateNickname(text)
-    setNicknameErr(err)
-  }, [])
+  const handleNicknameChange = useCallback(
+    (text: string) => {
+      setNickname(text)
+      if (nicknameErr) setNicknameErr(validateNickname(text))
+    },
+    [nicknameErr],
+  )
 
   const handleSubmit = useCallback(async () => {
-    // Pre-validation before submit
-    const trimErr = validateNickname(nickname)
-    if (trimErr) {
-      setNicknameErr(trimErr)
+    const err = validateNickname(nickname)
+    if (err) {
+      setNicknameErr(err)
       return
     }
-
     setSubmitting(true)
 
     const res = await api.post<{ id: string }>('/children', {
@@ -90,8 +81,9 @@ export default function NewChildScreen() {
       gender,
     })
 
+    setSubmitting(false)
+
     if (!res.ok) {
-      setSubmitting(false)
       if (res.status === 409) {
         toast.show({ message: '最多 3 个孩子，请先删除已有', variant: 'error', duration: 3000 })
         return
@@ -108,107 +100,133 @@ export default function NewChildScreen() {
       return
     }
 
-    // Success
     toast.show({ message: '已添加', variant: 'success', duration: 1500 })
     router.back()
   }, [nickname, age, gender, router])
 
+  // 统一的字段标题
+  const FieldLabel = ({ children }: { children: string }) => (
+    <Text style={[styles.label, { color: theme.palette.neutral[700] }]}>{children}</Text>
+  )
+
   return (
     <>
       <Stack.Screen options={{ title: '添加孩子' }} />
-
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
-        <ScrollView
-          contentContainerStyle={[
-            styles.container,
-            { backgroundColor: theme.surface.paper },
-          ]}
-          keyboardShouldPersistTaps="handled"
+      <View style={[styles.root, { backgroundColor: theme.palette.neutral[50] }]}>
+        <KeyboardAvoidingView
+          style={styles.flex1}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
-          {/* ── 昵称 ── */}
-          <View style={styles.fieldBlock}>
-            <Text style={[styles.label, { color: theme.palette.neutral[700] }]}>
-              昵称
-            </Text>
-            <Input
-              value={nickname}
-              onChangeText={handleNicknameChange}
-              placeholder="请输入孩子昵称"
-              error={nicknameErr ?? undefined}
-              autoCapitalize="none"
-              autoCorrect={false}
-              maxLength={NICKNAME_MAX}
-            />
-          </View>
+          <ScrollView
+            contentContainerStyle={styles.scrollContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {/* 昵称 */}
+            <View style={styles.field}>
+              <FieldLabel>昵称</FieldLabel>
+              <Input
+                value={nickname}
+                onChangeText={handleNicknameChange}
+                placeholder="请输入孩子昵称"
+                autoCapitalize="none"
+                autoCorrect={false}
+                maxLength={NICKNAME_MAX}
+                error={nicknameErr ?? undefined}
+              />
+            </View>
 
-          {/* ── 年龄 ── */}
-          <View style={styles.fieldBlock}>
-            <Text style={[styles.label, { color: theme.palette.neutral[700] }]}>
-              年龄
-            </Text>
-            <View style={{ paddingHorizontal: 4 }}>
+            {/* 年龄 */}
+            <View style={styles.field}>
+              <FieldLabel>年龄</FieldLabel>
               <AgePicker value={age} onValueChange={setAge} />
             </View>
-          </View>
 
-          {/* ── 性别 ── */}
-          <View style={styles.fieldBlock}>
-            <Text style={[styles.label, { color: theme.palette.neutral[700] }]}>
-              性别
-            </Text>
-            <View style={styles.genderRow}>
-              {(['male', 'female', 'unknown'] as Gender[]).map((g) => (
-                <Pressable key={g} onPress={() => setGender(g)}>
-                  <GenderAvatar gender={g} size={72} selected={gender === g} />
-                </Pressable>
-              ))}
+            {/* 性别 */}
+            <View style={styles.field}>
+              <FieldLabel>性别</FieldLabel>
+              <View style={styles.genderRow}>
+                {GENDER_OPTIONS.map((opt) => {
+                  const selected = gender === opt.value
+                  return (
+                    <Pressable
+                      key={opt.value}
+                      onPress={() => setGender(opt.value)}
+                      style={styles.genderItem}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected }}
+                      accessibilityLabel={opt.label}
+                    >
+                      <GenderAvatar gender={opt.value} size={64} selected={selected} />
+                      <Text
+                        style={[
+                          styles.genderLabel,
+                          {
+                            color: selected
+                              ? theme.palette.primary[600]
+                              : theme.palette.neutral[500],
+                            fontWeight: selected ? '700' : '500',
+                          },
+                        ]}
+                      >
+                        {opt.label}
+                      </Text>
+                    </Pressable>
+                  )
+                })}
+              </View>
             </View>
-          </View>
 
-          {/* ── 提交 ── */}
-          <View style={styles.submitBlock}>
+            <View style={styles.spacer} />
+
+            {/* 保存 */}
             <Button
               variant="primary"
               size="lg"
               loading={submitting}
               disabled={submitting}
               onPress={handleSubmit}
-              style={{ width: '100%' }}
+              style={styles.submit}
             >
               保存
             </Button>
-          </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </View>
     </>
   )
 }
 
-// ---------------------------------------------------------------------------
-// Styles
-// ---------------------------------------------------------------------------
-
 const styles = StyleSheet.create({
-  container: {
+  root: { flex: 1 },
+  flex1: { flex: 1 },
+  scrollContent: {
+    flexGrow: 1,
     padding: 24,
+    paddingBottom: 48,
     gap: 28,
   },
-  fieldBlock: {
-    gap: 8,
-  },
+  field: { gap: 10 },
   label: {
     fontSize: 14,
     fontWeight: '500',
   },
+  // 性别
   genderRow: {
     flexDirection: 'row',
-    gap: 20,
-    paddingVertical: 4,
+    justifyContent: 'space-around',
+    alignItems: 'flex-start',
+    paddingVertical: 8,
   },
-  submitBlock: {
-    marginTop: 8,
+  genderItem: {
+    alignItems: 'center',
+    gap: 8,
+    padding: 4,
   },
+  genderLabel: {
+    fontSize: 14,
+  },
+  // 底部
+  spacer: { flex: 1, minHeight: 16 },
+  submit: { width: '100%' },
 })
