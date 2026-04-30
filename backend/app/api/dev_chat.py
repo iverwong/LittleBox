@@ -1,5 +1,9 @@
-"""M3 开发调试路由。M7 聊天界面正式版上线后整文件删除。"""
+"""DEPRECATED — will be removed in M7 (cleanup contract). Use /me/chat/stream.
 
+TODO(M7 cleanup): delete this file + remove route registration from main.py.
+See baseline §7.6.
+"""
+import logging
 import uuid
 
 from fastapi import APIRouter, Request
@@ -7,6 +11,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.chat.sse import stream_chat
+
+logger = logging.getLogger(__name__)
+logger.warning("dev_chat module loaded; this endpoint is DEPRECATED and will be removed in M7")
 
 router = APIRouter(prefix="/api/dev", tags=["dev"])
 
