@@ -10,9 +10,10 @@ dev_chat 协议 4 类帧语义：
   error  → 捕获异常时 yield
   end    → astream 自然结束 / 消费完所有 chunk 后
 
-stream_chat() 兼容入口走 main_graph.astream(..., stream_mode="custom")
-的 AIMessageChunk 流，不再使用 astream_events / on_chat_model_stream。
+stream_chat() 使用 LangGraph custom stream mode（stream_mode="custom"），
+节点内部通过 get_stream_writer() 发送增量，不依赖 astream_events / on_chat_model_stream。
 """
+
 import asyncio
 import json
 import logging
@@ -23,12 +24,13 @@ import anyio
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from starlette.requests import ClientDisconnect
 
-from app.chat.graph import build_chat_graph
+from app.chat.graph import main_graph
 
 logger = logging.getLogger(__name__)
 
 
 # ---- M3 单行协议 framer（dev_chat 兼容路径） ----
+
 
 def _sse_pack(event_type: str, **payload: Any) -> str:
     """SSE 单条消息序列化（M3 协议）。
@@ -41,6 +43,7 @@ def _sse_pack(event_type: str, **payload: Any) -> str:
 
 
 # ---- M6 多行协议 framer（me 主路径） ----
+
 
 def _frame_sse_event(event_type: str, data: dict) -> bytes:
     """SSE 多行协议帧（M6 协议）：event: <type>\ndata: <json>\n\n。"""
@@ -84,28 +87,30 @@ async def stream_to_sse(graph_stream) -> AsyncIterator[bytes]:
 
 # ---- dev_chat 兼容入口（M3 单行协议） ----
 
+
 async def stream_chat(user_message: str, session_id: str) -> AsyncIterator[str]:
-    """将 LangGraph custom-stream 流式事件转换为 SSE M3 单行帧。
+    """将 LangGraph custom stream 转换为 SSE M3 单行帧。
 
     dev_chat 协议：start / delta / error / end
     reasoning_content 不发进 delta（丢弃，仅作内部信号）。
+
+    使用 main_graph.astream(stream_mode="custom")，节点内部 call_main_llm
+    通过 get_stream_writer() 发送增量。
     """
     yield _sse_pack("start", session_id=session_id)
 
-    graph = build_chat_graph()
     try:
-        async for event in graph.astream_events(
+        async for payload in main_graph.astream(
             {"messages": [HumanMessage(content=user_message)]},
-            version="v2",
+            stream_mode="custom",
         ):
-            if event["event"] == "on_chat_model_stream":
-                chunk = event["data"].get("chunk")
-                if chunk is not None and chunk.content:
-                    yield _sse_pack("delta", content=chunk.content)
-    except (asyncio.CancelledError, ClientDisconnect, anyio.BrokenResourceError):
+            # stream_mode="custom" 时每次 yield 一个 dict（writer({...}) 的字典）
+            if "delta" in payload:
+                yield _sse_pack("delta", content=payload["delta"])
+            elif "finish_reason" in payload:
+                yield _sse_pack("end", finish_reason=payload["finish_reason"])
+    except asyncio.CancelledError, ClientDisconnect, anyio.BrokenResourceError:
         raise
     except Exception as exc:
         yield _sse_pack("error", message=str(exc), code=type(exc).__name__)
         return
-
-    yield _sse_pack("end", finish_reason="stop")

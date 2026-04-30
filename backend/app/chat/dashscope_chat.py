@@ -8,6 +8,7 @@
 
 LangChain message types（AIMessageChunk 等）仅用作数据容器。
 """
+
 from collections.abc import AsyncIterator
 from functools import lru_cache
 from http import HTTPStatus

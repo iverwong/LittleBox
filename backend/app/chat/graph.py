@@ -1,15 +1,17 @@
 """LangGraph 单节点流式图（M3 验证用）。
 
 M6 临时版本：仅含 call_main_llm 单节点，
-节点内部用 llm.astream + writer 透出 AIMessageChunk 流。
+节点内部用 llm.astream 逐 chunk yield AIMessageChunk。
 流式通路走 LangGraph custom streaming API（stream_mode="custom"），
 不依赖 astream_events / on_chat_model_stream。
 
 持久化与 DB 写入收敛到 me.py generator（Step 6/8b），此处不写任何 DB。
 """
+
 from typing import Annotated, TypedDict
 
-from langchain_core.messages import AIMessageChunk, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage
+from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
@@ -28,15 +30,27 @@ class ChatState(TypedDict):
 async def call_main_llm(state: ChatState) -> dict[str, list[BaseMessage]]:
     """唯一节点：调用 qwen3.5-flash 生成回复。
 
-    使用 llm.astream + writer 透出 AIMessageChunk（LangGraph custom streaming API）。
-    不在这里做 streaming 消费，流式由外层 .astream(..., stream_mode="custom")
-    的 writer 回调透传。
+    使用 llm.astream（流式）逐 chunk yield，通过 LangGraph get_stream_writer()
+    发送增量。流式由 stream_chat 的 custom stream mode 路径处理。
+
+    finish_reason 透传：dashscope_chat 把 finish_reason 写在
+    chunk.additional_kwargs["response_metadata"]["finish_reason"]（白名单：stop/length/content_filter）。
 
     注意：本节点不写 DB，DB 写入收敛到 me.py generator（Step 8b T5 唯一写入点）。
     """
+    writer = get_stream_writer()
     llm = get_chat_llm()
-    response = await llm.ainvoke(state["messages"])
-    return {"messages": [response]}
+    parts: list[str] = []
+    async for chunk in llm.astream(state["messages"]):
+        text = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
+        if text:
+            writer({"delta": text})
+            parts.append(text)
+        # finish_reason 透传（白名单：stop / length / content_filter）
+        fr = chunk.additional_kwargs.get("response_metadata", {}).get("finish_reason")
+        if fr:
+            writer({"finish_reason": fr})
+    return {"messages": [AIMessage(content="".join(parts))]}
 
 
 def build_chat_graph():
