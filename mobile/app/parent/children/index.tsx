@@ -40,6 +40,7 @@ import { api } from '@/services/api/client'
 import { GenderAvatar } from '@/components/business/GenderAvatar'
 import { birthDateToAge } from '@/lib/birthDateUtils'
 import { Mascot } from '@/components/mascot/Mascot'
+import { BindQrModal } from '@/components/business/BindQrModal'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -69,51 +70,65 @@ function ChildCard({ child }: ChildCardProps) {
   const primaryActionLabel = child.is_bound ? '下线设备' : '绑定设备'
   const redline = theme.report.redline
 
+  const [bindModalVisible, setBindModalVisible] = useState(false)
+
   const handleListItemPress = useCallback(() => {
     toast.show({ message: '孩子设置页 F5 上线', variant: 'info', duration: 1500 })
   }, [])
 
   const handlePrimaryAction = useCallback(() => {
-    toast.show({ message: '绑定功能开发中', variant: 'info', duration: 1500 })
-  }, [])
+    if (child.is_bound) {
+      toast.show({ message: '下线设备 F5 即将接入', variant: 'info', duration: 1500 })
+      return
+    }
+    setBindModalVisible(true)
+  }, [child.is_bound])
 
   const handleTrashPress = useCallback(() => {
     toast.show({ message: '删除功能开发中', variant: 'info', duration: 1500 })
   }, [])
 
   return (
-    <Card variant="outlined" padding={0} style={styles.cardSpacing}>
-      <ListItem
-        leading={<GenderAvatar gender={child.gender} size={48} />}
-        title={`${child.nickname} · ${age}岁`}
-        trailing={
-          <Ionicons
-            name="chevron-forward"
-            size={20}
-            color={theme.palette.secondary[400]}
-          />
-        }
-        onPress={handleListItemPress}
-        divider
+    <>
+      <Card variant="outlined" padding={0} style={styles.cardSpacing}>
+        <ListItem
+          leading={<GenderAvatar gender={child.gender} size={48} />}
+          title={`${child.nickname} · ${age}岁`}
+          trailing={
+            <Ionicons
+              name="chevron-forward"
+              size={20}
+              color={theme.palette.secondary[400]}
+            />
+          }
+          onPress={handleListItemPress}
+          divider
+        />
+        <View style={styles.actionRow}>
+          <Button
+            variant="primary"
+            size="md"
+            style={styles.flex1}
+            onPress={handlePrimaryAction}
+          >
+            {primaryActionLabel}
+          </Button>
+          <Pressable
+            onPress={handleTrashPress}
+            hitSlop={8}
+            style={styles.trashIconButton}
+          >
+            <Ionicons name="trash-outline" size={20} color={redline} />
+          </Pressable>
+        </View>
+      </Card>
+      <BindQrModal
+        visible={bindModalVisible}
+        onClose={() => setBindModalVisible(false)}
+        childId={child.id}
+        childNickname={child.nickname}
       />
-      <View style={styles.actionRow}>
-        <Button
-          variant="primary"
-          size="md"
-          style={styles.flex1}
-          onPress={handlePrimaryAction}
-        >
-          {primaryActionLabel}
-        </Button>
-        <Pressable
-          onPress={handleTrashPress}
-          hitSlop={8}
-          style={styles.trashIconButton}
-        >
-          <Ionicons name="trash-outline" size={20} color={redline} />
-        </Pressable>
-      </View>
-    </Card>
+    </>
   )
 }
 
