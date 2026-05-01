@@ -1,36 +1,18 @@
 /**
  * AgePicker — discrete slider for selecting a child's age (3–21 years).
  *
- * Built on top of the M4.6 DiscreteSlider component.
- * Exports `formatAgeLabel(age)` as a utility for use in the surrounding UI
- * (AgePicker boundary labels only — list cards MUST NOT use this function;
- * they render plain "{age}岁" from birthDateToAge).
- *
- * Labels are rendered outside DiscreteSlider in a flex row to guarantee
- * visibility at boundary nodes (the slider's internal bottomRow with
- * negative margin can clip labels at extreme thumb positions).
+ * Built on top of the DiscreteSlider component.
+ * 两端边界 (3 / 21) 不再做特殊语义 — 直接渲染字面年龄，与 value 一致。
+ * 与 birthDateToAge 推算结果对齐，跨年自然增长，不会出现「20+ ↔ 21 ↔ 22」错位。
  *
  * Usage:
  *   const [age, setAge] = useState(12)
  *   <AgePicker value={age} onValueChange={setAge} />
  */
-import { View, Text, StyleSheet } from 'react-native'
 import { DiscreteSlider } from '@/components/ui/DiscreteSlider'
-import { useTheme } from '@/theme'
 
 /** Age nodes: 3, 4, 5, …, 21 (inclusive). */
 export const AGE_NODES = Array.from({ length: 19 }, (_, i) => i + 3) // [3..21]
-
-/**
- * Format an age value for display in the slider's centre label.
- * Used ONLY inside AgePicker and its surrounding UI (left/right boundary labels).
- * List cards render plain "{age}岁" — they MUST NOT call this function.
- */
-export function formatAgeLabel(age: number): string {
-  if (age <= 3) return '3-'
-  if (age >= 21) return '20+'
-  return `${age}岁`
-}
 
 interface AgePickerProps {
   value: number
@@ -39,19 +21,16 @@ interface AgePickerProps {
 }
 
 export function AgePicker({ value, onValueChange, disabled = false }: AgePickerProps) {
-  const theme = useTheme()
-
   return (
     <DiscreteSlider
       nodes={AGE_NODES}
       value={value}
       onValueChange={onValueChange}
       disabled={disabled}
-      centerLabel={formatAgeLabel(value)}
+      centerLabel={`${value}岁`}
       showLeftLabel={true}
       showRightLabel={true}
       showCenterLabel={true}
     />
   )
 }
-

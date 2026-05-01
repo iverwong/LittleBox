@@ -19,6 +19,8 @@ import {
   Pressable,
 } from 'react-native'
 import { Stack, useRouter } from 'expo-router'
+import { Ionicons } from '@expo/vector-icons'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { useTheme } from '@/theme'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
@@ -112,8 +114,22 @@ export default function NewChildScreen() {
 
   return (
     <>
-      <Stack.Screen options={{ title: '添加孩子' }} />
-      <View style={[styles.root, { backgroundColor: theme.palette.neutral[50] }]}>
+      <Stack.Screen options={{ headerShown: false }} />
+      <SafeAreaView
+        style={[styles.root, { backgroundColor: theme.surface.paper }]}
+        edges={['top', 'left', 'right']}
+      >
+        <View style={styles.topBar}>
+          <Pressable
+            onPress={() => router.back()}
+            hitSlop={12}
+            style={({ pressed }) => [styles.backButton, { opacity: pressed ? 0.5 : 1 }]}
+            accessibilityRole="button"
+            accessibilityLabel="返回"
+          >
+            <Ionicons name="chevron-back" size={24} color={theme.palette.secondary[600]} />
+          </Pressable>
+        </View>
         <KeyboardAvoidingView
           style={styles.flex1}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -125,6 +141,9 @@ export default function NewChildScreen() {
           >
             <View style={styles.mascotWrapper}>
               <Mascot size="lg" />
+              <Text style={[styles.subtitle, { color: theme.palette.neutral[500] }]}>
+                给孩子填一些基本信息
+              </Text>
             </View>
             {/* 昵称 */}
             <View style={styles.field}>
@@ -193,7 +212,7 @@ export default function NewChildScreen() {
             </Button>
           </ScrollView>
         </KeyboardAvoidingView>
-      </View>
+      </SafeAreaView>
     </>
   )
 }
@@ -201,6 +220,19 @@ export default function NewChildScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1 },
   flex1: { flex: 1 },
+  topBar: {
+    flexDirection: 'row',
+    paddingHorizontal: 8,
+    paddingTop: 4,
+  },
+  backButton: {
+    padding: 8,
+  },
+  subtitle: {
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 12,
+  },
   scrollContent: {
     flexGrow: 1,
     padding: 24,
