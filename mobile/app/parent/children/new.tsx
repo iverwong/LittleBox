@@ -124,7 +124,7 @@ export default function NewChildScreen() {
             showsVerticalScrollIndicator={false}
           >
             <View style={styles.mascotWrapper}>
-              <Mascot size="md" />
+              <Mascot size="lg" />
             </View>
             {/* 昵称 */}
             <View style={styles.field}>

@@ -1,17 +1,18 @@
 /**
- * parent/children/index.tsx — children list page (M5 F4).
+ * parent/children/index.tsx — children list page (M5 F5.1).
  *
- * Features:
- * - FlatList with skeleton loading state (3 placeholder cards)
- * - Pull-to-refresh + useFocusEffect refetch
- * - Child cards: GenderAvatar + nickname·age + chevron + primary action button + trash
- * - + button (header right): quota guard → Toast or navigate to /parent/children/new
- * - All three onPress stubs (ListItem / primary button / trash) are toast-only in F4;
- *   F5 will wire them to real modals.
+ * F5.1 重构：
+ * - 去 Stack.Screen header；Mascot 锚定页面身份
+ * - 空态：Mascot lg + 提示「点击下方按钮添加您的孩子」+ 主按钮「添加第一个孩子」
+ * - 列表态：Mascot md + 提示「这里是你的孩子们」+ 列表 + 列表下方主按钮「添加孩子（X/3）」
+ * - 满 3 个：按钮真 disabled，无 toast（文案 X/3 自带语义,F4.6 偏差反修)
+ * - 失败态：保留 EmptyState 重试卡片(首次加载失败)
+ * - F4.7 ActivityIndicator 首次加载方案保留;SkeletonCard 已废弃,清理
  *
- * API contract (backend M4.8):
- *   GET /children  → { children: ChildSummary[] }
- *   ChildSummary: { id, nickname, birth_date, gender, is_bound }
+ * F5 后续小步会接：
+ * - ChildCard onPress    → /parent/children/[id]/settings (F5.6)
+ * - handlePrimaryAction  → BindQrModal / OfflineConfirmModal (F5.3 / F5.4)
+ * - handleTrashPress     → DeleteChildConfirmModal (F5.5)
  */
 import { useCallback, useRef, useState } from 'react'
 import {
@@ -22,8 +23,9 @@ import {
   Pressable,
   StyleSheet,
   ActivityIndicator,
-
+  ScrollView,
 } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { Stack, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useFocusEffect } from '@react-navigation/native'
@@ -54,20 +56,6 @@ interface ChildSummary {
 }
 
 // ---------------------------------------------------------------------------
-// Skeleton card (shown while loading)
-// ---------------------------------------------------------------------------
-
-function SkeletonCard() {
-  const theme = useTheme()
-  return (
-    <Card variant="outlined" padding={0} style={{ marginBottom: theme.spacing[3] }}>
-      <View style={[styles.skeletonInfoRow, { backgroundColor: theme.palette.neutral[100] }]} />
-      <View style={[styles.skeletonActionRow, { backgroundColor: theme.palette.neutral[50] }]} />
-    </Card>
-  )
-}
-
-// ---------------------------------------------------------------------------
 // Child card
 // ---------------------------------------------------------------------------
 
@@ -82,7 +70,7 @@ function ChildCard({ child }: ChildCardProps) {
   const redline = theme.report.redline
 
   const handleListItemPress = useCallback(() => {
-    toast.show({ message: '孩子详情页 F5 上线', variant: 'info', duration: 1500 })
+    toast.show({ message: '孩子设置页 F5 上线', variant: 'info', duration: 1500 })
   }, [])
 
   const handlePrimaryAction = useCallback(() => {
@@ -94,8 +82,7 @@ function ChildCard({ child }: ChildCardProps) {
   }, [])
 
   return (
-    <Card variant="outlined" padding={0} style={{ marginBottom: theme.spacing[3] }}>
-      {/* 信息区：整块 Pressable → settings 占位 */}
+    <Card variant="outlined" padding={0} style={styles.cardSpacing}>
       <ListItem
         leading={<GenderAvatar gender={child.gender} size={48} />}
         title={`${child.nickname} · ${age}岁`}
@@ -109,12 +96,11 @@ function ChildCard({ child }: ChildCardProps) {
         onPress={handleListItemPress}
         divider
       />
-      {/* 操作行：Card 的子兄弟元素，不在 ListItem 内，零嵌套 */}
       <View style={styles.actionRow}>
         <Button
           variant="primary"
           size="md"
-          style={{ flex: 1 }}
+          style={styles.flex1}
           onPress={handlePrimaryAction}
         >
           {primaryActionLabel}
@@ -146,10 +132,8 @@ export default function ChildrenIndexScreen() {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(false)
 
-  // In-flight request controller for cleanup on unmount / re-run
   const abortRef = useRef<AbortController | null>(null)
   const isInitialLoadRef = useRef(true)
-
 
   const fetchChildren = useCallback(async () => {
     if (abortRef.current) abortRef.current.abort()
@@ -183,7 +167,9 @@ export default function ChildrenIndexScreen() {
         setError(false)
       }
       fetchChildren()
-      return () => { abortRef.current?.abort() }
+      return () => {
+        abortRef.current?.abort()
+      }
     }, [fetchChildren]),
   )
 
@@ -194,11 +180,8 @@ export default function ChildrenIndexScreen() {
   }, [fetchChildren])
 
   const handleAddPress = useCallback(() => {
-    if ((children?.length ?? 0) >= QUOTA) {
-      toast.show({ message: '最多 3 个孩子，请先删除已有', variant: 'error', duration: 3000 })
-      return
-    }
-    ; (router.push as (href: string) => void)('/parent/children/new')
+    if ((children?.length ?? 0) >= QUOTA) return
+      ; (router.push as (href: string) => void)('/parent/children/new')
   }, [children, router])
 
   const renderItem = useCallback(
@@ -206,91 +189,90 @@ export default function ChildrenIndexScreen() {
     [],
   )
 
-  const renderSkeleton = useCallback(
-    () => (
-      <View>
-        <SkeletonCard />
-        <SkeletonCard />
-        <SkeletonCard />
-      </View>
-    ),
-    [],
-  )
-
-  const renderEmpty = useCallback(() => {
-    if (loading || error) return null
-    return (
-      <View style={styles.emptyContainer}>
-        <Mascot size="lg" />
-        <Text style={[styles.emptyText, { color: theme.palette.neutral[400] }]}>
-          点右上 + 添加你的第一个孩子
-        </Text>
-      </View>
-    )
-  }, [loading, error, theme])
-
-  const renderError = useCallback(() => {
-    if (!error) return null
-    return (
-      <EmptyState
-        icon="alert-circle"
-        title="加载失败"
-        description="请检查网络后重试"
-        action={
-          <Button variant="ghost" size="md" onPress={fetchChildren}>
-            点击重试
-          </Button>
-        }
-      />
-    )
-  }, [error, fetchChildren])
-
-  const atQuota = (children?.length ?? 0) >= QUOTA
+  const childCount = children?.length ?? 0
+  const atQuota = childCount >= QUOTA
 
   return (
     <>
-      <Stack.Screen
-        options={{
-          title: '我的孩子',
-          headerRight: () => (
-            <Pressable
-              onPress={handleAddPress}
-              accessibilityRole="button"
-              accessibilityLabel={atQuota ? '已达孩子数量上限' : '添加孩子'}
-              hitSlop={12}
-              style={({ pressed }) => [
-                styles.headerAddButton,
-                { opacity: pressed ? 0.5 : 1 },
-              ]}
-            >
-              <Ionicons name="add" size={26} color="white" />
-            </Pressable>
-          ),
-        }}
-      />
+      <Stack.Screen options={{ headerShown: false }} />
 
-      <View style={[styles.container, { backgroundColor: theme.surface.paper }]}>
+      <SafeAreaView
+        style={[styles.container, { backgroundColor: theme.surface.paper }]}
+        edges={['top', 'left', 'right']}
+      >
         {loading && !refreshing ? (
-          <View style={styles.loadingContainer}>
+          <View style={styles.centerBox}>
             <ActivityIndicator size="large" color={theme.palette.primary[500]} />
           </View>
+        ) : error ? (
+          <ScrollView
+            contentContainerStyle={styles.centerBox}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+            }
+          >
+            <EmptyState
+              icon="alert-circle"
+              title="加载失败"
+              description="请检查网络后重试"
+              action={
+                <Button variant="ghost" size="md" onPress={fetchChildren}>
+                  点击重试
+                </Button>
+              }
+            />
+          </ScrollView>
+        ) : childCount === 0 ? (
+          <ScrollView
+            contentContainerStyle={styles.emptyContent}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+            }
+          >
+            <Mascot size="lg" />
+            <Text style={[styles.subtitle, { color: theme.palette.neutral[500] }]}>
+              点击下方按钮添加您的孩子
+            </Text>
+            <Button
+              variant="primary"
+              size="md"
+              style={styles.fullButton}
+              onPress={handleAddPress}
+            >
+              添加第一个孩子
+            </Button>
+          </ScrollView>
         ) : (
           <FlatList
             data={children ?? []}
             renderItem={renderItem}
-            ListHeaderComponent={renderError}
-            ListEmptyComponent={renderEmpty}
             keyExtractor={(item) => item.id}
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
             }
-            contentContainerStyle={[
-              styles.listContent,
-              (children?.length ?? 0) === 0 && styles.listContentEmpty,
-            ]}
+            ListHeaderComponent={
+              <View style={styles.listHeader}>
+                <Mascot size="md" />
+                <Text style={[styles.subtitle, { color: theme.palette.neutral[500] }]}>
+                  这里是你的孩子们
+                </Text>
+              </View>
+            }
+            ListFooterComponent={
+              <Button
+                variant="primary"
+                size="md"
+                style={styles.fullButton}
+                onPress={handleAddPress}
+                disabled={atQuota}
+              >
+                {`添加孩子（${childCount}/${QUOTA}）`}
+              </Button>
+            }
+            contentContainerStyle={styles.listContent}
           />
         )}
-      </View>
+      </SafeAreaView>
     </>
   )
 }
@@ -301,10 +283,40 @@ export default function ChildrenIndexScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  listContent: { padding: 16 },
-  listContentEmpty: { flex: 1 },
-  skeletonInfoRow: { height: 72 },
-  skeletonActionRow: { height: 52 },
+  flex1: { flex: 1 },
+  centerBox: {
+    flexGrow: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  emptyContent: {
+    flexGrow: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+    gap: 16,
+  },
+  listContent: {
+    padding: 16,
+  },
+  listHeader: {
+    alignItems: 'center',
+    paddingTop: 8,
+    paddingBottom: 24,
+    gap: 12,
+  },
+  subtitle: {
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  fullButton: {
+    width: '100%',
+    marginTop: 16,
+  },
+  cardSpacing: {
+    marginBottom: 12,
+  },
   actionRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -315,28 +327,5 @@ const styles = StyleSheet.create({
   trashIconButton: {
     padding: 4,
     marginLeft: 4,
-  },
-  emptyContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 80,
-    gap: 16,
-  },
-  emptyText: {
-    fontSize: 14,
-    textAlign: 'center',
-  },
-  headerAddButton: {
-    width: 32,
-    height: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 8,
-  },
-  loadingContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 })
