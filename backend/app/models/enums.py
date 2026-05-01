@@ -16,6 +16,11 @@ class SessionStatus(str, enum.Enum):
     deleted = "deleted"
 
 
+class MessageStatus(str, enum.Enum):
+    active = "active"
+    discarded = "discarded"
+
+
 class MessageRole(str, enum.Enum):
     human = "human"
     ai = "ai"
