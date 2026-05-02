@@ -106,19 +106,19 @@ class TestBuildSystemPrompt:
 
     def test_rejects_extra_field_concerns(self) -> None:
         with pytest.raises(TypeError):
-            build_system_prompt(12, "male", concerns="test")
+            build_system_prompt(12, "male", concerns="test")  # pyright: ignore[reportCallIssue]
 
     def test_rejects_extra_field_sensitivity(self) -> None:
         with pytest.raises(TypeError):
-            build_system_prompt(12, "male", sensitivity=0.5)
+            build_system_prompt(12, "male", sensitivity=0.5)  # pyright: ignore[reportCallIssue]
 
     def test_rejects_extra_field_custom_redlines(self) -> None:
         with pytest.raises(TypeError):
-            build_system_prompt(12, "male", custom_redlines=["x"])
+            build_system_prompt(12, "male", custom_redlines=["x"])  # pyright: ignore[reportCallIssue]
 
     def test_rejects_extra_field_birth_date(self) -> None:
         with pytest.raises(TypeError):
-            build_system_prompt(12, "male", birth_date=date(2013, 3, 1))
+            build_system_prompt(12, "male", birth_date=date(2013, 3, 1))  # pyright: ignore[reportCallIssue]
 
     def test_content_rejects_dict_fields(self) -> None:
         """运行时：content 字符串不包含字段名字面值。"""
