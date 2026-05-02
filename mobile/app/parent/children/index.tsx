@@ -72,6 +72,7 @@ function ChildCard({ child, onChildStateChanged: onChildStateChanged }: ChildCar
   const age = birthDateToAge(child.birth_date)
   const primaryActionLabel = child.is_bound ? '下线设备' : '绑定设备'
   const dangerColor = theme.ui.error
+  const router = useRouter()
 
   const [bindModalVisible, setBindModalVisible] = useState(false)
   const [offlineModalVisible, setOfflineModalVisible] = useState(false)
@@ -80,8 +81,8 @@ function ChildCard({ child, onChildStateChanged: onChildStateChanged }: ChildCar
   const [deleting, setDeleting] = useState(false)
 
   const handleListItemPress = useCallback(() => {
-    toast.show({ message: '孩子设置页 F5 上线', variant: 'info', duration: 1500 })
-  }, [])
+    router.push(`/parent/children/${child.id}/settings` as never)
+  }, [child.id])
 
   const handlePrimaryAction = useCallback(() => {
     if (child.is_bound) {
