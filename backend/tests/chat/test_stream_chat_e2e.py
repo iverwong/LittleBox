@@ -6,13 +6,12 @@
 - 不依赖 astream_events / on_chat_model_stream
 """
 import json
-from unittest.mock import patch
 
 import pytest
 from langchain_core.messages import AIMessageChunk
 
 from app.chat import sse
-from app.chat.dashscope_chat import get_chat_llm
+from app.chat.factory import get_chat_llm
 
 
 def _parse_sse_frames(raw_frames: list[str]) -> list[dict]:

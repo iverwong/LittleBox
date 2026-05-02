@@ -15,7 +15,7 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
-from app.chat.dashscope_chat import get_chat_llm
+from app.chat.factory import get_chat_llm
 
 
 class ChatState(TypedDict):

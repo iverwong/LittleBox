@@ -1,6 +1,6 @@
 """Tests for app.chat.locks — throttle lock, session lock, Lua release."""
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
