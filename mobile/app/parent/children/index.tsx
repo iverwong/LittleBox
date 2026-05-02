@@ -62,13 +62,14 @@ interface ChildSummary {
 
 interface ChildCardProps {
   child: ChildSummary
+  onChildBound?: () => void
 }
 
-function ChildCard({ child }: ChildCardProps) {
+function ChildCard({ child, onChildBound }: ChildCardProps) {
   const theme = useTheme()
   const age = birthDateToAge(child.birth_date)
   const primaryActionLabel = child.is_bound ? '下线设备' : '绑定设备'
-  const redline = theme.report.redline
+  const dangerColor = theme.ui.error
 
   const [bindModalVisible, setBindModalVisible] = useState(false)
 
@@ -106,7 +107,7 @@ function ChildCard({ child }: ChildCardProps) {
         />
         <View style={styles.actionRow}>
           <Button
-            variant="primary"
+            variant={child.is_bound ? "danger" : "primary"}
             size="md"
             style={styles.flex1}
             onPress={handlePrimaryAction}
@@ -118,7 +119,7 @@ function ChildCard({ child }: ChildCardProps) {
             hitSlop={8}
             style={styles.trashIconButton}
           >
-            <Ionicons name="trash-outline" size={20} color={redline} />
+            <Ionicons name="trash-outline" size={20} color={dangerColor} />
           </Pressable>
         </View>
       </Card>
@@ -127,6 +128,7 @@ function ChildCard({ child }: ChildCardProps) {
         onClose={() => setBindModalVisible(false)}
         childId={child.id}
         childNickname={child.nickname}
+        onBindSuccess={onChildBound}
       />
     </>
   )
@@ -200,8 +202,8 @@ export default function ChildrenIndexScreen() {
   }, [children, router])
 
   const renderItem = useCallback(
-    ({ item }: { item: ChildSummary }) => <ChildCard child={item} />,
-    [],
+    ({ item }: { item: ChildSummary }) => <ChildCard child={item} onChildBound={fetchChildren} />,
+    [fetchChildren],
   )
 
   const childCount = children?.length ?? 0
