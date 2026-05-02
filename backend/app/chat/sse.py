@@ -98,17 +98,18 @@ async def stream_chat(user_message: str, session_id: str) -> AsyncIterator[str]:
     通过 get_stream_writer() 发送增量。
     """
     yield _sse_pack("start", session_id=session_id)
-
+    finish_reason = "stop"  # 兜底默认值
     try:
         async for payload in main_graph.astream(
             {"messages": [HumanMessage(content=user_message)]},
             stream_mode="custom",
         ):
-            # stream_mode="custom" 时每次 yield 一个 dict（writer({...}) 的字典）
             if "delta" in payload:
                 yield _sse_pack("delta", content=payload["delta"])
             elif "finish_reason" in payload:
-                yield _sse_pack("end", finish_reason=payload["finish_reason"])
+                finish_reason = payload["finish_reason"]
+        # 循环正常结束兜底发 end 帧（即使节点漏 writer finish_reason）
+        yield _sse_pack("end", finish_reason=finish_reason)
     except asyncio.CancelledError, ClientDisconnect, anyio.BrokenResourceError:
         raise
     except Exception as exc:

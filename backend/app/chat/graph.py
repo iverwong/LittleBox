@@ -46,8 +46,8 @@ async def call_main_llm(state: ChatState) -> dict[str, list[BaseMessage]]:
         if text:
             writer({"delta": text})
             parts.append(text)
-        # finish_reason 透传（白名单：stop / length / content_filter）
-        fr = chunk.additional_kwargs.get("response_metadata", {}).get("finish_reason")
+        # finish_reason 透传（顶层 response_metadata，langchain-openai 标准位置）
+        fr = (chunk.response_metadata or {}).get("finish_reason")
         if fr:
             writer({"finish_reason": fr})
     return {"messages": [AIMessage(content="".join(parts))]}
