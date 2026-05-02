@@ -42,6 +42,7 @@ import { birthDateToAge } from '@/lib/birthDateUtils'
 import { Mascot } from '@/components/mascot/Mascot'
 import { BindQrModal } from '@/components/business/BindQrModal'
 import { OfflineConfirmModal } from '@/components/business/OfflineConfirmModal'
+import { DeleteChildConfirmModal } from '@/components/business/DeleteChildConfirmModal'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -66,7 +67,7 @@ interface ChildCardProps {
   onChildStateChanged?: () => void
 }
 
-function ChildCard({ child, onChildStateChanged: onChildBound }: ChildCardProps) {
+function ChildCard({ child, onChildStateChanged: onChildStateChanged }: ChildCardProps) {
   const theme = useTheme()
   const age = birthDateToAge(child.birth_date)
   const primaryActionLabel = child.is_bound ? '下线设备' : '绑定设备'
@@ -74,7 +75,9 @@ function ChildCard({ child, onChildStateChanged: onChildBound }: ChildCardProps)
 
   const [bindModalVisible, setBindModalVisible] = useState(false)
   const [offlineModalVisible, setOfflineModalVisible] = useState(false)
+  const [deleteModalVisible, setDeleteModalVisible] = useState(false)
   const [revoking, setRevoking] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   const handleListItemPress = useCallback(() => {
     toast.show({ message: '孩子设置页 F5 上线', variant: 'info', duration: 1500 })
@@ -102,12 +105,33 @@ function ChildCard({ child, onChildStateChanged: onChildBound }: ChildCardProps)
       variant: 'success',
       duration: 1500,
     })
-    onChildBound?.()
-  }, [child.id, child.nickname, onChildBound])
+    onChildStateChanged?.()
+  }, [child.id, child.nickname, onChildStateChanged])
 
   const handleTrashPress = useCallback(() => {
-    toast.show({ message: '删除功能开发中', variant: 'info', duration: 1500 })
+    setDeleteModalVisible(true)
   }, [])
+
+  const handleConfirmDelete = useCallback(async () => {
+    setDeleteModalVisible(false)
+    setDeleting(true)
+    const res = await api.delete<void>(`/children/${child.id}`)
+    setDeleting(false)
+    if (!res.ok) {
+      toast.show({
+        message: '删除失败,请稍后重试',
+        variant: 'error',
+        duration: 3000,
+      })
+      return
+    }
+    toast.show({
+      message: `${child.nickname} 已删除`,
+      variant: 'success',
+      duration: 1500,
+    })
+    onChildStateChanged?.()
+  }, [child.id, child.nickname, onChildStateChanged])
 
   return (
     <>
@@ -129,18 +153,24 @@ function ChildCard({ child, onChildStateChanged: onChildBound }: ChildCardProps)
           <Button
             variant={child.is_bound ? 'danger' : 'primary'}
             size="md"
-            style={styles.flex1}
             loading={revoking}
+            disabled={deleting}
+            style={styles.flex1}
             onPress={handlePrimaryAction}
           >
             {primaryActionLabel}
           </Button>
           <Pressable
             onPress={handleTrashPress}
+            disabled={deleting || revoking}
             hitSlop={8}
             style={styles.trashIconButton}
           >
-            <Ionicons name="trash-outline" size={20} color={dangerColor} />
+            {deleting ? (
+              <ActivityIndicator size="small" color={dangerColor} />
+            ) : (
+              <Ionicons name="trash-outline" size={20} color={dangerColor} />
+            )}
           </Pressable>
         </View>
       </Card>
@@ -149,12 +179,18 @@ function ChildCard({ child, onChildStateChanged: onChildBound }: ChildCardProps)
         onClose={() => setBindModalVisible(false)}
         childId={child.id}
         childNickname={child.nickname}
-        onBindSuccess={onChildBound}
+        onBindSuccess={onChildStateChanged}
       />
       <OfflineConfirmModal
         visible={offlineModalVisible}
         onClose={() => setOfflineModalVisible(false)}
         onConfirm={handleConfirmOffline}
+        childNickname={child.nickname}
+      />
+      <DeleteChildConfirmModal
+        visible={deleteModalVisible}
+        onClose={() => setDeleteModalVisible(false)}
+        onConfirm={handleConfirmDelete}
         childNickname={child.nickname}
       />
     </>

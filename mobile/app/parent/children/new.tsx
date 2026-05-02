@@ -34,7 +34,7 @@ import { GenderAvatar } from '@/components/business/GenderAvatar'
 
 type Gender = 'male' | 'female' | 'unknown'
 
-const NICKNAME_MAX = 32
+export const NICKNAME_MAX = 32
 const DEFAULT_AGE = 12
 
 const GENDER_OPTIONS: Array<{ value: Gender; label: string }> = [
