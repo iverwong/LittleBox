@@ -36,7 +36,7 @@ export function useBindRedeem(options?: {
     );
 
     if (result.ok) {
-      setSession({
+      await setSession({
         role: 'child',
         token: result.data.token,
         userId: result.data.account.id,
