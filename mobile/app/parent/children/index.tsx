@@ -41,6 +41,7 @@ import { GenderAvatar } from '@/components/business/GenderAvatar'
 import { birthDateToAge } from '@/lib/birthDateUtils'
 import { Mascot } from '@/components/mascot/Mascot'
 import { BindQrModal } from '@/components/business/BindQrModal'
+import { OfflineConfirmModal } from '@/components/business/OfflineConfirmModal'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -62,16 +63,18 @@ interface ChildSummary {
 
 interface ChildCardProps {
   child: ChildSummary
-  onChildBound?: () => void
+  onChildStateChanged?: () => void
 }
 
-function ChildCard({ child, onChildBound }: ChildCardProps) {
+function ChildCard({ child, onChildStateChanged: onChildBound }: ChildCardProps) {
   const theme = useTheme()
   const age = birthDateToAge(child.birth_date)
   const primaryActionLabel = child.is_bound ? '下线设备' : '绑定设备'
   const dangerColor = theme.ui.error
 
   const [bindModalVisible, setBindModalVisible] = useState(false)
+  const [offlineModalVisible, setOfflineModalVisible] = useState(false)
+  const [revoking, setRevoking] = useState(false)
 
   const handleListItemPress = useCallback(() => {
     toast.show({ message: '孩子设置页 F5 上线', variant: 'info', duration: 1500 })
@@ -79,11 +82,28 @@ function ChildCard({ child, onChildBound }: ChildCardProps) {
 
   const handlePrimaryAction = useCallback(() => {
     if (child.is_bound) {
-      toast.show({ message: '下线设备 F5 即将接入', variant: 'info', duration: 1500 })
+      setOfflineModalVisible(true)
       return
     }
     setBindModalVisible(true)
   }, [child.is_bound])
+
+  const handleConfirmOffline = useCallback(async () => {
+    setOfflineModalVisible(false)
+    setRevoking(true)
+    const res = await api.post(`/children/${child.id}/revoke-tokens`, {})
+    setRevoking(false)
+    if (!res.ok) {
+      toast.show({ message: '下线失败,请稍后重试', variant: 'error', duration: 3000 })
+      return
+    }
+    toast.show({
+      message: `${child.nickname} 的设备已下线`,
+      variant: 'success',
+      duration: 1500,
+    })
+    onChildBound?.()
+  }, [child.id, child.nickname, onChildBound])
 
   const handleTrashPress = useCallback(() => {
     toast.show({ message: '删除功能开发中', variant: 'info', duration: 1500 })
@@ -107,9 +127,10 @@ function ChildCard({ child, onChildBound }: ChildCardProps) {
         />
         <View style={styles.actionRow}>
           <Button
-            variant={child.is_bound ? "danger" : "primary"}
+            variant={child.is_bound ? 'danger' : 'primary'}
             size="md"
             style={styles.flex1}
+            loading={revoking}
             onPress={handlePrimaryAction}
           >
             {primaryActionLabel}
@@ -129,6 +150,12 @@ function ChildCard({ child, onChildBound }: ChildCardProps) {
         childId={child.id}
         childNickname={child.nickname}
         onBindSuccess={onChildBound}
+      />
+      <OfflineConfirmModal
+        visible={offlineModalVisible}
+        onClose={() => setOfflineModalVisible(false)}
+        onConfirm={handleConfirmOffline}
+        childNickname={child.nickname}
       />
     </>
   )
@@ -202,7 +229,7 @@ export default function ChildrenIndexScreen() {
   }, [children, router])
 
   const renderItem = useCallback(
-    ({ item }: { item: ChildSummary }) => <ChildCard child={item} onChildBound={fetchChildren} />,
+    ({ item }: { item: ChildSummary }) => <ChildCard child={item} onChildStateChanged={fetchChildren} />,
     [fetchChildren],
   )
 
