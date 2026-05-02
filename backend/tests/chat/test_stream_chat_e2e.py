@@ -214,8 +214,9 @@ async def test_stream_chat_finish_reason_tool_calls_not_emitted(monkeypatch) -> 
 
     parsed = _parse_sse_frames(frames)
     end_frames = [p for p in parsed if p["type"] == "end"]
-    # tool_calls 不透传：既无 end 帧，也无 finish_reason
-    assert len(end_frames) == 0
+    # tool_calls 不在白名单：graph 不写 finish_reason，stream_chat 兜底 emit stop
+    assert len(end_frames) == 1
+    assert end_frames[0]["finish_reason"] == "stop"
     # 有 delta（最后一个 content chunk）
     delta_frames = [p for p in parsed if p["type"] == "delta"]
     assert len(delta_frames) == 1

@@ -27,14 +27,19 @@ class ChatState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
 
+ALLOWED_FINISH_REASONS = frozenset({"stop", "length", "content_filter"})
+
+
 async def call_main_llm(state: ChatState) -> dict[str, list[BaseMessage]]:
     """唯一节点：调用 qwen3.5-flash 生成回复。
 
     使用 llm.astream（流式）逐 chunk yield，通过 LangGraph get_stream_writer()
     发送增量。流式由 stream_chat 的 custom stream mode 路径处理。
 
-    finish_reason 透传：dashscope_chat 把 finish_reason 写在
-    chunk.additional_kwargs["response_metadata"]["finish_reason"]（白名单：stop/length/content_filter）。
+    finish_reason 透传：DashScope SDK `choice.finish_reason` 命中白名单
+    stop / length / content_filter 时，写入末 chunk 的 response_metadata。
+    其他值（tool_calls / function_call 等）不写 writer，由 stream_chat
+    兜底 emit stop。
 
     注意：本节点不写 DB，DB 写入收敛到 me.py generator（Step 8b T5 唯一写入点）。
     """
@@ -46,9 +51,11 @@ async def call_main_llm(state: ChatState) -> dict[str, list[BaseMessage]]:
         if text:
             writer({"delta": text})
             parts.append(text)
-        # finish_reason 透传（顶层 response_metadata，langchain-openai 标准位置）
-        fr = (chunk.response_metadata or {}).get("finish_reason")
-        if fr:
+        # finish_reason 透传（白名单过滤；非白名单值不写 writer，stream_chat 兜底 stop）
+        # AIMessageChunk.response_metadata is {}; real finish_reason in additional_kwargs
+        ak = chunk.additional_kwargs or {}
+        fr = ak.get("response_metadata", {}).get("finish_reason")
+        if fr in ALLOWED_FINISH_REASONS:
             writer({"finish_reason": fr})
     return {"messages": [AIMessage(content="".join(parts))]}
 
