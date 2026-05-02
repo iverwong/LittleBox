@@ -91,7 +91,7 @@ function ChildCard({ child, onChildStateChanged: onChildBound }: ChildCardProps)
   const handleConfirmOffline = useCallback(async () => {
     setOfflineModalVisible(false)
     setRevoking(true)
-    const res = await api.post(`/children/${child.id}/revoke-tokens`, {})
+    const res = await api.post<void>(`/children/${child.id}/revoke-tokens`, {})
     setRevoking(false)
     if (!res.ok) {
       toast.show({ message: '下线失败,请稍后重试', variant: 'error', duration: 3000 })

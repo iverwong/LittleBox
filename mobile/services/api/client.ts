@@ -165,7 +165,15 @@ async function request<T>(
   }
 
   if (res.ok) {
-    return { ok: true, data: await res.json() };
+    // 兼容 200/204 + 空 body 的 mutation（如 revoke-tokens / DELETE /children）
+    const text = await res.text();
+    try {
+      const data = text ? (JSON.parse(text) as T) : (null as T);
+      return { ok: true, data };
+    } catch {
+      // 非 JSON 文本（理论上不应出现）→ 等同空 body 处理，不报错
+      return { ok: true, data: null as T };
+    }
   }
 
   const errBody = await res.json().catch(() => null);

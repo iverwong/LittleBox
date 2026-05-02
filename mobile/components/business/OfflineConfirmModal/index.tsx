@@ -44,7 +44,7 @@ export function OfflineConfirmModal({
         >
             <View style={styles.body}>
                 <Text style={[styles.bodyText, { color: theme.palette.neutral[700] }]}>
-                    下线后,
+                    下线后，
                     <Text style={{ fontWeight: '600' }} >{childNickname}</Text>
                     {' '}的设备会立即退出登录,需要重新扫码绑定才能继续使用。
                 </Text>
