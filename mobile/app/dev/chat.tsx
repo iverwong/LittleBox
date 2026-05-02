@@ -8,7 +8,8 @@ type Status = 'idle' | 'streaming' | 'done' | 'error'
 
 // 开发地址：Android 模拟器用 10.0.2.2，iOS 模拟器 / web 用 localhost，真机用电脑局域网 IP。
 // 生产走 EXPO_PUBLIC_API_BASE 环境变量；M7 清理时此常量一并删除。
-const API_BASE = 'http://192.168.0.229:8000'
+// 网络环境变化时，host ip需要修改后方可进行测试
+const API_BASE = 'http://192.168.1.3:50060'
 
 export default function DevChat() {
 	const [input, setInput] = useState('')
