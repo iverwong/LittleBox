@@ -7,15 +7,16 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from redis.asyncio import Redis
-from sqlalchemy import exists, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import require_parent
 from app.auth.redis_client import get_redis
 from app.auth.redis_ops import commit_with_redis
 from app.auth.tokens import revoke_all_active_tokens
+from app.config import settings
 from app.db import get_db
-from app.models.accounts import AuthToken, ChildProfile, FamilyMember, User
+from app.models.accounts import AuthToken, ChildProfile, Family, FamilyMember, User
 from app.models.enums import UserRole
 from app.schemas.accounts import CurrentAccount
 from app.schemas.children import ChildSummary, CreateChildRequest, ListChildrenResponse
@@ -33,6 +34,26 @@ async def create_child(
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> ChildSummary:
     """父账号创建一个子账号：users(role=child) + child_profiles + family_members。"""
+    # M5 hotfix: family child count limit — SELECT FOR UPDATE + COUNT within same tx
+    # Acquire row-level lock on the family row before counting
+    await db.execute(
+        select(Family)
+        .where(Family.id == parent.family_id)
+        .with_for_update()
+    )
+    child_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(User)
+            .where(
+                User.family_id == parent.family_id,
+                User.role == UserRole.child,
+            )
+        )
+    ).scalar_one()
+    if child_count >= settings.max_children_per_family:
+        raise HTTPException(status_code=409, detail="ChildLimitReached")
+
     child = User(
         family_id=parent.family_id,
         role=UserRole.child,

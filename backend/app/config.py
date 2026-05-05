@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     bailian_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     bailian_model: str = "deepseek-v4-flash"
     llm_request_timeout_seconds: float = 60.0
+    # M5 hotfix: family child count limit
+    max_children_per_family: int = 3
 
     model_config = {"env_prefix": "LB_", "env_file": ".env"}
 
