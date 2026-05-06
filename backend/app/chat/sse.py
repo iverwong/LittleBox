@@ -25,6 +25,7 @@ from langchain_core.messages import AIMessageChunk, HumanMessage
 from starlette.requests import ClientDisconnect
 
 from app.chat.graph import main_graph
+from app.chat.state import MainDialogueState
 
 logger = logging.getLogger(__name__)
 
@@ -100,10 +101,20 @@ async def stream_chat(user_message: str, session_id: str) -> AsyncIterator[str]:
     yield _sse_pack("start", session_id=session_id)
     finish_reason = "stop"  # 兜底默认值
     try:
-        async for payload in main_graph.astream(
-            {"messages": [HumanMessage(content=user_message)]},
-            stream_mode="custom",
-        ):
+        # M6 graph expects MainDialogueState; fields not read by call_main_llm
+        # are populated by load_audit_state node (audit_state / pending_guidance)
+        initial_state: MainDialogueState = {
+            "session_id": session_id,
+            "child_user_id": "",
+            "child_profile": None,
+            "messages": [HumanMessage(content=user_message)],
+            "audit_state": {},
+            "pending_guidance": None,
+            "generated_token_count": 0,
+            "client_alive": True,
+            "user_stop_requested": False,
+        }
+        async for payload in main_graph.astream(initial_state, stream_mode="custom"):
             if "delta" in payload:
                 yield _sse_pack("delta", content=payload["delta"])
             elif "finish_reason" in payload:
