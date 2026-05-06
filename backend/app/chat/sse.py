@@ -100,10 +100,20 @@ async def stream_chat(user_message: str, session_id: str) -> AsyncIterator[str]:
     yield _sse_pack("start", session_id=session_id)
     finish_reason = "stop"  # 兜底默认值
     try:
-        async for payload in main_graph.astream(
-            {"messages": [HumanMessage(content=user_message)]},
-            stream_mode="custom",
-        ):
+        # M6 graph expects MainDialogueState; fields not read by call_main_llm
+        # are populated by load_audit_state node (audit_state / pending_guidance)
+        initial_state = {
+            "session_id": session_id,
+            "child_user_id": "",
+            "child_profile": None,
+            "messages": [HumanMessage(content=user_message)],
+            "audit_state": {},
+            "pending_guidance": None,
+            "generated_token_count": 0,
+            "client_alive": True,
+            "user_stop_requested": False,
+        }
+        async for payload in main_graph.astream(initial_state, stream_mode="custom"):  # type: ignore[arg-type]  # dev compat: MainDialogueState subset
             if "delta" in payload:
                 yield _sse_pack("delta", content=payload["delta"])
             elif "finish_reason" in payload:
