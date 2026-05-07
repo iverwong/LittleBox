@@ -386,7 +386,7 @@ async def chat_stream(
             # Row 1 or Row 2
             if req.regenerate_for is not None:
                 raise HTTPException(400, "RegenerateForInvalid")
-            # Row 1: first turn
+            # Row 1: first turn (INSERT human active)
             title = _truncate_title(req.content)
             session = SessionModel(
                 id=sid,
@@ -418,18 +418,13 @@ async def chat_stream(
             await db.flush()
             hid = human.id
         else:
-            # last_msg.role == 'human'
-            # "orphan" = no active AI message after this human
-            ai_check = (
-                await db.scalar(
-                    select(Message.id).where(
-                        Message.session_id == sid,
-                        Message.role == MessageRole.ai,
-                        Message.status == MessageStatus.active,
-                    ).limit(1)
-                )
-            )
-            is_orphan = ai_check is None
+            # last_msg.role == MessageRole.human
+            # Closing argument (Gate A): last_msg is the LATEST active row by
+            # ORDER BY created_at DESC, id DESC LIMIT 1.  A "non-orphan human" means
+            # an active AI row *strictly after* it — but that AI would itself be the
+            # "latest active row", contradicting the ORDER BY result.  Therefore
+            # "last active row is human" ⟺ "orphan" (exhaustive, no second query needed).
+            is_orphan = last_msg.role == MessageRole.human
 
             if is_orphan:
                 # Rows 5, 6, 7
@@ -459,33 +454,11 @@ async def chat_stream(
                     # Row 7: orphan + ≠hid → 400
                     raise HTTPException(400, "RegenerateForInvalid")
             else:
-                # not orphan (last is human with active AI after it)
-                # Rows 8, 9 (both INSERT by matrix)
-                if req.regenerate_for is None:
-                    # Row 8: not orphan + null → INSERT new human
-                    new_human = Message(
-                        session_id=sid,
-                        role=MessageRole.human,
-                        status=MessageStatus.active,
-                        content=req.content,
-                    )
-                    db.add(new_human)
-                    await db.flush()
-                    hid = new_human.id
-                elif req.regenerate_for == str(last_msg.id):
-                    # Row 9: not orphan + =hid → INSERT new human (by matrix)
-                    new_human = Message(
-                        session_id=sid,
-                        role=MessageRole.human,
-                        status=MessageStatus.active,
-                        content=req.content,
-                    )
-                    db.add(new_human)
-                    await db.flush()
-                    hid = new_human.id
-                else:
-                    # not orphan + ≠hid → 400
-                    raise HTTPException(400, "RegenerateForInvalid")
+                # Non-orphan human cannot be last active row (Gate A closing argument).
+                # This branch is unreachable — raise to catch future state-space bugs.
+                raise AssertionError(
+                    "unreachable: non-orphan human cannot be last active row"
+                )
 
         await db.commit()
 

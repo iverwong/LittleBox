@@ -15,7 +15,8 @@ Covers: decision-O 8 rows · throttle lock · session lock · title grapheme · 
 
 from __future__ import annotations
 
-from uuid import uuid4
+from datetime import UTC, datetime, timedelta
+from uuid import UUID, uuid4
 
 import pytest
 from fakeredis.aioredis import FakeRedis
@@ -439,10 +440,14 @@ async def test_decision_row7_orphan_history_regen(
 
 
 @pytest.mark.asyncio
-async def test_decision_row8_not_orphan_continuation(
+async def test_decision_row3_with_prior_human(
     api_client_with_eval, auth_headers_child, db_session
 ):
-    """Row 8: last is human with subsequent AI (not orphan) + null → INSERT human."""
+    """Row 3 sub-scenario: session has H1 + AI already, insert new human (H2).
+
+    Covers H1 (active) + A1 (active) + new human → 3 active rows.
+    This is the "non-orphan continuation" path: last_msg = AI, so we INSERT human.
+    """
     headers, child = auth_headers_child
     sid = uuid4()
 
@@ -477,13 +482,128 @@ async def test_decision_row8_not_orphan_continuation(
         .all()
     )
     assert len(msgs) == 3  # H1 + AI + H2
-    # UUID tiebreaker within same-second timestamps is non-deterministic across runs.
-    # Reliable check: the newest human message has content="H2 continuation" and is
-    # a different row from the pre-seeded H1 (human_id != new human id).
     human_msgs = [m for m in msgs if m.role == MessageRole.human]
     assert len(human_msgs) == 2
     new_human = next(m for m in human_msgs if m.id != human_id)
     assert new_human.content == "H2 continuation"
+
+
+# ---------------------------------------------------------------------------
+# Row 5 (with prior AI): orphan + regen=null → UPDATE old discarded + INSERT human
+# Setup: H1 + A1 + H2 (3 active), last=H2 human
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_decision_row5_with_prior_ai(
+    api_client_with_eval, auth_headers_child, db_session
+):
+    """Row 5: H1 + A1 + H2 active, regen=null → UPDATE H2 discarded + INSERT H3 active.
+
+    PG timestamp construction: explicit created_at ensures H2 is the confirmed last
+    active row by ORDER BY created_at DESC, id DESC — without explicit timestamps
+    PG now() inside a single transaction gives all three rows identical created_at,
+    making the last-row determination non-deterministic.
+    """
+    headers, child = auth_headers_child
+    sid = uuid4()
+
+    db_session.add(
+        SessionModel(id=sid, child_user_id=child.id, title="test", status=MessageStatus.active)
+    )
+    base = datetime.now(UTC)
+    h1 = Message(
+        session_id=sid, role=MessageRole.human, status=MessageStatus.active,
+        content="H1", created_at=base,
+    )
+    a1 = Message(
+        session_id=sid, role=MessageRole.ai, status=MessageStatus.active,
+        content="A1", created_at=base + timedelta(milliseconds=1),
+    )
+    h2 = Message(
+        session_id=sid, role=MessageRole.human, status=MessageStatus.active,
+        content="H2", created_at=base + timedelta(milliseconds=2),
+    )
+    db_session.add_all([h1, a1, h2])
+    await db_session.flush()
+    h2_id = h2.id
+    await db_session.commit()
+
+    body = make_payload(content="H3 content", session_id=str(sid))
+    resp = await api_client_with_eval.post("/api/v1/me/chat/stream", json=body, headers=headers)
+    assert resp.status_code == 200
+
+    frames = _parse_sse_stream(resp.text)
+    hid_in_meta = frames[0]["data"]["hid"]
+
+    msgs = (
+        (await db_session.execute(select(Message).where(Message.session_id == sid)
+                                  .order_by(Message.created_at, Message.id))).scalars().all()
+    )
+    assert len(msgs) == 4  # H1 + A1 + H2(discarded) + H3
+    discarded = [m for m in msgs if m.status == MessageStatus.discarded]
+    active = [m for m in msgs if m.status == MessageStatus.active]
+    assert len(discarded) == 1
+    assert discarded[0].id == h2_id
+    assert len(active) == 3
+    new_human = next(m for m in active if m.role == MessageRole.human and m.content == "H3 content")
+    assert str(new_human.id) == hid_in_meta  # hid is H3, not H2
+
+
+# ---------------------------------------------------------------------------
+# Row 6 (with prior AI): orphan + regen=hid + content="" → reuse orphan
+# Setup: H1 + A1 + H2 (3 active), last=H2 human, regen=H2.id, content=""
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_decision_row6_with_prior_ai_reuse(
+    api_client_with_eval, auth_headers_child, db_session
+):
+    """Row 6: H1 + A1 + H2 active, regen=H2.id + content="" → reuse H2 (no new row).
+
+    The Gate A closing argument says "last active row is human" ⟺ "orphan", so H2 is
+    the orphan.  Row 6 should reuse it: hid=H2.id, no new row inserted.
+    """
+    headers, child = auth_headers_child
+    sid = uuid4()
+
+    db_session.add(
+        SessionModel(id=sid, child_user_id=child.id, title="test", status=MessageStatus.active)
+    )
+    base = datetime.now(UTC)
+    h1 = Message(
+        session_id=sid, role=MessageRole.human, status=MessageStatus.active,
+        content="H1", created_at=base,
+    )
+    a1 = Message(
+        session_id=sid, role=MessageRole.ai, status=MessageStatus.active,
+        content="A1", created_at=base + timedelta(milliseconds=1),
+    )
+    h2 = Message(
+        session_id=sid, role=MessageRole.human, status=MessageStatus.active,
+        content="H2 original", created_at=base + timedelta(milliseconds=2),
+    )
+    db_session.add_all([h1, a1, h2])
+    await db_session.flush()
+    h2_id = h2.id
+    await db_session.commit()
+
+    body = make_payload(content="", session_id=str(sid), regenerate_for=str(h2_id))
+    resp = await api_client_with_eval.post("/api/v1/me/chat/stream", json=body, headers=headers)
+    assert resp.status_code == 200
+
+    frames = _parse_sse_stream(resp.text)
+    assert frames[0]["data"]["hid"] == str(h2_id)  # hid unchanged
+
+    msgs = (
+        (await db_session.execute(select(Message).where(Message.session_id == sid)
+                                  .order_by(Message.created_at, Message.id))).scalars().all()
+    )
+    assert len(msgs) == 3  # H1 + A1 + H2 (no new row)
+    h2_row = next(m for m in msgs if m.id == h2_id)
+    assert h2_row.content == "H2 original"  # content unchanged
+    assert h2_row.status == MessageStatus.active
 
 
 # ---------------------------------------------------------------------------
