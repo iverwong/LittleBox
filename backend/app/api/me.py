@@ -3,23 +3,30 @@
 from __future__ import annotations
 
 import base64
+import json
 from datetime import datetime
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 
+import regex
 from fastapi import APIRouter, Depends, HTTPException, Query
 from redis.asyncio import Redis
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.responses import StreamingResponse
 
 from app.auth.deps import get_current_account, require_child
 from app.auth.redis_client import get_redis
+from app.chat.locks import acquire_session_lock, acquire_throttle_lock, release_session_lock
 from app.db import get_db
 from app.models.accounts import ChildProfile, User
+from app.models.chat import Message
 from app.models.chat import Session as SessionModel
+from app.models.enums import MessageRole, MessageStatus
 from app.schemas.accounts import AccountOut, CurrentAccount
 from app.schemas.children import ChildProfileOut
 from app.schemas.sessions import (
+    ChatStreamRequest,
     MessageListItem,
     MessageListResponse,
     SessionListItem,
@@ -281,3 +288,218 @@ async def delete_session(
         {"sid": sid, "uid": str(current.id)},
     )
     await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# POST /me/chat/stream
+# ---------------------------------------------------------------------------
+
+
+def _truncate_title(content: str, max_graphemes: int = 12) -> str:
+    """Truncate content to at most max_graphemes grapheme clusters via regex \\X."""
+    graphemes = regex.findall(r"\X", content)
+    return "".join(graphemes[:max_graphemes])
+
+
+def _frame_sse_event(event_type: str, data: dict) -> bytes:
+    """SSE multi-line protocol frame (M6): event: <type>\\ndata: <json>\\n\\n."""
+    return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
+
+
+async def _stub_stream() -> list[bytes]:
+    """Stub LLM stream: yields one delta and one end frame."""
+    return [
+        _frame_sse_event("delta", {"content": "[stub]"}),
+        _frame_sse_event("end", {"finish_reason": "stop", "aid": None}),
+    ]
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    req: ChatStreamRequest,
+    current: Annotated[CurrentAccount, Depends(require_child)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> StreamingResponse:
+    """Stream a child dialogue turn (control plane + stub LLM stream, Step 8a).
+
+    Flow: throttle lock → session existence check → session lock → decision-O
+    matrix → first-turn / subsequent-turn transaction → StreamingResponse.
+
+    Decision matrix O (baseline §5.4, 8 rows):
+      Row 1: last=None   + regen=null  → INSERT session + INSERT human
+      Row 2: last=None   + regen=!null → 400 RegenerateForInvalid
+      Row 3: last=AI      + regen=null  → INSERT human
+      Row 4: last=AI      + regen=!null → 400 RegenerateForInvalid  (ai row不可重生)
+      Row 5: last=orphan  + regen=null  → UPDATE old discarded + INSERT human
+      Row 6: last=orphan  + regen=hid   → reuse orphan (no new row), UPDATE content
+      Row 7: last=orphan  + regen=!hid  → 400 RegenerateForInvalid  (历史轮不可重生)
+      Row 8: last=nonorphan + regen=null → INSERT human
+      (note: row 9 "nonorphan/=hid" also → INSERT by matrix)
+
+    "Last active message" = SELECT ... WHERE status='active'
+    ORDER BY created_at DESC LIMIT 1.  discarded rows are excluded.
+
+    Lock-release contract: session lock is released in the generator finally
+    block for the success path.  HTTPException raised before StreamingResponse
+    construction is caught here and releases the lock explicitly (P0-2).
+    """
+    # ---- throttle lock (TTL 自然过期，finally 不主动 DEL) ----
+    if not await acquire_throttle_lock(redis, str(current.id)):
+        raise HTTPException(429, "RequestThrottled")
+
+    # ---- resolve / generate session id ----
+    sid: UUID
+    if req.session_id:
+        sid = UUID(req.session_id)
+    else:
+        sid = uuid4()
+
+    # ---- session lock: must release on every HTTPException path (P0-2) ----
+    nonce = await acquire_session_lock(redis, str(sid))
+    if not nonce:
+        raise HTTPException(409, "SessionBusy")
+
+    # Ensure lock is released when HTTPException is raised before StreamingResponse
+    try:
+        # ---- session existence + child ownership check (done before SETNX: no lock leak) ----
+        if req.session_id:
+            session_row = await db.get(SessionModel, sid)
+            if session_row is None:
+                raise HTTPException(404, "SessionNotFound")
+            if session_row.child_user_id != current.id:
+                raise HTTPException(403, "SessionForbidden")
+
+        # ---- decision matrix O + first-turn / subsequent-turn transaction ----
+        last_msg = (
+            await db.execute(
+                select(Message)
+                .where(Message.session_id == sid, Message.status == MessageStatus.active)
+                .order_by(Message.created_at.desc(), Message.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+        hid: UUID  # human message id for session_meta event
+
+        if last_msg is None:
+            # Row 1 or Row 2
+            if req.regenerate_for is not None:
+                raise HTTPException(400, "RegenerateForInvalid")
+            # Row 1: first turn
+            title = _truncate_title(req.content)
+            session = SessionModel(
+                id=sid,
+                child_user_id=current.id,
+                title=title,
+                status=MessageStatus.active,
+            )
+            db.add(session)
+            human = Message(
+                session_id=sid,
+                role=MessageRole.human,
+                status=MessageStatus.active,
+                content=req.content,
+            )
+            db.add(human)
+            await db.flush()
+            hid = human.id
+        # Row 3: last is AI, regen=null → INSERT human
+        elif last_msg.role == MessageRole.ai:
+            if req.regenerate_for is not None:
+                raise HTTPException(400, "RegenerateForInvalid")
+            human = Message(
+                session_id=sid,
+                role=MessageRole.human,
+                status=MessageStatus.active,
+                content=req.content,
+            )
+            db.add(human)
+            await db.flush()
+            hid = human.id
+        else:
+            # last_msg.role == 'human'
+            # "orphan" = no active AI message after this human
+            ai_check = (
+                await db.scalar(
+                    select(Message.id).where(
+                        Message.session_id == sid,
+                        Message.role == MessageRole.ai,
+                        Message.status == MessageStatus.active,
+                    ).limit(1)
+                )
+            )
+            is_orphan = ai_check is None
+
+            if is_orphan:
+                # Rows 5, 6, 7
+                if req.regenerate_for is None:
+                    # Row 5: orphan + null → UPDATE old discarded + INSERT new
+                    await db.execute(
+                        update(Message)
+                        .where(Message.id == last_msg.id)
+                        .values(status=MessageStatus.discarded),
+                    )
+                    new_human = Message(
+                        session_id=sid,
+                        role=MessageRole.human,
+                        status=MessageStatus.active,
+                        content=req.content,
+                    )
+                    db.add(new_human)
+                    await db.flush()
+                    hid = new_human.id
+                elif req.regenerate_for == str(last_msg.id):
+                    # Row 6: orphan + =hid → reuse orphan (no new row, no content update)
+                    # Option A: assert content is empty (strict contract)
+                    if req.content != "":
+                        raise HTTPException(400, "RegenerateForInvalid")
+                    hid = last_msg.id
+                else:
+                    # Row 7: orphan + ≠hid → 400
+                    raise HTTPException(400, "RegenerateForInvalid")
+            else:
+                # not orphan (last is human with active AI after it)
+                # Rows 8, 9 (both INSERT by matrix)
+                if req.regenerate_for is None:
+                    # Row 8: not orphan + null → INSERT new human
+                    new_human = Message(
+                        session_id=sid,
+                        role=MessageRole.human,
+                        status=MessageStatus.active,
+                        content=req.content,
+                    )
+                    db.add(new_human)
+                    await db.flush()
+                    hid = new_human.id
+                elif req.regenerate_for == str(last_msg.id):
+                    # Row 9: not orphan + =hid → INSERT new human (by matrix)
+                    new_human = Message(
+                        session_id=sid,
+                        role=MessageRole.human,
+                        status=MessageStatus.active,
+                        content=req.content,
+                    )
+                    db.add(new_human)
+                    await db.flush()
+                    hid = new_human.id
+                else:
+                    # not orphan + ≠hid → 400
+                    raise HTTPException(400, "RegenerateForInvalid")
+
+        await db.commit()
+
+        # ---- streaming response ----
+        async def generator() -> object:
+            try:
+                yield _frame_sse_event("session_meta", {"session_id": str(sid), "hid": str(hid)})
+                for frame in await _stub_stream():
+                    yield frame
+            finally:
+                await release_session_lock(redis, str(sid), nonce)
+
+        return StreamingResponse(generator(), media_type="text/event-stream")
+
+    except HTTPException:
+        await release_session_lock(redis, str(sid), nonce)
+        raise
