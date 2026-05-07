@@ -326,19 +326,23 @@ async def chat_stream(
     Flow: throttle lock → session existence check → session lock → decision-O
     matrix → first-turn / subsequent-turn transaction → StreamingResponse.
 
-    Decision matrix O (baseline §5.4, 8 rows):
-      Row 1: last=None   + regen=null  → INSERT session + INSERT human
+    Decision matrix O (baseline §5.4, 7 rows):
+      Row 1: last=None   + regen=null  → INSERT session + INSERT human (active)
       Row 2: last=None   + regen=!null → 400 RegenerateForInvalid
-      Row 3: last=AI      + regen=null  → INSERT human
+      Row 3: last=AI      + regen=null  → INSERT human (active)
       Row 4: last=AI      + regen=!null → 400 RegenerateForInvalid  (ai row不可重生)
-      Row 5: last=orphan  + regen=null  → UPDATE old discarded + INSERT human
-      Row 6: last=orphan  + regen=hid   → reuse orphan (no new row), UPDATE content
+      Row 5: last=orphan  + regen=null  → UPDATE old discarded + INSERT human (active)
+      Row 6: last=orphan  + regen=hid   → reuse orphan (no new row, content must be "")
       Row 7: last=orphan  + regen=!hid  → 400 RegenerateForInvalid  (历史轮不可重生)
-      Row 8: last=nonorphan + regen=null → INSERT human
-      (note: row 9 "nonorphan/=hid" also → INSERT by matrix)
 
-    "Last active message" = SELECT ... WHERE status='active'
-    ORDER BY created_at DESC LIMIT 1.  discarded rows are excluded.
+    Gate A closing argument (applies to rows 5-7):
+      "Last active message" is defined as SELECT ... WHERE status='active'
+      ORDER BY created_at DESC, id DESC LIMIT 1 — it is always the latest active row.
+      A "non-orphan human" would require an active AI row strictly after it,
+      which would itself be the latest active row — contradicting the definition.
+      Therefore "last active row is human" ⟺ "orphan human"; no second query needed.
+      Rows 8/9 (non-orphan human paths) are unreachable — raise AssertionError
+      if ever reached, to catch future state-space regressions.
 
     Lock-release contract: session lock is released in the generator finally
     block for the success path.  HTTPException raised before StreamingResponse

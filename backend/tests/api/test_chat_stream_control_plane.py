@@ -1,22 +1,29 @@
 """tests for POST /me/chat/stream control plane (Step 8a).
 
-Decision matrix O (baseline §5.4, 8 rows):
-    Row 1: last=None   + regen=null  → INSERT session + INSERT human
+Decision matrix O (baseline §5.4, 7 rows):
+    Row 1: last=None   + regen=null  → INSERT session + INSERT human (active)
     Row 2: last=None   + regen=!null → 400 RegenerateForInvalid
-    Row 3: last=AI     + regen=null  → INSERT human
+    Row 3: last=AI     + regen=null  → INSERT human (active)
     Row 4: last=AI     + regen=!null → 400 RegenerateForInvalid
-    Row 5: last=orphan + regen=null  → UPDATE old discarded + INSERT human
-    Row 6: last=orphan + regen=hid  → reuse orphan (no new row, content="" enforced)
-    Row 7: last=orphan + regen=!hid  → 400 RegenerateForInvalid
-    Row 8: last=!orphan+ regen=null  → INSERT human
+    Row 5: last=orphan + regen=null  → UPDATE old discarded + INSERT human (active)
+    Row 6: last=orphan + regen=hid   → reuse orphan (no new row, content must be "")
+    Row 7: last=orphan + regen=!hid → 400 RegenerateForInvalid
 
-Covers: decision-O 8 rows · throttle lock · session lock · title grapheme · lock release.
+Gate A closing argument (applies to rows 5-7):
+    "Last active message" = SELECT ... WHERE status='active'
+    ORDER BY created_at DESC, id DESC LIMIT 1 — it is always the latest active row.
+    A "non-orphan human" would require an active AI row strictly after it,
+    which would itself be the latest active row — contradicting the definition.
+    Therefore "last active row is human" ⟺ "orphan human"; no second query needed.
+    Rows 8/9 (non-orphan human paths) are unreachable by this argument.
+
+Covers: decision-O 7 rows · throttle lock · session lock · title grapheme · lock release.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from fakeredis.aioredis import FakeRedis
@@ -454,17 +461,19 @@ async def test_decision_row3_with_prior_human(
     db_session.add(
         SessionModel(id=sid, child_user_id=child.id, title="test", status=MessageStatus.active)
     )
+    base = datetime.now(UTC)
     human = Message(
-        session_id=sid, role=MessageRole.human, status=MessageStatus.active, content="H1"
+        session_id=sid, role=MessageRole.human, status=MessageStatus.active,
+        content="H1", created_at=base,
     )
-    db_session.add(human)
     ai = Message(
-        session_id=sid, role=MessageRole.ai, status=MessageStatus.active, content="AI reply"
+        session_id=sid, role=MessageRole.ai, status=MessageStatus.active,
+        content="AI reply", created_at=base + timedelta(milliseconds=1),
     )
-    db_session.add(ai)
+    db_session.add_all([human, ai])
     await db_session.flush()
     human_id = human.id
-    await db_session.commit()
+    await db_session.flush()
 
     body = make_payload(content="H2 continuation", session_id=str(sid))
     resp = await api_client_with_eval.post("/api/v1/me/chat/stream", json=body, headers=headers)
@@ -490,7 +499,6 @@ async def test_decision_row3_with_prior_human(
 
 # ---------------------------------------------------------------------------
 # Row 5 (with prior AI): orphan + regen=null → UPDATE old discarded + INSERT human
-# Setup: H1 + A1 + H2 (3 active), last=H2 human
 # ---------------------------------------------------------------------------
 
 
@@ -501,9 +509,7 @@ async def test_decision_row5_with_prior_ai(
     """Row 5: H1 + A1 + H2 active, regen=null → UPDATE H2 discarded + INSERT H3 active.
 
     PG timestamp construction: explicit created_at ensures H2 is the confirmed last
-    active row by ORDER BY created_at DESC, id DESC — without explicit timestamps
-    PG now() inside a single transaction gives all three rows identical created_at,
-    making the last-row determination non-deterministic.
+    active row by ORDER BY created_at DESC, id DESC.
     """
     headers, child = auth_headers_child
     sid = uuid4()
@@ -527,7 +533,7 @@ async def test_decision_row5_with_prior_ai(
     db_session.add_all([h1, a1, h2])
     await db_session.flush()
     h2_id = h2.id
-    await db_session.commit()
+    await db_session.flush()
 
     body = make_payload(content="H3 content", session_id=str(sid))
     resp = await api_client_with_eval.post("/api/v1/me/chat/stream", json=body, headers=headers)
@@ -587,7 +593,7 @@ async def test_decision_row6_with_prior_ai_reuse(
     db_session.add_all([h1, a1, h2])
     await db_session.flush()
     h2_id = h2.id
-    await db_session.commit()
+    await db_session.flush()
 
     body = make_payload(content="", session_id=str(sid), regenerate_for=str(h2_id))
     resp = await api_client_with_eval.post("/api/v1/me/chat/stream", json=body, headers=headers)
