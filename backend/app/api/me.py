@@ -6,6 +6,7 @@ import base64
 import json
 import logging
 from datetime import datetime
+from collections.abc import AsyncGenerator
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -13,7 +14,7 @@ import regex
 from fastapi import APIRouter, Depends, HTTPException, Query
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import select, text, update
+from sqlalchemy import select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
@@ -26,7 +27,7 @@ from app.db import get_db
 from app.models.accounts import ChildProfile, User
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
-from app.models.enums import MessageRole, MessageStatus
+from app.models.enums import MessageRole, MessageStatus, SessionStatus
 from app.schemas.accounts import AccountOut, CurrentAccount
 from app.schemas.children import ChildProfileOut
 from app.schemas.sessions import (
@@ -148,30 +149,30 @@ def _decode_cursor(cursor: str) -> tuple[datetime, str]:
 
 @router.get("/sessions", response_model=SessionListResponse)
 async def list_sessions(
+    current: Annotated[CurrentAccount, Depends(require_child)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     limit: Annotated[int, Query(ge=1, le=50)] = 15,
     cursor: str | None = None,
-    current: Annotated[CurrentAccount, Depends(require_child)] = None,
-    db: Annotated[AsyncSession, Depends(get_db)] = None,
 ) -> SessionListResponse:
     """List sessions for the authenticated child (keyset pagination, no in_progress)."""
     if cursor is not None and cursor == "":
         cursor = None
 
-    where_clause = "child_user_id = :uid AND status = 'active'"
-    args: dict = {"uid": str(current.id), "p_limit": limit + 1}
-
+    stmt = (
+        select(SessionModel.id, SessionModel.title, SessionModel.last_active_at)
+        .where(
+            SessionModel.child_user_id == current.id,
+            SessionModel.status == "active",
+        )
+        .order_by(SessionModel.last_active_at.desc(), SessionModel.id.desc())
+        .limit(limit + 1)
+    )
     if cursor:
         last_active_at_dt, sid = _decode_cursor(cursor)
-        where_clause += " AND (last_active_at, id) < (:last_at, :sid)"
-        args["last_at"] = last_active_at_dt
-        args["sid"] = sid
-
-    sql = (
-        f"SELECT id, title, last_active_at FROM sessions "
-        f"WHERE {where_clause} "
-        f"ORDER BY last_active_at DESC, id DESC LIMIT :p_limit"
-    )
-    result = await db.execute(text(sql), args)
+        stmt = stmt.where(
+            tuple_(SessionModel.last_active_at, SessionModel.id) < (last_active_at_dt, sid),
+        )
+    result = await db.execute(stmt)
     rows = result.fetchall()
 
     has_more = len(rows) > limit
@@ -200,11 +201,11 @@ async def list_sessions(
 @router.get("/sessions/{sid}/messages", response_model=MessageListResponse)
 async def get_messages(
     sid: str,
+    current: Annotated[CurrentAccount, Depends(require_child)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: str | None = None,
-    current: Annotated[CurrentAccount, Depends(require_child)] = None,
-    db: Annotated[AsyncSession, Depends(get_db)] = None,
-    redis: Annotated[Redis, Depends(get_redis)] = None,
 ) -> MessageListResponse:
     """Fetch messages for a session (keyset pagination, top-level in_progress)."""
     session_row = await db.get(SessionModel, sid)
@@ -216,21 +217,24 @@ async def get_messages(
     if cursor is not None and cursor == "":
         cursor = None
 
-    where_clause = "session_id = :sid AND status = 'active'"
-    args: dict = {"sid": sid, "p_limit": limit + 1}
-
+    stmt = (
+        select(
+            Message.id, Message.role, Message.content,
+            Message.status, Message.finish_reason, Message.created_at,
+        )
+        .where(
+            Message.session_id == sid,
+            Message.status == MessageStatus.active,
+        )
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(limit + 1)
+    )
     if cursor:
         created_at_dt, mid = _decode_cursor(cursor)
-        where_clause += " AND (created_at, id) < (:created_at, :mid)"
-        args["created_at"] = created_at_dt
-        args["mid"] = mid
-
-    sql = (
-        f"SELECT id, role, content, status, finish_reason, created_at FROM messages "
-        f"WHERE {where_clause} "
-        f"ORDER BY created_at DESC, id DESC LIMIT :p_limit"
-    )
-    result = await db.execute(text(sql), args)
+        stmt = stmt.where(
+            tuple_(Message.created_at, Message.id) < (created_at_dt, mid),
+        )
+    result = await db.execute(stmt)
     rows = result.fetchall()
 
     has_more = len(rows) > limit
@@ -275,12 +279,10 @@ async def get_messages(
 @router.delete("/sessions/{sid}", status_code=204)
 async def delete_session(
     sid: str,
-    current: Annotated[CurrentAccount, Depends(require_child)] = None,
-    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    current: Annotated[CurrentAccount, Depends(require_child)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
     """Soft-delete a session (status='deleted'). Idempotent: second call → 404."""
-    db.expunge_all()
-
     session = (
         await db.execute(select(SessionModel).where(SessionModel.id == sid))
     ).scalar_one_or_none()
@@ -291,13 +293,7 @@ async def delete_session(
     if session.child_user_id != current.id:
         raise HTTPException(403, "SessionForbidden")
 
-    await db.execute(
-        text(
-            "UPDATE sessions SET status = 'deleted' "
-            "WHERE id = :sid AND child_user_id = :uid AND status = 'active'"
-        ),
-        {"sid": sid, "uid": str(current.id)},
-    )
+    session.status = SessionStatus.deleted
     await db.commit()
 
 
@@ -495,7 +491,7 @@ async def chat_stream(
         await db.commit()
 
         # ---- streaming response ----
-        async def generator() -> object:
+        async def generator() -> AsyncGenerator[bytes, None]:
             accumulated = ""
             last_finish_reason = "stop"  # 兜底；末帧 chunk.response_metadata 命中时覆盖
 
