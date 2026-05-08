@@ -21,7 +21,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import anyio
-from langchain_core.messages import AIMessageChunk, HumanMessage
+from langchain_core.messages import HumanMessage
 from starlette.requests import ClientDisconnect
 
 from app.chat.graph import main_graph
@@ -51,39 +51,31 @@ def _frame_sse_event(event_type: str, data: dict) -> bytes:
     return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
 
 
-async def stream_to_sse(graph_stream) -> AsyncIterator[bytes]:
-    """将 AIMessageChunk 流转为 SSE 多行协议帧（me 主路径）。
+async def stream_graph_to_sse(payloads) -> AsyncIterator[bytes]:
+    """将 LangGraph custom-stream dict payload 流转为 SSE 多行协议帧（me 主路径）。
 
-    事件序列：
-      reasoning chunk 首次到达 → thinking_start（仅信号，不含文本）
-      reasoning 结束（首次出现 content chunk 或 reasoning 为空）→ thinking_end
-      content chunk → delta
+    Graph writer 合同（Step 6 实施）：每个 chunk 发 dict
+      {"delta": "text"}  → content chunk
+      {"finish_reason": "stop"|"length"|"content_filter"} → finish reason 帧
 
-    注意：reasoning_content 不发进 delta（仅作内部信号，thinking_end 不带文本）。
+    事件序列（当前实现）：
+      delta chunk   → delta
+      finish_reason → 更新内部变量（透传给调用方，适配器不直接 emit end）
+      流结束       → 无额外帧（end 帧由调用方 emit）
+
+    Note: reasoning_content branch removed in Step 8b because me.py
+    generator sends each payload individually to stream_graph_to_sse
+    (per-payload _payloads() wrapper), making cross-payload state
+    tracking (thinking_started) impossible.  If future graph forwards
+    reasoning chunks, refactor to a long-lived async iterable pattern
+    instead of the current per-payload wrapper.
     """
-    thinking_started = False
-    async for chunk in graph_stream:
-        if not isinstance(chunk, AIMessageChunk):
+    async for payload in payloads:
+        if not isinstance(payload, dict):
             continue
-        r = chunk.additional_kwargs.get("reasoning_content")
-        c = chunk.content
-
-        if r and not thinking_started:
-            # reasoning chunk 首次到达 → emit thinking_start
-            yield _frame_sse_event("thinking_start", {})
-            thinking_started = True
-
-        if thinking_started and not r:
-            # reasoning 结束 → emit thinking_end（仅信号，不含文本）
-            yield _frame_sse_event("thinking_end", {})
-            thinking_started = False
-
-        if c:
-            yield _frame_sse_event("delta", {"content": c})
-
-    # 流结束时尚未发送 thinking_end，补一个（防御性）
-    if thinking_started:
-        yield _frame_sse_event("thinking_end", {})
+        d = payload.get("delta")
+        if d:
+            yield _frame_sse_event("delta", {"content": d})
 
 
 # ---- dev_chat 兼容入口（M3 单行协议） ----

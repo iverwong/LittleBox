@@ -44,13 +44,13 @@ def _session_last_active(db_session, sid):
 
 @pytest.mark.asyncio
 async def test_persist_ai_turn_inserts_active_ai_message(db_session, child_user):
-    """persist_ai_turn creates a status='active', role='ai' message row."""
+    """persist_ai_turn creates a status='active', role='ai' message row and returns its id."""
     sid = uuid.uuid4()
     session = Session(id=sid, child_user_id=child_user.id, title="test")
     db_session.add(session)
     await db_session.flush()
 
-    await persist_ai_turn(
+    returned_id = await persist_ai_turn(
         db_session,
         sid=sid,
         finish_reason="stop",
@@ -65,6 +65,7 @@ async def test_persist_ai_turn_inserts_active_ai_message(db_session, child_user)
     assert msg.status == MessageStatus.active
     assert msg.content == "Hello, world!"
     assert msg.finish_reason == "stop"
+    assert returned_id == msg.id  # F2: returns uuid.UUID of inserted row
 
 
 @pytest.mark.asyncio

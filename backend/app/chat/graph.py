@@ -52,7 +52,7 @@ async def persist_ai_turn(
     finish_reason: str,
     content: str,
     intervention_type: InterventionType | None = None,
-) -> None:
+) -> uuid.UUID:
     """Persist one AI turn as an active message row + update session last_active_at.
 
     T5 single-write-point: called from me.py generator after the stream ends.
@@ -64,6 +64,9 @@ async def persist_ai_turn(
         finish_reason: LLM stop reason (stop / length / content_filter / user_stopped)
         content: accumulated text content
         intervention_type: None=normal, crisis=redline=guided=override type
+
+    Returns:
+        The id of the newly inserted AI message row (uuid.UUID).
     """
     msg = Message(
         session_id=sid,
@@ -74,6 +77,7 @@ async def persist_ai_turn(
         intervention_type=intervention_type,
     )
     db.add(msg)
+    await db.flush()  # populate msg.id
 
     # Update session last_active_at
     await db.execute(
@@ -81,6 +85,8 @@ async def persist_ai_turn(
         .where(Session.id == sid)
         .values(last_active_at=datetime.now(timezone.utc))
     )
+
+    return msg.id
 
 
 async def enqueue_audit(sid: uuid.UUID, db: AsyncSession) -> None:

@@ -1,26 +1,10 @@
-"""SSE 双 framer + stream_to_sse 主路径测试。"""
+"""SSE 双 framer + stream_graph_to_sse 测试。"""
+
 import json
 
 import pytest
-from langchain_core.messages import AIMessageChunk
 
 from app.chat import sse
-
-
-class _DummyStream:
-    """将 list 包装为异步迭代器。"""
-
-    def __init__(self, chunks: list):
-        self._chunks = chunks
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if self._chunks:
-            return self._chunks.pop(0)
-        raise StopAsyncIteration
-
 
 # ---- S1: _sse_pack 格式（M3 单行协议）----
 
@@ -64,84 +48,11 @@ def test_frame_sse_event_with_payload() -> None:
     assert parsed == {"content": "hi"}
 
 
-# ---- S3: stream_to_sse — reasoning/content 分流----
-
-@pytest.mark.asyncio
-async def test_stream_to_sse_thinking_start_emits_once() -> None:
-    """reasoning chunk 首次到达 → emit thinking_start 一次。"""
-    chunks = [
-        AIMessageChunk(content="", additional_kwargs={"reasoning_content": "thinking..."}),
-        AIMessageChunk(content="", additional_kwargs={"reasoning_content": "still thinking..."}),
-    ]
-    stream = _DummyStream(chunks)
-    result = [b async for b in sse.stream_to_sse(stream)]
-
-    assert b"event: thinking_start" in result[0]
-    # 第二次 reasoning chunk 不再发 thinking_start
-    assert result[1] == b"event: thinking_end\ndata: {}\n\n"
-
-
-@pytest.mark.asyncio
-async def test_stream_to_sse_thinking_end_emits_once() -> None:
-    """reasoning 结束（首次出现 content 或 reasoning 为空）→ emit thinking_end 一次。"""
-    chunks = [
-        AIMessageChunk(content="", additional_kwargs={"reasoning_content": "thinking..."}),
-        AIMessageChunk(content="答案", additional_kwargs={}),  # reasoning 结束
-    ]
-    stream = _DummyStream(chunks)
-    result = [b async for b in sse.stream_to_sse(stream)]
-
-    # thinking_start → thinking_end → delta
-    assert result[0] == b"event: thinking_start\ndata: {}\n\n"
-    assert result[1] == b"event: thinking_end\ndata: {}\n\n"
-    # Verify delta event: parse JSON content from data line
-    delta_lines = result[2].split(b"\n")
-    json_part = delta_lines[1].replace(b"data: ", b"", 1)
-    parsed = json.loads(json_part)
-    assert parsed == {"content": "答案"}
-
-
-@pytest.mark.asyncio
-async def test_stream_to_sse_delta_content_only() -> None:
-    """content chunk → emit delta，不含 reasoning 文本。"""
-    chunks = [
-        AIMessageChunk(content="hello world", additional_kwargs={}),
-        AIMessageChunk(content="!", additional_kwargs={}),
-    ]
-    stream = _DummyStream(chunks)
-    result = [b async for b in sse.stream_to_sse(stream)]
-
-    assert result[0] == b'event: delta\ndata: {"content": "hello world"}\n\n'
-    assert result[1] == b'event: delta\ndata: {"content": "!"}\n\n'
-
-
-@pytest.mark.asyncio
-async def test_stream_to_sse_content_before_reasoning() -> None:
-    """无 reasoning，直接 content → 无 thinking_start/thinking_end，直接 delta。"""
-    chunks = [
-        AIMessageChunk(content="hi", additional_kwargs={}),
-    ]
-    stream = _DummyStream(chunks)
-    result = [b async for b in sse.stream_to_sse(stream)]
-
-    assert result[0] == b'event: delta\ndata: {"content": "hi"}\n\n'
-    # 不应有 thinking_start / thinking_end
-    assert b"thinking_start" not in result[0]
-    assert b"thinking_end" not in result[0]
-
-
-@pytest.mark.asyncio
-async def test_stream_to_sse_defensive_thinking_end_at_end() -> None:
-    """流结束时尚未发送 thinking_end（reasoning chunk 末尾），补发一个。"""
-    chunks = [
-        AIMessageChunk(content="", additional_kwargs={"reasoning_content": "only reasoning"}),
-    ]
-    stream = _DummyStream(chunks)
-    result = [b async for b in sse.stream_to_sse(stream)]
-
-    # thinking_start → 流结束 → 防御性 thinking_end
-    assert result[0] == b"event: thinking_start\ndata: {}\n\n"
-    assert result[1] == b"event: thinking_end\ndata: {}\n\n"
+# ---- S3: deleted in Step 8b — stream_to_sse(AIMessageChunk) removed,
+#         replaced by stream_graph_to_sse(dict); 5 tests that referenced
+#         sse.stream_to_sse were deleted.  Functionality migrated to
+#         tests/api/test_chat_stream_graph.py (dict-payload SSE tests).
+# ----
 
 
 # ---- S4: 双 framer 并存 — 不合并----

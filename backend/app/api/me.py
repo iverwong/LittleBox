@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from datetime import datetime
 from typing import Annotated
 from uuid import UUID, uuid4
@@ -11,13 +12,16 @@ from uuid import UUID, uuid4
 import regex
 from fastapi import APIRouter, Depends, HTTPException, Query
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
 from app.auth.deps import get_current_account, require_child
 from app.auth.redis_client import get_redis
+from app.chat.graph import main_graph, persist_ai_turn
 from app.chat.locks import acquire_session_lock, acquire_throttle_lock, release_session_lock
+from app.chat.sse import stream_graph_to_sse
 from app.db import get_db
 from app.models.accounts import ChildProfile, User
 from app.models.chat import Message
@@ -33,6 +37,7 @@ from app.schemas.sessions import (
     SessionListResponse,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/me", tags=["me"])
 
 
@@ -237,7 +242,13 @@ async def get_messages(
     else:
         next_cursor = None
 
-    in_progress = bool(await redis.exists(f"chat:lock:{sid}"))
+    try:
+        in_progress = bool(await redis.exists(f"chat:lock:{sid}"))
+    except RedisError as e:
+        in_progress = False
+        logger.warning(
+            "redis exists failed for chat:lock:%s, fallback in_progress=False: %s", sid, e
+        )
 
     return MessageListResponse(
         items=[
@@ -321,19 +332,27 @@ async def chat_stream(
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> StreamingResponse:
-    """Stream a child dialogue turn (control plane + stub LLM stream, Step 8a).
+    """Stream a child dialogue turn: decision matrix + graph stream + T5 persist.
 
-    Flow: throttle lock → session existence check → session lock → decision-O
-    matrix → first-turn / subsequent-turn transaction → StreamingResponse.
+    Flow: throttle lock → session check → session lock → decision-O
+    matrix → first/subsequent-turn transaction → commit① → graph stream
+    (main_graph.astream custom-mode) → stream_graph_to_sse → T5
+    (persist_ai_turn writes ai active row) → commit② → StreamingResponse.
+
+    Dual commit boundary: commit① (L489) persists human rows + session;
+    commit② (L532-533 inside generator) persists the AI row
+    (persist_ai_turn flush + db.commit).  Two commits = two atomic
+    units: no ai row written on error path; no human row rolled back
+    if graph stream fails.
 
     Decision matrix O (baseline §5.4, 7 rows):
       Row 1: last=None   + regen=null  → INSERT session + INSERT human (active)
       Row 2: last=None   + regen=!null → 400 RegenerateForInvalid
       Row 3: last=AI      + regen=null  → INSERT human (active)
-      Row 4: last=AI      + regen=!null → 400 RegenerateForInvalid  (ai row不可重生)
+      Row 4: last=AI      + regen=!null → 400 RegenerateForInvalid
       Row 5: last=orphan  + regen=null  → UPDATE old discarded + INSERT human (active)
-      Row 6: last=orphan  + regen=hid   → reuse orphan (no new row, content must be "")
-      Row 7: last=orphan  + regen=!hid  → 400 RegenerateForInvalid  (历史轮不可重生)
+      Row 6: last=orphan  + regen=hid   → reuse orphan (content must be "")
+      Row 7: last=orphan  + regen=!hid  → 400 RegenerateForInvalid
 
     Gate A closing argument (applies to rows 5-7):
       "Last active message" is defined as SELECT ... WHERE status='active'
@@ -344,9 +363,20 @@ async def chat_stream(
       Rows 8/9 (non-orphan human paths) are unreachable — raise AssertionError
       if ever reached, to catch future state-space regressions.
 
-    Lock-release contract: session lock is released in the generator finally
-    block for the success path.  HTTPException raised before StreamingResponse
-    construction is caught here and releases the lock explicitly (P0-2).
+    T5 single-write-point (Step 8b): graph stream ends → persist_ai_turn
+    writes exactly one ai active row (status='active', role='ai') with the
+    accumulated content and finish_reason from the last graph chunk;
+    sessions.last_active_at is updated.  No ai row is written on the error path.
+
+    SSE 7-event sequence (M6, §8.1):
+      session_meta → [thinking_start → thinking_end] → delta×N → end
+    error path: emit error frame (human active row retained, no ai row).
+
+    Lock-release contract: session lock released in generator finally block
+    on success; explicit release before StreamingResponse for HTTPException
+    paths raised before generator construction (P0-2).
+
+    Stop / user_stop_requested detection is NOT implemented here (Step 8c).
     """
     # ---- throttle lock (TTL 自然过期，finally 不主动 DEL) ----
     if not await acquire_throttle_lock(redis, str(current.id)):
@@ -460,18 +490,65 @@ async def chat_stream(
             else:
                 # Non-orphan human cannot be last active row (Gate A closing argument).
                 # This branch is unreachable — raise to catch future state-space bugs.
-                raise AssertionError(
-                    "unreachable: non-orphan human cannot be last active row"
-                )
+                raise AssertionError("unreachable: non-orphan human cannot be last active row")
 
         await db.commit()
 
         # ---- streaming response ----
         async def generator() -> object:
+            accumulated = ""
+            last_finish_reason = "stop"  # 兜底；末帧 chunk.response_metadata 命中时覆盖
+
+            # Build initial state for main_graph (same shape as stream_chat dev path)
+            from langchain_core.messages import HumanMessage
+
+            from app.chat.state import MainDialogueState
+
+            initial_state: MainDialogueState = {
+                "session_id": str(sid),
+                "child_user_id": str(current.id),
+                "child_profile": None,  # M6: not read by nodes
+                "messages": [HumanMessage(content=req.content)],
+                "audit_state": {},  # M6: all-False stub
+                "pending_guidance": None,
+                "generated_token_count": 0,
+                "client_alive": True,
+                "user_stop_requested": False,
+            }
+
             try:
                 yield _frame_sse_event("session_meta", {"session_id": str(sid), "hid": str(hid)})
-                for frame in await _stub_stream():
-                    yield frame
+
+                # Consume graph stream: accumulate content + forward to SSE
+                async for payload in main_graph.astream(initial_state, stream_mode="custom"):
+                    d = payload.get("delta", "")
+                    if d:
+                        accumulated += d
+                    fr = payload.get("finish_reason")
+                    if fr:
+                        last_finish_reason = fr  # stop / length / content_filter
+
+                    # stream_graph_to_sse is an async generator expecting an async iterable
+                    # of dict payloads; wrap in a simple async iterator
+                    async def _payloads():
+                        yield payload
+                    async for frame in stream_graph_to_sse(_payloads()):
+                        yield frame
+
+                # T5 唯一写入点: INSERT ai active + finish_reason (真实值) + content
+                # + UPDATE sessions.last_active_at；graph 内不再有 persist_turn 节点
+                aid = await persist_ai_turn(
+                    db, sid, finish_reason=last_finish_reason, content=accumulated
+                )
+                # commit②: persist AI row + session.last_active_at to PG
+                await db.commit()
+                yield _frame_sse_event(
+                    "end",
+                    {"finish_reason": last_finish_reason, "aid": str(aid)},
+                )
+            except Exception as e:
+                yield _frame_sse_event("error", {"message": str(e), "code": "InternalError"})
+                # human active 行已由上方 db.commit() 持久化，不写 ai 行（不回滚）
             finally:
                 await release_session_lock(redis, str(sid), nonce)
 
