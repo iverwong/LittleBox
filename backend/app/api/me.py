@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -10,6 +11,7 @@ from collections.abc import AsyncGenerator
 from typing import Annotated
 from uuid import UUID, uuid4
 
+import anyio
 import regex
 from fastapi import APIRouter, Depends, HTTPException, Query
 from redis.asyncio import Redis
@@ -21,7 +23,8 @@ from starlette.responses import StreamingResponse
 from app.auth.deps import get_current_account, require_child
 from app.auth.redis_client import get_redis
 from app.chat.graph import main_graph, persist_ai_turn
-from app.chat.locks import acquire_session_lock, acquire_throttle_lock, release_session_lock
+from app.chat.locks import (acquire_session_lock, acquire_throttle_lock,
+                             release_session_lock, running_streams)
 from app.chat.sse import stream_graph_to_sse
 from app.db import get_db
 from app.models.accounts import ChildProfile, User
@@ -372,7 +375,14 @@ async def chat_stream(
     on success; explicit release before StreamingResponse for HTTPException
     paths raised before generator construction (P0-2).
 
-    Stop / user_stop_requested detection is NOT implemented here (Step 8c).
+    Stop detection (Step 8c): after session_meta yield, register
+    running_streams[sid] = asyncio.Event().  Each for-loop iteration checks
+    event.is_set() after content accumulation but before SSE yield (关注点1).
+    StopKind two-branch: has_emitted_content ? StopWithAi (persist_ai_turn
+    with 'user_stopped' + stopped frame with aid) : StopNoAi (stopped frame
+    without aid).  不 cancel: single-frame yield try/except for
+    ConnectionError/anyio.BrokenResourceError/asyncio.CancelledError →
+    client_alive=False, LLM stream continues without yielding.
     """
     # ---- throttle lock (TTL 自然过期，finally 不主动 DEL) ----
     if not await acquire_throttle_lock(redis, str(current.id)):
@@ -493,7 +503,10 @@ async def chat_stream(
         # ---- streaming response ----
         async def generator() -> AsyncGenerator[bytes, None]:
             accumulated = ""
-            last_finish_reason = "stop"  # 兜底；末帧 chunk.response_metadata 命中时覆盖
+            last_finish_reason = "stop"  # 兜底；末帧 finish_reason 命中时覆盖
+            has_emitted_content = False
+            client_alive = True
+            user_stopped = False
 
             # Build initial state for main_graph (same shape as stream_chat dev path)
             from langchain_core.messages import HumanMessage
@@ -515,37 +528,82 @@ async def chat_stream(
             try:
                 yield _frame_sse_event("session_meta", {"session_id": str(sid), "hid": str(hid)})
 
+                # 注册 stop event（Step 8c）
+                event = asyncio.Event()
+                running_streams[str(sid)] = event
+
                 # Consume graph stream: accumulate content + forward to SSE
                 async for payload in main_graph.astream(initial_state, stream_mode="custom"):
                     d = payload.get("delta", "")
                     if d:
+                        has_emitted_content = True
                         accumulated += d
                     fr = payload.get("finish_reason")
                     if fr:
                         last_finish_reason = fr  # stop / length / content_filter
 
-                    # stream_graph_to_sse is an async generator expecting an async iterable
-                    # of dict payloads; wrap in a simple async iterator
-                    async def _payloads():
-                        yield payload
-                    async for frame in stream_graph_to_sse(_payloads()):
-                        yield frame
+                    # 关注点1: stop check — after content accumulation, before SSE yield
+                    if event.is_set():
+                        user_stopped = True
+                        break
 
-                # T5 唯一写入点: INSERT ai active + finish_reason (真实值) + content
-                # + UPDATE sessions.last_active_at；graph 内不再有 persist_turn 节点
-                aid = await persist_ai_turn(
-                    db, sid, finish_reason=last_finish_reason, content=accumulated
-                )
-                # commit②: persist AI row + session.last_active_at to PG
-                await db.commit()
-                yield _frame_sse_event(
-                    "end",
-                    {"finish_reason": last_finish_reason, "aid": str(aid)},
-                )
+                    # 关注点4: 单帧 yield 级 try/except + stream_graph_to_sse 保护
+                    async def _wrap():
+                        yield payload
+                    try:
+                        async for frame in stream_graph_to_sse(_wrap()):
+                            if not client_alive:
+                                continue
+                            try:
+                                yield frame
+                            except (ConnectionError, anyio.BrokenResourceError,
+                                    asyncio.CancelledError):
+                                client_alive = False
+                    except (ConnectionError, anyio.BrokenResourceError,
+                            asyncio.CancelledError):
+                        client_alive = False
+
+                # 关注点3: user_stopped 与自然结束互斥（persist_ai_turn 至多 1 次）
+                if user_stopped:
+                    # 关注点2: StopKind 二分支 — finish_reason 强制覆盖为 'user_stopped'
+                    if has_emitted_content:
+                        aid = await persist_ai_turn(
+                            db, sid,
+                            finish_reason="user_stopped", content=accumulated,
+                        )
+                        await db.commit()  # commit②: persist AI row + last_active_at
+                        if client_alive:
+                            yield _frame_sse_event(
+                                "stopped",
+                                {"finish_reason": "user_stopped", "aid": str(aid)},
+                            )
+                    else:
+                        if client_alive:
+                            yield _frame_sse_event(
+                                "stopped",
+                                {"finish_reason": "user_stopped"},
+                            )
+                else:
+                    # 自然结束分支：T5 唯一写入点
+                    aid = await persist_ai_turn(
+                        db, sid,
+                        finish_reason=last_finish_reason, content=accumulated,
+                    )
+                    await db.commit()
+                    if client_alive:
+                        yield _frame_sse_event(
+                            "end",
+                            {"finish_reason": last_finish_reason, "aid": str(aid)},
+                        )
             except Exception as e:
-                yield _frame_sse_event("error", {"message": str(e), "code": "InternalError"})
+                if client_alive:
+                    yield _frame_sse_event(
+                        "error", {"message": str(e), "code": "InternalError"},
+                    )
                 # human active 行已由上方 db.commit() 持久化，不写 ai 行（不回滚）
             finally:
+                # 关注点5: 先 pop running_streams（去除 stop 入口），再 release_session_lock
+                running_streams.pop(str(sid), None)
                 await release_session_lock(redis, str(sid), nonce)
 
         return StreamingResponse(generator(), media_type="text/event-stream")
