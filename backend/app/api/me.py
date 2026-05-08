@@ -301,6 +301,44 @@ async def delete_session(
 
 
 # ---------------------------------------------------------------------------
+# POST /me/sessions/{id}/stop
+# ---------------------------------------------------------------------------
+
+
+@router.post("/sessions/{sid}/stop", status_code=204)
+async def stop_session(
+    sid: str,
+    current: Annotated[CurrentAccount, Depends(require_child)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    """停止正在运行的对话流（best-effort）。
+
+    向 running_streams 中对应 sid 的 asyncio.Event 发送信号，使 generator 在
+    下一次 yield 前退出。无论 event 是否存在都返回 204（best-effort 语义）。
+    软删 session（status='deleted'）对客户端不可见，返回 404。
+    """
+    session = (
+        await db.execute(
+            select(SessionModel).where(
+                SessionModel.id == sid,
+                SessionModel.status == "active",
+            )
+        )
+    ).scalar_one_or_none()
+
+    if session is None:
+        raise HTTPException(404, "SessionNotFound")
+
+    if session.child_user_id != current.id:
+        raise HTTPException(403, "SessionForbidden")
+
+    event = running_streams.get(sid)
+    if event is not None:
+        event.set()
+    # 始终返回 204（async best-effort，generator 后续在 finally 处理剩余清理）
+
+
+# ---------------------------------------------------------------------------
 # POST /me/chat/stream
 # ---------------------------------------------------------------------------
 
