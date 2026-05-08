@@ -14,11 +14,18 @@ M6 Step 6 coverage:
 import logging
 
 import pytest
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+)
 
 from app.chat.graph import (
     _assemble_llm_messages,
     call_crisis_llm,
+    call_main_llm,
     call_redline_llm,
     inject_guidance,
     load_audit_state,
@@ -60,9 +67,7 @@ def _make_state(
 def test_graph_has_load_audit_state_entry_point():
     """START must point to load_audit_state."""
     graph = main_graph.get_graph()
-    edges_from_start = [
-        edge for edge in graph.edges if edge.source == "__start__"
-    ]
+    edges_from_start = [edge for edge in graph.edges if edge.source == "__start__"]
     assert len(edges_from_start) == 1
     assert edges_from_start[0].target == "load_audit_state"
 
@@ -227,14 +232,10 @@ def test_assemble_guidance_before_last_human_message():
     state = _make_state(messages=msgs, pending_guidance="please encourage")
     result = _assemble_llm_messages(state)
 
-    guidance_msgs = [
-        m for m in result if isinstance(m, SystemMessage) and "encourage" in m.content
-    ]
+    guidance_msgs = [m for m in result if isinstance(m, SystemMessage) and "encourage" in m.content]
     assert len(guidance_msgs) == 1
     guidance_idx = result.index(guidance_msgs[0])
-    last_human_idx = max(
-        i for i, m in enumerate(result) if isinstance(m, HumanMessage)
-    )
+    last_human_idx = max(i for i, m in enumerate(result) if isinstance(m, HumanMessage))
     assert guidance_idx == last_human_idx - 1, (
         f"guidance at {guidance_idx}, last human at {last_human_idx}"
     )
@@ -294,9 +295,7 @@ async def test_crisis_llm_falls_back_to_main_with_warning(caplog):
     try:
         with caplog.at_level(logging.WARNING):
             await call_crisis_llm(state)
-        assert any(
-            "M6 stub" in msg and "call_crisis_llm" in msg for msg in caplog.messages
-        )
+        assert any("M6 stub" in msg and "call_crisis_llm" in msg for msg in caplog.messages)
     finally:
         graph_mod.get_stream_writer = original
 
@@ -320,9 +319,7 @@ async def test_redline_llm_falls_back_to_main_with_warning(caplog):
     try:
         with caplog.at_level(logging.WARNING):
             await call_redline_llm(state)
-        assert any(
-            "M6 stub" in msg and "call_redline_llm" in msg for msg in caplog.messages
-        )
+        assert any("M6 stub" in msg and "call_redline_llm" in msg for msg in caplog.messages)
     finally:
         graph_mod.get_stream_writer = original
 
@@ -338,3 +335,146 @@ def test_assemble_llm_messages_returns_new_list():
     state = _make_state(messages=msgs, pending_guidance=None)
     result = _assemble_llm_messages(state)
     assert result is not msgs
+
+
+# ---------------------------------------------------------------------------
+# G8: call_main_llm — finish_reason passthrough (X-2 gate)
+# ---------------------------------------------------------------------------
+
+
+class _FakeLLM:
+    """Wrap a list of AIMessageChunk with astream() for llm mock."""
+
+    def __init__(self, chunks: list[AIMessageChunk]):
+        self._chunks = chunks
+
+    async def astream(self, messages):
+        for c in self._chunks:
+            yield c
+
+
+@pytest.mark.asyncio
+async def test_call_main_llm_finish_reason_passthrough_stop(monkeypatch):
+    """additional_kwargs finish_reason='stop' → writer receives finish_reason stop."""
+
+    def _fake_get_llm():
+        return _FakeLLM(
+            [
+                AIMessageChunk(
+                    content="hi",
+                    additional_kwargs={"response_metadata": {"finish_reason": "stop"}},
+                ),
+            ]
+        )
+
+    monkeypatch.setattr("app.chat.graph.get_chat_llm", _fake_get_llm)
+
+    written: list[dict] = []
+    monkeypatch.setattr(
+        "app.chat.graph.get_stream_writer",
+        lambda: type("W", (), {"__call__": lambda self, d: written.append(d)})(),
+    )
+
+    state = _make_state(
+        messages=[SystemMessage(content="sys"), HumanMessage(content="hi")],
+    )
+    await call_main_llm(state)
+
+    finish_calls = [w for w in written if "finish_reason" in w]
+    assert len(finish_calls) == 1
+    assert finish_calls[0]["finish_reason"] == "stop"
+
+
+@pytest.mark.asyncio
+async def test_call_main_llm_finish_reason_passthrough_length(monkeypatch):
+    """additional_kwargs finish_reason='length' → writer receives finish_reason length."""
+
+    def _fake_get_llm():
+        return _FakeLLM(
+            [
+                AIMessageChunk(
+                    content="long",
+                    additional_kwargs={"response_metadata": {"finish_reason": "length"}},
+                ),
+            ]
+        )
+
+    monkeypatch.setattr("app.chat.graph.get_chat_llm", _fake_get_llm)
+
+    written: list[dict] = []
+    monkeypatch.setattr(
+        "app.chat.graph.get_stream_writer",
+        lambda: type("W", (), {"__call__": lambda self, d: written.append(d)})(),
+    )
+
+    state = _make_state(
+        messages=[SystemMessage(content="sys"), HumanMessage(content="hi")],
+    )
+    await call_main_llm(state)
+
+    finish_calls = [w for w in written if "finish_reason" in w]
+    assert len(finish_calls) == 1
+    assert finish_calls[0]["finish_reason"] == "length"
+
+
+@pytest.mark.asyncio
+async def test_call_main_llm_finish_reason_passthrough_content_filter(monkeypatch):
+    """additional_kwargs finish_reason='content_filter' → writer receives content_filter."""
+
+    def _fake_get_llm():
+        return _FakeLLM(
+            [
+                AIMessageChunk(
+                    content="filtered",
+                    additional_kwargs={"response_metadata": {"finish_reason": "content_filter"}},
+                ),
+            ]
+        )
+
+    monkeypatch.setattr("app.chat.graph.get_chat_llm", _fake_get_llm)
+
+    written: list[dict] = []
+    monkeypatch.setattr(
+        "app.chat.graph.get_stream_writer",
+        lambda: type("W", (), {"__call__": lambda self, d: written.append(d)})(),
+    )
+
+    state = _make_state(
+        messages=[SystemMessage(content="sys"), HumanMessage(content="hi")],
+    )
+    await call_main_llm(state)
+
+    finish_calls = [w for w in written if "finish_reason" in w]
+    assert len(finish_calls) == 1
+    assert finish_calls[0]["finish_reason"] == "content_filter"
+
+
+@pytest.mark.asyncio
+async def test_call_main_llm_finish_reason_non_whitelist_filtered(monkeypatch):
+    """finish_reason='tool_calls' (not whitelisted) → writer NOT called with finish_reason."""
+
+    def _fake_get_llm():
+        return _FakeLLM(
+            [
+                AIMessageChunk(
+                    content="tool call",
+                    additional_kwargs={"response_metadata": {"finish_reason": "tool_calls"}},
+                ),
+            ]
+        )
+
+    monkeypatch.setattr("app.chat.graph.get_chat_llm", _fake_get_llm)
+
+    written: list[dict] = []
+    monkeypatch.setattr(
+        "app.chat.graph.get_stream_writer",
+        lambda: type("W", (), {"__call__": lambda self, d: written.append(d)})(),
+    )
+
+    state = _make_state(
+        messages=[SystemMessage(content="sys"), HumanMessage(content="hi")],
+    )
+    await call_main_llm(state)
+
+    finish_calls = [w for w in written if "finish_reason" in w]
+    assert len(finish_calls) == 0, f"Expected no finish_reason writer call, got {finish_calls}"

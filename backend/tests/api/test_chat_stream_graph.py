@@ -183,9 +183,9 @@ async def test_sse_sequence_session_meta_multi_delta_end(
     headers, child = auth_headers_child
 
     fake_payloads = [
-        {"delta": "你"},                                # delta 1
-        {"delta": "好"},                                # delta 2
-        {"finish_reason": "stop"},                      # no output from sse adapter
+        {"delta": "你"},  # delta 1
+        {"delta": "好"},  # delta 2
+        {"finish_reason": "stop"},  # no output from sse adapter
     ]
 
     async def fake_astream(initial_state, stream_mode="custom"):
@@ -217,7 +217,7 @@ async def test_sse_sequence_delta_only_no_reasoning(
     headers, child = auth_headers_child
 
     fake_payloads = [
-        {"delta": "Hello"},          # no reasoning
+        {"delta": "Hello"},  # no reasoning
         {"finish_reason": "stop"},
     ]
 
@@ -274,12 +274,14 @@ async def test_t5_writes_ai_active_with_stop(
         sid = _parse_sse_frames(resp.text)[0]["data"]["session_id"]
 
         msgs = (
-            await db_session.execute(
-                select(Message)
-                .where(Message.session_id == sid)
-                .order_by(Message.created_at)
+            (
+                await db_session.execute(
+                    select(Message).where(Message.session_id == sid).order_by(Message.created_at)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         # Exactly 2 rows: human (from decision matrix) + ai (from T5)
         assert len(msgs) == 2
@@ -305,7 +307,7 @@ async def test_t5_finish_reason_length(
 
     fake_payloads = [
         {"delta": "长回复"},
-        {"finish_reason": "length"},   # length not stop
+        {"finish_reason": "length"},  # length not stop
     ]
 
     async def fake_astream(initial_state, stream_mode="custom"):
@@ -322,11 +324,14 @@ async def test_t5_finish_reason_length(
 
         sid = _parse_sse_frames(resp.text)[0]["data"]["session_id"]
         msgs = (
-            await db_session.execute(
-                select(Message)
-                .where(Message.session_id == sid, Message.role == MessageRole.ai)
+            (
+                await db_session.execute(
+                    select(Message).where(Message.session_id == sid, Message.role == MessageRole.ai)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         assert len(msgs) == 1
         assert msgs[0].finish_reason == "length"
@@ -361,11 +366,14 @@ async def test_t5_finish_reason_content_filter(
 
         sid = _parse_sse_frames(resp.text)[0]["data"]["session_id"]
         msgs = (
-            await db_session.execute(
-                select(Message)
-                .where(Message.session_id == sid, Message.role == MessageRole.ai)
+            (
+                await db_session.execute(
+                    select(Message).where(Message.session_id == sid, Message.role == MessageRole.ai)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         assert len(msgs) == 1
         assert msgs[0].finish_reason == "content_filter"
@@ -449,23 +457,19 @@ async def test_ai_row_persisted_cross_connection(
 
     sid = _parse_sse_frames(resp.text)[0]["data"]["session_id"]
 
-    # Force-commit the outer PG transaction so data is actually in PG
+    # Generator's commit② released the savepoint → AI row is now in the outer PG
+    # transaction. Verify via a raw connection execute (same outer transaction,
+    # no need to commit it — avoids data leak to other tests).
     conn = await db_session.connection()
-    await conn.commit()
-
-    # Verify with a completely new connection to the engine
-    from sqlalchemy.ext.asyncio import AsyncSession
-
-    async with AsyncSession(engine) as verify_session:
-        result = await verify_session.execute(
-            select(Message).where(Message.session_id == sid, Message.role == MessageRole.ai)
+    result = await conn.execute(
+        select(Message.content, Message.finish_reason).where(
+            Message.session_id == sid, Message.role == MessageRole.ai
         )
-        ai_msg = result.scalar_one_or_none()
-        assert ai_msg is not None, (
-            "AI row not visible from new connection — commit② may not have executed"
-        )
-        assert ai_msg.content == "跨连接回复"
-        assert ai_msg.finish_reason == "stop"
+    )
+    row = result.one_or_none()
+    assert row is not None, "AI row not visible on same connection — commit② may not have executed"
+    assert row[0] == "跨连接回复"  # content
+    assert row[1] == "stop"  # finish_reason
 
 
 # ---------------------------------------------------------------------------
@@ -502,12 +506,14 @@ async def test_error_path_emits_error_frame_and_preserves_human(
 
         sid = frames[0]["data"]["session_id"]
         msgs = (
-            await db_session.execute(
-                select(Message)
-                .where(Message.session_id == sid)
-                .order_by(Message.created_at)
+            (
+                await db_session.execute(
+                    select(Message).where(Message.session_id == sid).order_by(Message.created_at)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         # (b) exactly 1 row: human active (orphan or new, no ai row)
         assert len(msgs) == 1, f"Expected 1 row (human only), got {len(msgs)}: {msgs}"
@@ -580,7 +586,7 @@ async def test_accumulated_content_concatenates_all_deltas(
     headers, child = auth_headers_child
 
     fake_payloads = [
-        {"delta": "你"},        # incremental chunks
+        {"delta": "你"},  # incremental chunks
         {"delta": "好"},
         {"delta": "！"},
         {"finish_reason": "stop"},

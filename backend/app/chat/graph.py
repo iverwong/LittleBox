@@ -81,9 +81,7 @@ async def persist_ai_turn(
 
     # Update session last_active_at
     await db.execute(
-        update(Session)
-        .where(Session.id == sid)
-        .values(last_active_at=datetime.now(timezone.utc))
+        update(Session).where(Session.id == sid).values(last_active_at=datetime.now(timezone.utc))
     )
 
     return msg.id
