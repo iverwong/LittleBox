@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     bailian_api_key: SecretStr = SecretStr("")  # required
     bailian_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     bailian_model: str = "deepseek-v4-flash"
+    # M6 provider abstraction
+    main_provider: str = "deepseek"
+    fallback_provider: str | None = "deepseek"
+    enable_fallback: bool = True
+    deepseek_reasoning_effort: str = "high"
     llm_request_timeout_seconds: float = 60.0
     # M5 hotfix: family child count limit
     max_children_per_family: int = 3

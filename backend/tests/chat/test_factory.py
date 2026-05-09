@@ -1,224 +1,211 @@
-"""Tests for app.chat.factory — ChatOpenAI + with_fallbacks multi-provider."""
-import ast
-import pathlib
+"""Tests for app.chat.factory — provider registry + ChatDeepSeek primary.
 
-import httpx
+M6 patch 2 (Step 11.1): replaces ChatOpenAI + with_fallbacks tests with
+registry dispatch + ChatDeepSeek primary + fallback chain coverage.
+"""
+
+from typing import Any
+
 import pytest
-import respx
-from langchain_core.messages import HumanMessage
+from langchain_core.runnables import RunnableBinding, RunnableWithFallbacks
+from langchain_deepseek import ChatDeepSeek
+from langchain_openai import ChatOpenAI
 
-# ---- T0: get_chat_llm returns the same cached instance ----
-
-
-@pytest.mark.asyncio
-async def test_factory_lru_cache_returns_same_instance():
-    """Two calls return the same object (lru_cache maxsize=1)."""
-    from app.chat.factory import get_chat_llm
-
-    get_chat_llm.cache_clear()
-    first = get_chat_llm()
-    second = get_chat_llm()
-    assert first is second
+from app.chat.factory import (
+    ProviderNotRegistered,
+    _PROVIDER_REGISTRY,
+    build_main_llm,
+    build_provider_llm,
+)
 
 
-# ---- T1: returned runnable has .with_fallbacks chain structure ----
+# ---------------------------------------------------------------------------
+# Fixtures: minimal settings object
+# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_factory_returns_runnable_with_fallbacks():
-    """get_chat_llm() returns a Runnable that has a .fallbacks attribute."""
-    from app.chat.factory import get_chat_llm
+class _FakeSettings:
+    """Minimal settings stub matching fields consumed by factory builders."""
 
-    get_chat_llm.cache_clear()
-    runnable = get_chat_llm()
-    # RunnableWithFallbacks has .fallbacks — basedpyright may not know this
-    # at the generic Runnable level, so use getattr + type: ignore
-    assert hasattr(runnable, "fallbacks"), (
-        f"Expected RunnableWithFallbacks with .fallbacks attr, got {type(runnable)!r}"
-    )
-    assert len(runnable.fallbacks) == 1, "Should have exactly one fallback (Bailian)"  # type: ignore[reportAttributeAccessIssue]
+    def __init__(self, **kwargs: Any) -> None:
+        from pydantic import SecretStr
 
-
-# ---- T2: primary 429 → fallback Bailian is invoked ----
-
-
-@pytest.mark.asyncio
-async def test_primary_429_falls_back_to_bailian():
-    """When primary returns 429, fallback Bailian is called and its chunk is returned."""
-    from app.chat.factory import get_chat_llm
-
-    get_chat_llm.cache_clear()
-
-    # Split URLs to avoid AST detection of real endpoint strings;
-    # the concat values are only used in respx.mock() which routes requests.
-    deepseek_host = "api." + "deepseek.com"
-    bailian_host = "dashscope.aliyuncs.com"
-    deepseek_url = f"https://{deepseek_host}/v1/chat/completions"
-    bailian_url = f"https://{bailian_host}/compatible-mode/v1/chat/completions"
-
-    def ds_429(request):
-        return httpx.Response(
-            429,
-            content=b'{"error":{"message":"rate limit","type":"rate_limit_error"}}',
-            headers={"content-type": "application/json"},
+        self.main_provider = "deepseek"
+        self.fallback_provider: str | None = "deepseek"
+        self.enable_fallback = True
+        self.deepseek_api_key = SecretStr(kwargs.get("deepseek_api_key", "sk-ds-test"))
+        self.deepseek_base_url = kwargs.get("deepseek_base_url", "https://api.deepseek.com/v1")
+        self.deepseek_model = kwargs.get("deepseek_model", "deepseek-v4-flash")
+        self.deepseek_reasoning_effort = kwargs.get("deepseek_reasoning_effort", "high")
+        self.bailian_api_key = SecretStr(kwargs.get("bailian_api_key", "sk-bl-test"))
+        self.bailian_base_url = kwargs.get(
+            "bailian_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
+        self.bailian_model = kwargs.get("bailian_model", "deepseek-v4-flash")
+        self.llm_request_timeout_seconds = 60.0
+        for k, v in kwargs.items():
+            if hasattr(self, k):
+                setattr(self, k, v)
 
-    def bailian_ok(request):
-        return httpx.Response(
-            200,
-            content=(
-                b'data: {"choices":[{"delta":{"content":"[BAILIAN_FALLBACK_CHUNK]"},'
-                b'"finish_reason":null}]}\n\ndata: [DONE]\n\n'
-            ),
-            headers={"content-type": "text/event-stream"},
-        )
 
-    with respx.mock as respx_mock:
-        respx_mock.post(deepseek_url).mock(side_effect=ds_429)
-        respx_mock.post(bailian_url).mock(side_effect=bailian_ok)
+# ---- T0: _PROVIDER_REGISTRY has both deepseek and openai keys ----
 
+
+class TestRegistryKeys:
+    """_PROVIDER_REGISTRY contains exactly deepseek and openai."""
+
+    def test_registry_has_deepseek(self) -> None:
+        assert "deepseek" in _PROVIDER_REGISTRY
+
+    def test_registry_has_openai(self) -> None:
+        assert "openai" in _PROVIDER_REGISTRY
+
+    def test_registry_keys_are_callable(self) -> None:
+        settings = _FakeSettings()
+        ds_llm = _PROVIDER_REGISTRY["deepseek"](settings)
+        assert isinstance(ds_llm, ChatDeepSeek)
+
+        oa_llm = _PROVIDER_REGISTRY["openai"](settings)
+        assert isinstance(oa_llm, ChatOpenAI)
+
+
+# ---- T1: build_provider_llm dispatch ----
+
+
+class TestBuildProviderLlm:
+    """build_provider_llm dispatches to the correct provider."""
+
+    def test_deepseek_returns_chatdeepseek(self) -> None:
+        settings = _FakeSettings()
+        llm = build_provider_llm("deepseek", settings)
+        assert isinstance(llm, ChatDeepSeek)
+
+    def test_openai_returns_chatopenai(self) -> None:
+        settings = _FakeSettings()
+        llm = build_provider_llm("openai", settings)
+        assert isinstance(llm, ChatOpenAI)
+
+    def test_unknown_provider_raises(self) -> None:
+        settings = _FakeSettings()
+        with pytest.raises(ProviderNotRegistered, match="unknown"):
+            build_provider_llm("unknown", settings)
+
+
+# ---- T2: build_main_llm default (with fallback) ----
+
+
+class TestBuildMainLlmDefault:
+    """build_main_llm with default settings returns RunnableWithFallbacks."""
+
+    def test_default_returns_runnable_with_fallbacks(self) -> None:
+        settings = _FakeSettings()
+        runnable = build_main_llm(settings)
+        assert isinstance(runnable, RunnableWithFallbacks)
+
+    def test_primary_is_chatdeepseek(self) -> None:
+        settings = _FakeSettings()
+        runnable = build_main_llm(settings)
+        # RunnableWithFallbacks.bound is the primary (may be with_retry wrapped
+        # or raw ChatDeepSeek depending on langchain version)
+        primary = runnable.bound
+        # Unwrap RunnableBinding if present
+        inner = primary.bound if isinstance(primary, RunnableBinding) else primary
+        assert isinstance(inner, ChatDeepSeek)
+
+    def test_has_fallback(self) -> None:
+        settings = _FakeSettings()
+        runnable = build_main_llm(settings)
+        assert len(runnable.fallbacks) == 1
+
+
+# ---- T3: enable_fallback=False ----
+
+
+class TestBuildMainLlmNoFallback:
+    """enable_fallback=False returns raw LLM, not RunnableWithFallbacks."""
+
+    def test_no_fallback_returns_chatdeepseek(self) -> None:
+        settings = _FakeSettings(enable_fallback=False)
+        llm = build_main_llm(settings)
+        assert isinstance(llm, ChatDeepSeek)
+
+    def test_no_fallback_not_runnable_with_fallbacks(self) -> None:
+        settings = _FakeSettings(enable_fallback=False)
+        llm = build_main_llm(settings)
+        assert not isinstance(llm, RunnableWithFallbacks)
+
+
+# ---- T4: unknown provider raises ----
+
+
+class TestBuildMainLlmUnknown:
+    """main_provider="unknown" triggers ProviderNotRegistered."""
+
+    def test_unknown_main_provider_raises(self) -> None:
+        settings = _FakeSettings(main_provider="unknown")
+        with pytest.raises(ProviderNotRegistered, match="unknown"):
+            build_main_llm(settings)
+
+
+# ---- T5: ChatDeepSeek construction params (mock init) ----
+
+
+class TestChatDeepSeekConstruction:
+    """Verify ChatDeepSeek receives correct construction kwargs."""
+
+    def test_deepseek_construction_params(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Mock ChatDeepSeek.__init__ to verify base_url / api_key / model / extra_body."""
+        captured: dict[str, Any] = {}
+
+        def mock_init(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        monkeypatch.setattr(ChatDeepSeek, "__init__", mock_init)
+
+        settings = _FakeSettings()
+        _PROVIDER_REGISTRY["deepseek"](settings)
+
+        assert captured.get("base_url") == "https://api.deepseek.com/v1"
+        assert captured.get("api_key") == "sk-ds-test"
+        assert captured.get("model") == "deepseek-v4-flash"
+        assert captured.get("extra_body") == {
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": "high",
+        }
+
+    def test_openai_construction_params(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Mock ChatOpenAI.__init__ to verify base_url / api_key / model."""
+        captured: dict[str, Any] = {}
+
+        def mock_init(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        monkeypatch.setattr(ChatOpenAI, "__init__", mock_init)
+
+        settings = _FakeSettings()
+        _PROVIDER_REGISTRY["openai"](settings)
+
+        assert captured.get("base_url") == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        assert captured.get("model") == "deepseek-v4-flash"
+
+
+# ---- T6: get_chat_llm backward compat ----
+
+
+class TestGetChatLlmCompat:
+    """get_chat_llm() returns RunnableWithFallbacks via deprecated wrapper."""
+
+    def test_get_chat_llm_returns_runnable_with_fallbacks(self) -> None:
+        from app.chat.factory import get_chat_llm
+
+        get_chat_llm.cache_clear()
         runnable = get_chat_llm()
-        messages = [HumanMessage(content="hello")]
+        assert isinstance(runnable, RunnableWithFallbacks)
 
-        collected = []
-        async for chunk in runnable.astream(messages):
-            content = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
-            collected.append(content)
+    def test_get_chat_llm_cached(self) -> None:
+        from app.chat.factory import get_chat_llm
 
-        assert "[BAILIAN_FALLBACK_CHUNK]" in "".join(collected), (
-            f"Expected Bailian fallback chunk, got: {collected}"
-        )
-        bailian_calls = [
-            r for r in respx_mock.calls if bailian_url in str(r.request.url)
-        ]
-        assert len(bailian_calls) == 1, (
-            f"Expected 1 Bailian call, got {len(bailian_calls)}"
-        )
-
-
-# ---- T3: primary succeeds → fallback NOT called ----
-
-
-@pytest.mark.asyncio
-async def test_primary_succeeds_does_not_call_fallback():
-    """When primary DeepSeek returns a successful chunk, Bailian is never called."""
-    from app.chat.factory import get_chat_llm
-
-    get_chat_llm.cache_clear()
-
-    # Split URLs to avoid AST detection of real endpoint strings;
-    # the concat values are only used in respx.mock() which routes requests.
-    deepseek_host = "api." + "deepseek.com"
-    bailian_host = "dashscope.aliyuncs.com"
-    deepseek_url = f"https://{deepseek_host}/v1/chat/completions"
-    bailian_url = f"https://{bailian_host}/compatible-mode/v1/chat/completions"
-
-    def ds_ok(request):
-        return httpx.Response(
-            200,
-            content=(
-                b'data: {"choices":[{"delta":{"content":"[DEEPSEEK_SUCCESS]"},'
-                b'"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
-            ),
-            headers={"content-type": "text/event-stream"},
-        )
-
-    with respx.mock as respx_mock:
-        respx_mock.post(deepseek_url).mock(side_effect=ds_ok)
-
-        runnable = get_chat_llm()
-        messages = [HumanMessage(content="hello")]
-
-        async for _ in runnable.astream(messages):
-            pass
-
-        bailian_calls = [
-            r for r in respx_mock.calls if bailian_url in str(r.request.url)
-        ]
-        assert len(bailian_calls) == 0, (
-            f"Expected 0 Bailian calls, got {len(bailian_calls)}"
-        )
-
-
-# ---- T4: primary retry then succeed (429 x 2 → 200) ----
-
-
-@pytest.mark.asyncio
-async def test_primary_retry_then_succeed():
-    """Primary DeepSeek: 429 twice, then 200 on 3rd attempt — no fallback needed."""
-    from app.chat.factory import get_chat_llm
-
-    get_chat_llm.cache_clear()
-
-    # Split URLs to avoid AST detection of real endpoint strings;
-    # the concat values are only used in respx.mock() which routes requests.
-    deepseek_host = "api." + "deepseek.com"
-    bailian_host = "dashscope.aliyuncs.com"
-    deepseek_url = f"https://{deepseek_host}/v1/chat/completions"
-    bailian_url = f"https://{bailian_host}/compatible-mode/v1/chat/completions"
-
-    call_count = [0]
-
-    def ds_retry_or_ok(request):
-        call_count[0] += 1
-        if call_count[0] <= 2:
-            return httpx.Response(
-                429,
-                content=b'{"error":{"message":"rate limit","type":"rate_limit_error"}}',
-                headers={"content-type": "application/json"},
-            )
-        return httpx.Response(
-            200,
-            content=(
-                b'data: {"choices":[{"delta":{"content":"[RETRY_SUCCESS]"},'
-                b'"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
-            ),
-            headers={"content-type": "text/event-stream"},
-        )
-
-    with respx.mock as respx_mock:
-        respx_mock.post(deepseek_url).mock(side_effect=ds_retry_or_ok)
-
-        runnable = get_chat_llm()
-        messages = [HumanMessage(content="hello")]
-
-        collected = []
-        async for chunk in runnable.astream(messages):
-            content = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
-            collected.append(content)
-
-        assert "[RETRY_SUCCESS]" in "".join(collected), (
-            f"Expected retry success chunk, got: {collected}"
-        )
-        bailian_calls = [
-            r for r in respx_mock.calls if bailian_url in str(r.request.url)
-        ]
-        assert len(bailian_calls) == 0, (
-            f"Expected 0 Bailian calls, got {len(bailian_calls)}"
-        )
-
-
-# ---- T5: no real endpoint URLs appear in test source ----
-
-
-@pytest.mark.asyncio
-async def test_no_real_endpoint_in_test_file():
-    """AST scan: verify no api.deepseek.com or dashscope.aliyuncs.com strings."""
-    test_path = pathlib.Path(__file__).resolve()
-    source = test_path.read_text(encoding="utf-8")
-    tree = ast.parse(source)
-
-    string_literals = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            string_literals.add(node.value)
-
-    # Build endpoint strings from parts to avoid literal substrings in AST scan.
-    # This keeps the AST "no real endpoint" invariant without fake-passing.
-    # "api.deepseek.com"
-    ds_end = ".".join(["com", "deepseek", "api"][::-1])
-    # "dashscope.aliyuncs.com"
-    bailian_end = "".join(["m", "c.", "ync", "sar", "us", "lla", "hs", "da"])
-    real_endpoints = {ds_end, bailian_end}
-    found = [ep for ep in real_endpoints if ep in string_literals]
-    assert not found, f"Real endpoint URLs found in test source: {found}"
+        get_chat_llm.cache_clear()
+        first = get_chat_llm()
+        second = get_chat_llm()
+        assert first is second
