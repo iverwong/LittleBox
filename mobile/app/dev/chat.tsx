@@ -3,13 +3,14 @@ import { useRef, useState } from 'react'
 import { Button, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { router } from 'expo-router'
 
-import { ChatSseHandle, openChatStream } from '../lib/sseClient'
+import { ChatSseHandle, openChatStream } from '../../lib/sseClient'
 
 type Status = 'idle' | 'streaming' | 'done' | 'error'
 
 // 开发地址：Android 模拟器用 10.0.2.2，iOS 模拟器 / web 用 localhost，真机用电脑局域网 IP。
 // 生产走 EXPO_PUBLIC_API_BASE 环境变量；M7 清理时此常量一并删除。
-const API_BASE = 'http://192.168.0.229:8000'
+// 网络环境变化时，host ip需要修改后方可进行测试
+const API_BASE = 'http://192.168.1.3:50060'
 
 export default function DevChat() {
 	const [input, setInput] = useState('')
@@ -56,7 +57,7 @@ export default function DevChat() {
 		<View style={styles.container}>
 			<Text style={styles.title}>M3 Streaming Demo（M7 后删除）</Text>
 			{/* [M15-TEMP] 临时入口，展厅验收完成后删除 */}
-			<Button title="开发展厅" onPress={() => router.push('/components')} />
+			<Button title="开发展厅" onPress={() => router.push('/dev/components' as never)} />
 			<TextInput
 				style={styles.input}
 				value={input}

@@ -4,23 +4,23 @@ import { useAuthStore } from '../../stores/auth'
 
 export default function ChildIndexScreen() {
   const router = useRouter()
-  const logout = useAuthStore((state) => state.logout)
+  const clearSession = useAuthStore((state) => state.clearSession)
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>[子端] 会话列表</Text>
 
-      <Pressable style={styles.sessionItem} onPress={() => router.push('/(child)/chat/1' as never)}>
+      <Pressable style={styles.sessionItem} onPress={() => router.push('/child/chat/1' as never)}>
         <Text style={styles.sessionTitle}>AI 伙伴小明</Text>
         <Text style={styles.sessionPreview}>你好呀！今天想聊什么？</Text>
       </Pressable>
 
-      <Pressable style={styles.sessionItem} onPress={() => router.push('/(child)/chat/2' as never)}>
+      <Pressable style={styles.sessionItem} onPress={() => router.push('/child/chat/2' as never)}>
         <Text style={styles.sessionTitle}>故事姐姐</Text>
         <Text style={styles.sessionPreview}>今天想听什么故事呀？</Text>
       </Pressable>
 
-      <Pressable style={styles.logoutButton} onPress={logout}>
+      <Pressable style={styles.logoutButton} onPress={clearSession}>
         <Text style={styles.logoutText}>退出登录</Text>
       </Pressable>
     </View>

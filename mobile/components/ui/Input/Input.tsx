@@ -17,7 +17,11 @@ export function Input({
 	size = 'md',
 	secureTextEntry = false,
 	keyboardType = 'default',
+	autoCapitalize = 'sentences',
+	autoCorrect = true,
 	disabled = false,
+	maxLength,
+	onBlur,
 	style,
 }: InputProps) {
 	const theme = useTheme()
@@ -32,7 +36,10 @@ export function Input({
 	]
 
 	const onFocus = useCallback(() => setFocused(true), [])
-	const onBlur = useCallback(() => setFocused(false), [])
+	const handleBlur = useCallback(() => {
+		setFocused(false)
+		onBlur?.()
+	}, [onBlur])
 
 	const iconColor = disabled ? theme.palette.neutral[400] : theme.palette.neutral[500]
 	const textColor = disabled ? theme.palette.neutral[500] : theme.palette.neutral[800]
@@ -60,9 +67,12 @@ export function Input({
 					placeholderTextColor={theme.palette.neutral[400]}
 					secureTextEntry={secureTextEntry}
 					keyboardType={keyboardType}
+					autoCapitalize={autoCapitalize}
+					autoCorrect={autoCorrect}
 					editable={!disabled}
+					maxLength={maxLength}
 					onFocus={onFocus}
-					onBlur={onBlur}
+					onBlur={handleBlur}
 					style={[styles.input, size === 'lg' ? styles.size_lg : styles.size_md, { color: textColor }]}
 				/>
 				{rightIcon && (

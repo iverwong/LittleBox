@@ -7,7 +7,7 @@ export default function ParentLayout() {
         name="children"
         options={{
           title: '孩子管理',
-          headerShown: true,
+          headerShown: false,
         }}
       />
       <Tabs.Screen

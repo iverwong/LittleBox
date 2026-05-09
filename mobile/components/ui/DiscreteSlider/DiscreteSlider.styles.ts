@@ -31,11 +31,11 @@ export const createStyles = (theme: Theme): DiscreteSliderStyles => {
       paddingVertical: 20,
       paddingHorizontal: 24,
       borderRadius: theme.radius.lg,
-      backgroundColor: theme.surface.paper,
+      backgroundColor: theme.palette.neutral[100],
       ...theme.shadow.sm,
     },
     centerLabelRow: {
-      minHeight: 36,
+      minHeight: 24,
       alignItems: 'center',
       justifyContent: 'flex-end',
       marginBottom: 4,

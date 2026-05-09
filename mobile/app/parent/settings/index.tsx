@@ -2,13 +2,13 @@ import { View, Text, Pressable, StyleSheet } from 'react-native'
 import { useAuthStore } from '../../../stores/auth'
 
 export default function SettingsIndexScreen() {
-  const logout = useAuthStore((state) => state.logout)
+  const clearSession = useAuthStore((state) => state.clearSession)
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>[家长端] 设置</Text>
 
-      <Pressable style={styles.logoutButton} onPress={logout}>
+      <Pressable style={styles.logoutButton} onPress={clearSession}>
         <Text style={styles.logoutText}>退出登录</Text>
       </Pressable>
     </View>
