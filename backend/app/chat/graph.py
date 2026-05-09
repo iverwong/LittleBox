@@ -31,14 +31,13 @@ from langgraph.graph import END, StateGraph
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.chat.extractors import extract_finish_reason, extract_reasoning_content
 from app.chat.factory import get_chat_llm
 from app.chat.state import MainDialogueState
 from app.models.chat import Message, Session
 from app.models.enums import InterventionType, MessageRole, MessageStatus
 
 logger = logging.getLogger(__name__)
-
-ALLOWED_FINISH_REASONS = frozenset({"stop", "length", "content_filter"})
 
 
 # ---------------------------------------------------------------------------
@@ -205,12 +204,11 @@ async def call_main_llm(state: MainDialogueState) -> dict:
     # Assemble LLM prompt (guidance injection without touching state["messages"])
     llm_messages = _assemble_llm_messages(state)
 
-    async for chunk in llm.astream(llm_messages):
-        ak = chunk.additional_kwargs or {}
+    provider = state.get("provider", "deepseek")
 
+    async for chunk in llm.astream(llm_messages):
         # reasoning passthrough (signal only, no text, baseline §3.2)
-        rc = ak.get("reasoning_content")
-        if rc:
+        if extract_reasoning_content(chunk, provider):
             writer({"reasoning": True})
 
         text = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
@@ -218,9 +216,9 @@ async def call_main_llm(state: MainDialogueState) -> dict:
             writer({"delta": text})
             parts.append(text)
 
-        # finish_reason passthrough (whitelist only)
-        fr = ak.get("response_metadata", {}).get("finish_reason")
-        if fr in ALLOWED_FINISH_REASONS:
+        # finish_reason passthrough (whitelist only, helper dispatch)
+        fr = extract_finish_reason(chunk, provider)
+        if fr:
             writer({"finish_reason": fr})
 
     return {"messages": [AIMessage(content="".join(parts))]}

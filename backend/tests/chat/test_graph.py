@@ -44,12 +44,14 @@ def _make_state(
     messages: list[BaseMessage] | None = None,
     audit_state: dict | None = None,
     pending_guidance: str | None = None,
+    provider: str = "deepseek",
 ) -> MainDialogueState:
     """Minimal initial state for graph node unit tests."""
     return {
         "session_id": "550e8400-e29b-41d4-a716-446655440000",
         "child_user_id": "child-uuid",
         "child_profile": None,  # not read in M6 nodes
+        "provider": provider,
         "messages": messages or [],
         "audit_state": audit_state or {},
         "pending_guidance": pending_guidance,

@@ -555,10 +555,13 @@ async def chat_stream(
 
             from app.chat.state import MainDialogueState
 
+            from app.config import settings as _app_settings
+
             initial_state: MainDialogueState = {
                 "session_id": str(sid),
                 "child_user_id": str(current.id),
                 "child_profile": None,  # M6: not read by nodes
+                "provider": _app_settings.main_provider,
                 "messages": [HumanMessage(content=req.content)],
                 "audit_state": {},  # M6: all-False stub
                 "pending_guidance": None,
