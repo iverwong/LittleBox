@@ -207,3 +207,19 @@ The following files are M3/M4 temporary artifacts scheduled for deletion at M7:
 - **`messages.role`**: DB stores `human`/`ai` (not `user`/`assistant`), aligned with LangChain `HumanMessage`/`AIMessage`.
 - **pgAdmin port**: Mapped to `16050:5050` (not `5050:5050`) to avoid conflict.
 - **RedisInsight port**: Mapped to `16540:5540` (not `5540:5540`).
+
+### Test Isolation Discipline (M6-patch)
+- **所有涉及 DB / Redis 的测试必须通过 conftest fixture 进入**：
+  - DB: `db_session` (savepoint rollback, function scope)
+  - HTTP: `api_client` (ASGI in-process, `dependency_overrides`)
+  - Redis: `redis_client` (fakeredis, function scope)
+- **黑名单（禁止使用）**：
+  - `subprocess` / `Popen` 跑 `app.scripts.*` 连真实库
+  - `httpx.Client(base_url="http://localhost:8000")` 直连真 server
+  - `redis.Redis(host="redis", ...)` 显式连真实 host
+  - `from app.config import settings` 后用 `settings.database_url` 自建 engine
+  - `flushdb()` / `flushall()`
+- **双层运行时防御**（`backend/tests/conftest.py`）：
+  - 模块级 `_test_url()` 断言：数据库名必须含 `_test`，否则 pytest 立即 abort
+  - session autouse `_prod_db_row_count_guard`：记录真库行数 baseline，session 结束比对，检测到变化即 fail
+- **历史教训**：M6-patch · 测试隔离纪律加固（`docs/M6-patch.md`）
