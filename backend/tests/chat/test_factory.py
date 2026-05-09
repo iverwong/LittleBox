@@ -165,7 +165,7 @@ class TestChatDeepSeekConstruction:
         settings = _FakeSettings()
         _PROVIDER_REGISTRY["deepseek"](settings)
 
-        assert captured.get("base_url") == "https://api.deepseek.com/v1"
+        assert captured.get("api_base") == "https://api.deepseek.com/v1"
         assert captured.get("api_key") == "sk-ds-test"
         assert captured.get("model") == "deepseek-v4-flash"
         assert captured.get("extra_body") == {
@@ -195,7 +195,7 @@ class TestChatDeepSeekThinkingParams:
         """Construct ChatDeepSeek with extra_body and verify attribute."""
         llm = ChatDeepSeek(
             api_key="sk-test",
-            base_url="https://api.deepseek.com/v1",
+            api_base="https://api.deepseek.com/v1",
             model="deepseek-v4-flash",
             extra_body={
                 "thinking": {"type": "enabled"},
@@ -211,7 +211,7 @@ class TestChatDeepSeekThinkingParams:
         """Verify reasoning_effort=high is the default."""
         llm = ChatDeepSeek(
             api_key="sk-test",
-            base_url="https://api.deepseek.com/v1",
+            api_base="https://api.deepseek.com/v1",
             model="deepseek-v4-flash",
             extra_body={
                 "thinking": {"type": "enabled"},
@@ -224,7 +224,7 @@ class TestChatDeepSeekThinkingParams:
         """Verify thinking type is enabled."""
         llm = ChatDeepSeek(
             api_key="sk-test",
-            base_url="https://api.deepseek.com/v1",
+            api_base="https://api.deepseek.com/v1",
             model="deepseek-v4-flash",
             extra_body={
                 "thinking": {"type": "enabled"},

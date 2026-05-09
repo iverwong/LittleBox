@@ -28,10 +28,16 @@ def _build_chat_deepseek(
     timeout: float,
     reasoning_effort: str,
 ) -> ChatDeepSeek:
-    """Construct ChatDeepSeek with thinking mode enabled."""
+    """Construct ChatDeepSeek with thinking mode enabled.
+
+    Note: ChatDeepSeek has its own ``api_base`` field (separate from
+    ``BaseChatOpenAI.openai_api_base`` aliased from ``base_url``).
+    The underlying OpenAI client reads ``api_base``, NOT ``openai_api_base``,
+    so we pass ``api_base`` instead of ``base_url``.
+    """
     return ChatDeepSeek(
         api_key=api_key,  # type: ignore[arg-type]
-        base_url=base_url,
+        api_base=base_url,
         model=model,
         timeout=timeout,
         extra_body={
