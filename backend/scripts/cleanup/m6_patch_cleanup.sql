@@ -30,20 +30,37 @@ WHERE u.admin_note = 'e2e-test parent' OR u.phone ~ '^[a-z]{4}$';
 
 -- ======================== Phase 2: DELETE (manually uncomment after sampling) ========================
 -- ⚠️ 仅在 Phase 1 抽样 100% 命中 e2e 特征后才可取消下方注释
--- ⚠️ 必须全程在 BEGIN; ... COMMIT; 事务内执行
--- ⚠️ 删除顺序：family_members → users → families（外键级联）
+-- ⚠️ 必须全程在 BEGIN; ... COMMIT; 事务内执行，严格按 A--B--C--D 顺序
+-- ⚠️ 删除顺序：A (data_deletion_requests + notifications) → B (family_members) → C (users) → D (families)
 -- ⚠️ 清理后需将 DELETE 重新注释回去保留脚本作仓库纪录
 
 -- BEGIN;
 
+-- -- A. NO ACTION FK 引用表（PG 不会自动级联，必须显式先删）
+-- DELETE FROM data_deletion_requests
+-- WHERE requested_by IN (
+--   SELECT id FROM users
+--   WHERE admin_note = 'e2e-test parent' OR phone ~ '^[a-z]{4}$'
+-- );
+
+-- DELETE FROM notifications
+-- WHERE parent_user_id IN (
+--   SELECT id FROM users
+--   WHERE admin_note = 'e2e-test parent' OR phone ~ '^[a-z]{4}$'
+-- );
+
+-- -- B. CASCADE 路径显式声明（family_members 也会 CASCADE，此处显式删保持 self-documenting）
 -- DELETE FROM family_members WHERE user_id IN (
 --   SELECT id FROM users
 --   WHERE admin_note = 'e2e-test parent' OR phone ~ '^[a-z]{4}$'
 -- );
 
+-- -- C. 删 users（剩余 CASCADE 自动清理 child_profiles / auth_tokens / device_tokens /
+-- --    sessions(及 messages/audit_records/rolling_summaries 间接)/daily_reports/notifications.child_user_id）
 -- DELETE FROM users
 -- WHERE admin_note = 'e2e-test parent' OR phone ~ '^[a-z]{4}$';
 
+-- -- D. 孤儿 families（业务约定不应存在）
 -- DELETE FROM families WHERE id NOT IN (
 --   SELECT DISTINCT family_id FROM family_members
 -- );
