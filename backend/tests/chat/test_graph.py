@@ -478,3 +478,77 @@ async def test_call_main_llm_finish_reason_non_whitelist_filtered(monkeypatch):
 
     finish_calls = [w for w in written if "finish_reason" in w]
     assert len(finish_calls) == 0, f"Expected no finish_reason writer call, got {finish_calls}"
+
+
+# ---------------------------------------------------------------------------
+# G6: reasoning signal passthrough
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_call_main_llm_emits_reasoning_signal_on_reasoning_content(monkeypatch):
+    """chunk.additional_kwargs reasoning_content → writer receives {'reasoning': True}."""
+
+    def _fake_get_llm():
+        return _FakeLLM(
+            [
+                AIMessageChunk(
+                    content="",
+                    additional_kwargs={"reasoning_content": "思考中..."},
+                ),
+                AIMessageChunk(
+                    content="结论",
+                    additional_kwargs={},
+                ),
+            ]
+        )
+
+    monkeypatch.setattr("app.chat.graph.get_chat_llm", _fake_get_llm)
+
+    written: list[dict] = []
+    monkeypatch.setattr(
+        "app.chat.graph.get_stream_writer",
+        lambda: type("W", (), {"__call__": lambda self, d: written.append(d)})(),
+    )
+
+    state = _make_state(
+        messages=[SystemMessage(content="sys"), HumanMessage(content="hi")],
+    )
+    await call_main_llm(state)
+
+    reasoning_calls = [w for w in written if w.get("reasoning") is True]
+    assert len(reasoning_calls) == 1, f"Expected 1 reasoning signal, got {reasoning_calls}"
+    assert "delta" not in reasoning_calls[0], "Reasoning signal must not carry delta text"
+
+    # Second chunk (no reasoning_content) must NOT emit reasoning signal
+    delta_calls = [w for w in written if "delta" in w]
+    assert len(delta_calls) == 1
+    assert delta_calls[0]["delta"] == "结论"
+
+
+@pytest.mark.asyncio
+async def test_call_main_llm_no_reasoning_no_signal(monkeypatch):
+    """chunk without reasoning_content → writer NOT called with reasoning signal."""
+
+    def _fake_get_llm():
+        return _FakeLLM(
+            [
+                AIMessageChunk(content="hi", additional_kwargs={}),
+            ]
+        )
+
+    monkeypatch.setattr("app.chat.graph.get_chat_llm", _fake_get_llm)
+
+    written: list[dict] = []
+    monkeypatch.setattr(
+        "app.chat.graph.get_stream_writer",
+        lambda: type("W", (), {"__call__": lambda self, d: written.append(d)})(),
+    )
+
+    state = _make_state(
+        messages=[SystemMessage(content="sys"), HumanMessage(content="hi")],
+    )
+    await call_main_llm(state)
+
+    reasoning_calls = [w for w in written if w.get("reasoning") is True]
+    assert len(reasoning_calls) == 0, f"Expected no reasoning signal, got {reasoning_calls}"

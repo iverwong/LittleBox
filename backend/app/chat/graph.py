@@ -206,13 +206,19 @@ async def call_main_llm(state: MainDialogueState) -> dict:
     llm_messages = _assemble_llm_messages(state)
 
     async for chunk in llm.astream(llm_messages):
+        ak = chunk.additional_kwargs or {}
+
+        # reasoning passthrough (signal only, no text, baseline §3.2)
+        rc = ak.get("reasoning_content")
+        if rc:
+            writer({"reasoning": True})
+
         text = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
         if text:
             writer({"delta": text})
             parts.append(text)
 
         # finish_reason passthrough (whitelist only)
-        ak = chunk.additional_kwargs or {}
         fr = ak.get("response_metadata", {}).get("finish_reason")
         if fr in ALLOWED_FINISH_REASONS:
             writer({"finish_reason": fr})

@@ -654,3 +654,115 @@ async def test_end_frame_contains_real_aid(
         end_frame = next(f for f in _parse_sse_frames(resp.text) if f["type"] == "end")
         assert end_frame["data"]["aid"] == str(ai_msg.id)
         assert end_frame["data"]["aid"] is not None
+
+
+# ---------------------------------------------------------------------------
+# G6: thinking_start/end SSE sequence via reasoning payloads
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_thinking_start_end_sse_sequence(
+    api_client_with_eval, auth_headers_child, db_session
+):
+    """reasoning signal payloads → thinking_start (once) → first delta → thinking_end."""
+    headers, child = auth_headers_child
+
+    fake_payloads = [
+        {"reasoning": True},        # first reasoning → thinking_start
+        {"reasoning": True},        # second reasoning → no repeat
+        {"delta": "你好"},            # first delta → thinking_end
+        {"delta": "！"},             # second delta
+        {"finish_reason": "stop"},
+    ]
+
+    async def fake_astream(initial_state, stream_mode="custom"):
+        for p in fake_payloads:
+            yield p
+
+    with patch.object(main_graph, "astream", fake_astream):
+        body = make_payload(content="Hello")
+        resp = await api_client_with_eval.post(
+            "/api/v1/me/chat/stream", json=body, headers=headers
+        )
+        assert resp.status_code == 200
+        await resp.aclose()
+
+        frames = _parse_sse_frames(resp.text)
+        frame_types = [f["type"] for f in frames]
+
+        assert frame_types == [
+            "session_meta",
+            "thinking_start",
+            "thinking_end",
+            "delta",
+            "delta",
+            "end",
+        ], f"Unexpected frame sequence: {frame_types}"
+
+
+@pytest.mark.asyncio
+async def test_thinking_no_reasoning_no_signals(
+    api_client_with_eval, auth_headers_child, db_session
+):
+    """No reasoning payloads → no thinking_start/thinking_end frames."""
+    headers, child = auth_headers_child
+
+    fake_payloads = [
+        {"delta": "你好"},
+        {"delta": "！"},
+        {"finish_reason": "stop"},
+    ]
+
+    async def fake_astream(initial_state, stream_mode="custom"):
+        for p in fake_payloads:
+            yield p
+
+    with patch.object(main_graph, "astream", fake_astream):
+        body = make_payload(content="Hello")
+        resp = await api_client_with_eval.post(
+            "/api/v1/me/chat/stream", json=body, headers=headers
+        )
+        assert resp.status_code == 200
+        await resp.aclose()
+
+        frames = _parse_sse_frames(resp.text)
+        frame_types = [f["type"] for f in frames]
+
+        assert "thinking_start" not in frame_types
+        assert "thinking_end" not in frame_types
+        assert frame_types[0] == "session_meta"
+        assert frame_types[-1] == "end"
+
+
+@pytest.mark.asyncio
+async def test_thinking_only_no_content_no_emit_end(
+    api_client_with_eval, auth_headers_child, db_session
+):
+    """Only reasoning payloads, no delta → thinking_start but NO thinking_end."""
+    headers, child = auth_headers_child
+
+    fake_payloads = [
+        {"reasoning": True},
+        {"reasoning": True},
+        {"finish_reason": "stop"},
+    ]
+
+    async def fake_astream(initial_state, stream_mode="custom"):
+        for p in fake_payloads:
+            yield p
+
+    with patch.object(main_graph, "astream", fake_astream):
+        body = make_payload(content="Hello")
+        resp = await api_client_with_eval.post(
+            "/api/v1/me/chat/stream", json=body, headers=headers
+        )
+        assert resp.status_code == 200
+        await resp.aclose()
+
+        frames = _parse_sse_frames(resp.text)
+        frame_types = [f["type"] for f in frames]
+        assert "thinking_start" in frame_types
+        assert "thinking_end" not in frame_types, (
+            f"thinking_end should NOT be emitted without delta; got {frame_types}"
+        )

@@ -6,8 +6,8 @@ import asyncio
 import base64
 import json
 import logging
-from datetime import datetime
 from collections.abc import AsyncGenerator
+from datetime import datetime
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -23,8 +23,12 @@ from starlette.responses import StreamingResponse
 from app.auth.deps import get_current_account, require_child
 from app.auth.redis_client import get_redis
 from app.chat.graph import main_graph, persist_ai_turn
-from app.chat.locks import (acquire_session_lock, acquire_throttle_lock,
-                             release_session_lock, running_streams)
+from app.chat.locks import (
+    acquire_session_lock,
+    acquire_throttle_lock,
+    release_session_lock,
+    running_streams,
+)
 from app.chat.sse import stream_graph_to_sse
 from app.db import get_db
 from app.models.accounts import ChildProfile, User
@@ -571,11 +575,33 @@ async def chat_stream(
                 running_streams[str(sid)] = event
 
                 # Consume graph stream: accumulate content + forward to SSE
+                thinking_started = False  # thinking 信号状态机（基线 §3.2）
                 async for payload in main_graph.astream(initial_state, stream_mode="custom"):
+                    # reasoning 信号（基线 §3.2, signal-only, 不传文本）
+                    if payload.get("reasoning"):
+                        if not thinking_started and client_alive:
+                            thinking_started = True
+                            try:
+                                yield _frame_sse_event("thinking_start", {})
+                            except (ConnectionError, anyio.BrokenResourceError,
+                                    asyncio.CancelledError):
+                                client_alive = False
+                        continue  # reasoning 信号 payload 不进 _wrap → stream_graph_to_sse
+
                     d = payload.get("delta", "")
                     if d:
                         has_emitted_content = True
                         accumulated += d
+
+                    # 首个非空 delta 到达且 thinking 已开 → 收 thinking
+                    if d and thinking_started and client_alive:
+                        thinking_started = False
+                        try:
+                            yield _frame_sse_event("thinking_end", {})
+                        except (ConnectionError, anyio.BrokenResourceError,
+                                asyncio.CancelledError):
+                            client_alive = False
+
                     fr = payload.get("finish_reason")
                     if fr:
                         last_finish_reason = fr  # stop / length / content_filter
