@@ -5,7 +5,7 @@
 
 **M6 · 主对话链路 - 后端核心 — 实施计划**
 
-本页是 M6 里程碑的执行计划。设计基线见 [M6–M9 · 主对话链路 — 设计基线](https://www.notion.so/M6-M9-36d3c417e0d1406385868f912bcb7c45?pvs=21)；阶段 1 / 阶段 2 决策已全部对齐，本页只负责把决策转成可执行的步骤序列。执行纪律遵循 [Step-Execute Skill v1.4 更新稿](https://www.notion.so/Step-Execute-Skill-v1-4-a92066d4fc6f43a8b3cc177c55c1d560?pvs=21)：每步独立 commit、独立验证、独立审核轮次。
+本页是 M6 里程碑的执行计划。设计基线见 [M6–M9 · 主对话链路 — 设计基线](https://www.notion.so/M6-M9-36d3c417e0d1406385868f912bcb7c45?pvs=21)；阶段 1 / 阶段 2 决策已全部对齐，本页只负责把决策转成可执行的步骤序列。执行纪律遵循 [Step-Execute Skill v1.5 更新稿](https://www.notion.so/Step-Execute-Skill-v1-5-a92066d4fc6f43a8b3cc177c55c1d560?pvs=21)：每步独立 commit、独立验证、独立审核轮次。
 
 </aside>
 
@@ -16,7 +16,7 @@
 ### 1.1 做什么
 
 - **数据模型**：`messages` 表加 `status`（PG ENUM `messagestatus`，值 `active` / `discarded`）/ `finish_reason`（String）两列；索引改 partial WHERE status='active'
-- **`chat/` 模块拆分**：7 文件（state / graph / context / prompts / locks / sse / dashscope_chat）；其中 graph / sse / dashscope_chat 在 **Step 0** 完成 plain-class 重构 + dev_chat 兼容入口保留，state / context / prompts / locks 在 Step 2 起新建
+- **`chat/` 模块拆分**：7 文件（state / graph / context / prompts / locks / sse / **factory**）；Step 0 初版用 plain-class `dashscope_chat.py` + custom-streaming graph，**Step 2.5（commit `4716973`）整体重构为 `langchain_openai.ChatOpenAI` + `with_fallbacks` 双 provider**，`dashscope_chat.py` 删除、新增 `factory.py`；state / context / prompts / locks 在 Step 2 起新建。架构演进决策档案见 [M6 · 执行偏差记录](https://www.notion.so/M6-ae216175294b41418ad609103ed3c494?pvs=21) §Step 2.5 段
 - **LangGraph 图**：5 节点（load_audit_state / call_main_llm / call_crisis_llm / call_redline_llm / inject_guidance）+ 1 conditional router（route_by_risk）；持久化与 enqueue_audit 不进图，由 [me.py](http://me.py) generator 调用 helper（**T5 唯一写入点**）；stub 节点内部走主 LLM 兜底 + 显著 logger.warning
 - **5 端点**：`POST /me/chat/stream` · `POST /me/sessions/{id}/stop` · `GET /me/sessions` · `GET /me/sessions/{id}/messages` · `DELETE /me/sessions/{id}`
 - **双锁** + Lua DEL nonce 防误删
@@ -50,21 +50,24 @@
 
 ### Step 0 · LLM 客户端 + Graph + SSE plain-class 化（前置基础重构）
 
+> 🔄 **架构演进通知（2026-05-02 / Step 2.5 commit `4716973`）**：本 Step 落地的 plain-class `ChatDashScopeQwen` 已被 Step 2.5 整体退役，改用 `langchain_openai.ChatOpenAI(base_url=...)` + `with_fallbacks` + `with_retry` 双 provider 模式。`dashscope_chat.py` / `test_dashscope_chat.py` 已删除，新增 `factory.py` / `test_factory.py`。本 Step 原文以下保留作为「Step 0 落地历史快照」，**当前实际生产代码以 Step 2.5 为准**。**finish_reason 字段位置真实路径**见 Step 2.5 事实补丁二次修正（commit `e8d8d78`）：`chunk.additional_kwargs["response_metadata"]["finish_reason"]`（langchain-openai 兼容层标准位置；`chunk.response_metadata` 顶层属性始终是 `{}`，是 LangChain Pydantic 字段默认值行为，**不是**真实数据位置）。完整决策档案见 [M6 · 执行偏差记录](https://www.notion.so/M6-ae216175294b41418ad609103ed3c494?pvs=21) §Step 2.5 + §Step 2.5 事实补丁二次修正。
+> 
+
 > ⚠️ **基础重构必须前置 + 一次性级联**。原因：现网 M3 实装 `ChatDashScopeQwen` 是 `BaseChatModel` 子类，[graph.py](http://graph.py) 走 `ainvoke` + 外层 `astream_events()` + `on_chat_model_stream` 的流式通路；一旦改为 plain class，LangGraph 不再 emit `on_chat_model_stream`，graph / sse / dev_chat 必须同步切换。dev_chat 在 M7 才删除，本步必须保持其工作不退化。
 > 
 
 **任务**
 
-- [ ]  `dashscope_chat.py`：实现 `DashScopeCallOptions`（Pydantic）+ `ChatDashScopeQwen` Plain Class（**不**继承 BaseChatModel）；按架构基线 §十（2026-04-30 决议）落地；字段 / 方法签名见原 Step 5 描述（保留 thinking 分流：reasoning_content → `additional_kwargs`，content → `content`；**末帧 finish_reason 透传**：DashScope SDK `choice.finish_reason` 命中白名单 `stop` / `length` / `content_filter` 时，写入末 chunk 的 `response_metadata={"finish_reason": ...}`，供 Step 8b 末段事务消费）
-- [ ]  删除 `chat/llm.py`：`get_chat_llm()` 单例移入 `dashscope_chat.py` 顶部
-- [ ]  `graph.py` 临时单节点版：保留 M3 形态的单节点 `call_main_llm`，但**节点内部**改为 `async for chunk in llm.astream(state["messages"]): writer(chunk)`（用 LangGraph custom streaming API）；**不**写 ai 行 / 不更新 last_active_at（持久化收敛到 generator，见 Step 6 / 8b）；图边仍 `START → call_main_llm → END`
-- [ ]  `sse.py`（**双 framer 并存，禁止合并**）：
+- [x]  `dashscope_chat.py`：实现 `DashScopeCallOptions`（Pydantic）+ `ChatDashScopeQwen` Plain Class（**不**继承 BaseChatModel）；按架构基线 §十（2026-04-30 决议）落地；字段 / 方法签名见原 Step 5 描述（保留 thinking 分流：reasoning_content → `additional_kwargs`，content → `content`；**末帧 finish_reason 透传**：DashScope SDK `choice.finish_reason` 命中白名单 `stop` / `length` / `content_filter` 时，写入末 chunk 的 `response_metadata={"finish_reason": ...}`，供 Step 8b 末段事务消费）
+- [x]  删除 `chat/llm.py`：`get_chat_llm()` 单例移入 `dashscope_chat.py` 顶部
+- [x]  `graph.py` 临时单节点版：保留 M3 形态的单节点 `call_main_llm`，但**节点内部**改为 `async for chunk in llm.astream(state["messages"]): writer(chunk)`（用 LangGraph custom streaming API）；**不**写 ai 行 / 不更新 last_active_at（持久化收敛到 generator，见 Step 6 / 8b）；图边仍 `START → call_main_llm → END`
+- [x]  `sse.py`（**双 framer 并存，禁止合并**）：
     - **保留** `_sse_pack(event_type, **payload)` 函数原文不动（M3 单行协议 `data: {"type": ..., ...}\n\n`），供 dev_chat 兼容路径使用
     - **新增** `_frame_sse_event(event_type, data: dict) -> bytes`（M6 多行协议 `event: <type>\ndata: <json>\n\n`），供 me 主路径使用
     - 新增 `stream_to_sse(graph_stream)` 主路径：消费 `AIMessageChunk` 流，使用 `_frame_sse_event` emit `thinking_start` / `thinking_end` / `delta`；供 Step 8b 调用
     - **保留** `stream_chat(message: str, sid: str)` 兼容入口：内部继续用 `_sse_pack` 拼装 M3 协议帧（`start` / `delta` / `error` / `end`），但流来源改为 `main_graph.astream(..., stream_mode="custom")` 的 `AIMessageChunk` 流（不再读 `astream_events` 的 `on_chat_model_stream`），让 dev_chat 完全不感知重构
-- [ ]  `dev_chat.py`：**不动业务逻辑**，仅在文件顶部加 DEPRECATED docstring + 模块加载时 `logger.warning("dev_chat is DEPRECATED, will be removed in M7")`（提前标记，原 Step 9 不再重复加 banner）
-- [ ]  单测：
+- [x]  `dev_chat.py`：**不动业务逻辑**，仅在文件顶部加 DEPRECATED docstring + 模块加载时 `logger.warning("dev_chat is DEPRECATED, will be removed in M7")`（提前标记，原 Step 9 不再重复加 banner）
+- [x]  单测：
     - `tests/chat/test_dashscope_chat.py`：DashScopeCallOptions 默认值 / `model_dump(exclude_none=True)` / `astream` 返回 AIMessageChunk 流 / reasoning-content 分流 / **末帧 finish_reason 透传**（mock SDK 返回 stop / length / content_filter 时末 chunk `response_metadata["finish_reason"]` 命中对应值；非白名单值不透传）/ `ainvoke` 收集完整响应 / SDK 非 200 → DashScopeAPIError
     - `tests/chat/test_sse.py`：`stream_to_sse` 帧顺序（thinking_start / thinking_end / delta）+ `stream_chat` 兼容路径帧格式不退化
     - `tests/api/test_dev_chat.py`：dev_chat 端到端回归（mock LLM）—— 落地后必须仍全绿
@@ -100,18 +103,18 @@ refactor(chat): replace BaseChatModel with plain class + custom-streaming graph
 
 **任务**
 
-- [ ]  `git checkout main && git pull --rebase origin main`
-- [ ]  `git checkout -b feat/m6-main-chat-backend`
-- [ ]  确认 `alembic current` = `3522d5e7ba69 (head)`；`pytest backend/tests` 全绿
-- [ ]  `alembic revision -m "m6 messages status finish_reason"` 新建 revision（不重建 baseline）
-- [ ]  同步 `backend/app/models/enums.py`：新增 `MessageStatus(str, enum.Enum)`，值 `active` / `discarded`（与 `SessionStatus` 一致用 PG ENUM，不用 TEXT；项目其他 status 列均为 PG ENUM）
-- [ ]  upgrade：先创建 `messagestatus` PG ENUM 类型 → `ALTER TABLE messages ADD COLUMN status messagestatus NOT NULL DEFAULT 'active'` → `ALTER TABLE messages ADD COLUMN finish_reason TEXT`（finish_reason 值域开放：stop / length / content_filter / user_stopped / ...，维持 String 不用 ENUM，避免 ALTER TYPE 增值）
-- [ ]  downgrade：对应 DROP COLUMN + DROP TYPE messagestatus
-- [ ]  同步 `backend/app/models/chat.py`（Message ORM）：增 `status: Mapped[MessageStatus]` / `finish_reason: Mapped[str | None]` 字段
-- [ ]  **索引改造（同 revision 内 drop 旧 + create 新 partial）**：drop `idx_messages_session` / `idx_sessions_child`；create `idx_messages_session_active_created (session_id, created_at DESC, id DESC) WHERE status='active'` 与 `idx_sessions_child_active_lastactive (child_user_id, last_active_at DESC, id DESC) WHERE status='active'`；目的是支撑 Step 7 keyset 分页（row tuple 比较走 Index Scan + partial 完全匹配读路径）
-- [ ]  downgrade 索引部分：drop 新 partial 索引 + 重建 M3-era 旧索引
-- [ ]  **历史数据弃用确认**：M3 dev_[chat.py](http://chat.py) SQL 不带 `status='active'`，新索引下走 Seq Scan；不补救（dev_chat 在 M7 整体删除，dev 流量极小）。详见基线 §4.4 / 架构基线 §七
-- [ ]  `alembic upgrade head` 跑通；`alembic downgrade -1 && alembic upgrade head` 验证可逆
+- [x]  `git checkout main && git pull --rebase origin main`
+- [x]  `git checkout -b feat/m6-main-chat-backend`
+- [x]  确认 `alembic current` = `3522d5e7ba69 (head)`；`pytest backend/tests` 全绿
+- [x]  `alembic revision -m "m6 messages status finish_reason"` 新建 revision（不重建 baseline）
+- [x]  同步 `backend/app/models/enums.py`：新增 `MessageStatus(str, enum.Enum)`，值 `active` / `discarded`（与 `SessionStatus` 一致用 PG ENUM，不用 TEXT；项目其他 status 列均为 PG ENUM）
+- [x]  upgrade：先创建 `messagestatus` PG ENUM 类型 → `ALTER TABLE messages ADD COLUMN status messagestatus NOT NULL DEFAULT 'active'` → `ALTER TABLE messages ADD COLUMN finish_reason TEXT`（finish_reason 值域开放：stop / length / content_filter / user_stopped / ...，维持 String 不用 ENUM，避免 ALTER TYPE 增值）
+- [x]  downgrade：对应 DROP COLUMN + DROP TYPE messagestatus
+- [x]  同步 `backend/app/models/chat.py`（Message ORM）：增 `status: Mapped[MessageStatus]` / `finish_reason: Mapped[str | None]` 字段
+- [x]  **索引改造（同 revision 内 drop 旧 + create 新 partial）**：drop `idx_messages_session` / `idx_sessions_child`；create `idx_messages_session_active_created (session_id, created_at DESC, id DESC) WHERE status='active'` 与 `idx_sessions_child_active_lastactive (child_user_id, last_active_at DESC, id DESC) WHERE status='active'`；目的是支撑 Step 7 keyset 分页（row tuple 比较走 Index Scan + partial 完全匹配读路径）
+- [x]  downgrade 索引部分：drop 新 partial 索引 + 重建 M3-era 旧索引
+- [x]  **历史数据弃用确认**：M3 dev_[chat.py](http://chat.py) SQL 不带 `status='active'`，新索引下走 Seq Scan；不补救（dev_chat 在 M7 整体删除，dev 流量极小）。详见基线 §4.4 / 架构基线 §七
+- [x]  `alembic upgrade head` 跑通；`alembic downgrade -1 && alembic upgrade head` 验证可逆
 
 **代码片段**
 
@@ -185,10 +188,10 @@ feat(messages): add status, finish_reason columns and m6 partial indexes
 
 > ⚠️ `dashscope_chat.py` / `graph.py` / `sse.py` 已在 Step 0 重构就位，`llm.py` 已删除；本步只新增 4 个业务文件骨架。
 > 
-- [ ]  新建 4 文件骨架：`state.py` / `context.py` / `prompts.py` / `locks.py`
-- [ ]  每个文件加 module docstring + `# TODO(Step N): ...` 注释占位
-- [ ]  实现 `locks.py`：`acquire_throttle_lock(child_user_id)` 1.5s SETNX；`acquire_session_lock(session_id)` 180s SETNX + nonce；`release_session_lock_lua(session_id, nonce)` Lua 脚本防误删；`running_streams: dict[str, asyncio.Event]` 模块级字典 + 文件顶部 docstring 写明「单 worker 部署约定 + 撞容量边界改造路径」
-- [ ]  单测 `tests/chat/test_locks.py`：节流锁 SETNX+1.5s TTL；session 锁 SETNX+180s TTL+nonce；Lua release 错 nonce 不删
+- [x]  新建 4 文件骨架：`state.py` / `context.py` / `prompts.py` / `locks.py`
+- [x]  每个文件加 module docstring + `# TODO(Step N): ...` 注释占位
+- [x]  实现 `locks.py`：`acquire_throttle_lock(child_user_id)` 1.5s SETNX；`acquire_session_lock(session_id)` 180s SETNX + nonce；`release_session_lock_lua(session_id, nonce)` Lua 脚本防误删；`running_streams: dict[str, asyncio.Event]` 模块级字典 + 文件顶部 docstring 写明「单 worker 部署约定 + 撞容量边界改造路径」
+- [x]  单测 `tests/chat/test_locks.py`：节流锁 SETNX+1.5s TTL；session 锁 SETNX+180s TTL+nonce；Lua release 错 nonce 不删
 
 **代码片段**
 
@@ -257,19 +260,19 @@ feat(chat): scaffold state/context/prompts skeletons and implement locks
 
 **任务**
 
-- [ ]  实现 `compute_age(birth_date: date, tz="Asia/Shanghai") -> int`：按 Asia/Shanghai 当天计算（仅辅助，不直接进 prompt）
-- [ ]  实现 `_identity_block() -> str` / `_safety_block() -> str`：返回部署级静态 stub 文案 + `# TODO(prompts-content)` 注释
-- [ ]  实现 `_tier_block(age: int) -> str`：5 档分发（`age <= 5` early_childhood / `<= 9` late_childhood / `<= 13` pre_teen / `<= 18` teen / `>= 19` young_adult），每档返回独立 stub 标记 + `# TODO(prompts-content)` 注释
-- [ ]  实现 `_gender_block(gender: str | None) -> str | None`：4 状态分发，`"male"` / `"female"` 返回对应 stub 文案；`"unknown"` / `None` 返回 `None`（触发整段省略）
-- [ ]  实现 `build_system_prompt(age: int, gender: str | None) -> SystemMessage`：组装 5 章节**单** SystemMessage，按基线 §7.3 顺序：
+- [x]  实现 `compute_age(birth_date: date, tz="Asia/Shanghai") -> int`：按 Asia/Shanghai 当天计算（仅辅助，不直接进 prompt）
+- [x]  实现 `_identity_block() -> str` / `_safety_block() -> str`：返回部署级静态 stub 文案 + `# TODO(prompts-content)` 注释
+- [x]  实现 `_tier_block(age: int) -> str`：5 档分发（`age <= 5` early_childhood / `<= 9` late_childhood / `<= 13` pre_teen / `<= 18` teen / `>= 19` young_adult），每档返回独立 stub 标记 + `# TODO(prompts-content)` 注释
+- [x]  实现 `_gender_block(gender: str | None) -> str | None`：4 状态分发，`"male"` / `"female"` 返回对应 stub 文案；`"unknown"` / `None` 返回 `None`（触发整段省略）
+- [x]  实现 `build_system_prompt(age: int, gender: str | None) -> SystemMessage`：组装 5 章节**单** SystemMessage，按基线 §7.3 顺序：
     1. `# 身份与原则\n` + `_identity_block()`
     2. `# 安全底线\n` + `_safety_block()`
     3. `# 对话风格\n` + `_tier_block(age)`
     4. `# 关于对方的性别\n` + `_gender_block(gender)`（返回 `None` 时**整段省略**，不留空标题）
     5. `# 当前对话上下文\n对方今年 {age} 岁。`（guidance 注入位由 inject_guidance 节点在此章节末尾拼接）
-- [ ]  **入参契约**：`build_system_prompt` **只接受** `(age: int, gender: str | None)`，**不接受 dict / 不接受 concerns / sensitivity / custom_redlines / birth_date**（编译期签名拒绝多余字段）
-- [ ]  文件顶部 docstring：「骨架已对齐基线 §7.3；5 章节文本 + tier / gender 文案待专题（grep `TODO(prompts-content)` 定位 8 处文案位）」
-- [ ]  单测 `tests/chat/test_prompts.py`：
+- [x]  **入参契约**：`build_system_prompt` **只接受** `(age: int, gender: str | None)`，**不接受 dict / 不接受 concerns / sensitivity / custom_redlines / birth_date**（编译期签名拒绝多余字段）
+- [x]  文件顶部 docstring：「骨架已对齐基线 §7.3；5 章节文本 + tier / gender 文案待专题（grep `TODO(prompts-content)` 定位 8 处文案位）」
+- [x]  单测 `tests/chat/test_prompts.py`：
     - **结构断言**：`build_system_prompt(12, "male")` 返回 `SystemMessage`；content 含 5 章节标题且严格按序（regex 检查 `# 身份与原则` → `# 安全底线` → `# 对话风格` → `# 关于对方的性别` → `# 当前对话上下文` 顺序出现）
     - **age 字面值断言**：content 含 `对方今年 12 岁。`，且 age 字面值**仅出现在末段**
     - **tier 边界断言**：5 档 boundary（age = 3 / 5 / 6 / 9 / 10 / 13 / 14 / 18 / 19 / 21）分别命中对应 tier stub 标记字符串
@@ -375,11 +378,11 @@ feat(chat): scaffold system prompt builder per baseline §7.3
 
 **任务**
 
-- [ ]  实现 `build_context(session_id, db, redis) -> list[BaseMessage]`：截最近 N=20 条 active messages（`WHERE session_id=? AND status='active' ORDER BY created_at DESC LIMIT 20`），反转为时间正序后转 `HumanMessage` / `AIMessage`
-- [ ]  读 `rolling_summaries`：`SELECT * FROM rolling_summaries WHERE session_id=? LIMIT 1`；NULL 或 `turn_summaries=[]` → 不注入第二条 SystemMessage（M6 永远走 fallback）
-- [ ]  **不写** `rolling_summaries` 表
-- [ ]  文件顶部 docstring 标注「M6 永远 fallback；M8 审查 worker 上线后自动消费已 INSERT 的 summaries，本文件代码无需改动」
-- [ ]  单测 `tests/chat/test_context.py`：空 session 返回 []；25 条 active 截最近 20 条且时间正序；status='discarded' 行被过滤；rolling_summaries NULL 走 fallback
+- [x]  实现 `build_context(session_id, db, redis) -> list[BaseMessage]`：截最近 N=20 条 active messages（`WHERE session_id=? AND status='active' ORDER BY created_at DESC LIMIT 20`），反转为时间正序后转 `HumanMessage` / `AIMessage`
+- [x]  读 `rolling_summaries`：`SELECT * FROM rolling_summaries WHERE session_id=? LIMIT 1`；NULL 或 `turn_summaries=[]` → 不注入第二条 SystemMessage（M6 永远走 fallback）
+- [x]  **不写** `rolling_summaries` 表
+- [x]  文件顶部 docstring 标注「M6 永远 fallback；M8 审查 worker 上线后自动消费已 INSERT 的 summaries，本文件代码无需改动」
+- [x]  单测 `tests/chat/test_context.py`：空 session 返回 []；25 条 active 截最近 20 条且时间正序；status='discarded' 行被过滤；rolling_summaries NULL 走 fallback
 
 **代码片段**
 
@@ -427,6 +430,7 @@ feat(chat): add context.build_context
 ### Step 5 · `~~dashscope_chat.py` Plain Class + sse 适配~~ → 已并入 Step 0
 
 > ⚠️ 本步全部内容已在 **Step 0**（前置基础重构）一次性落地：`dashscope_chat.py` 改 plain class、`DashScopeCallOptions` 就位、`sse.stream_to_sse` 主路径就位、`sse.stream_chat` 兼容入口保留供 dev_chat 用，单测全绿。本编号保留以维持 Step 1–11 引用稳定，**无新增 commit**。
+🔄 **进一步架构演进（Step 2.5 / commit `4716973`）**：Step 0 落地的 plain-class `ChatDashScopeQwen` 已整体退役，改用 `langchain_openai.ChatOpenAI` + `with_fallbacks` 双 provider；`dashscope_chat.py` / `test_dashscope_chat.py` 已删除，新增 `factory.py` / `test_factory.py`。**finish_reason 真实路径**为 `chunk.additional_kwargs["response_metadata"]["finish_reason"]`（langchain-openai 兼容层标准位置；`chunk.response_metadata` 顶层属性恒 `{}` 是 LangChain Pydantic 字段默认值行为，**不是**真实数据位置；事实补丁见 commit `e8d8d78` + hotfix `645fd64`）。详见 Step 0 顶部架构演进通知与 [M6 · 执行偏差记录](https://www.notion.so/M6-ae216175294b41418ad609103ed3c494?pvs=21) §Step 2.5 / §Step 2.5 事实补丁二次修正。
 > 
 
 以下原 Step 5 详细内容仅作历史归档（具体落地见 Step 0）：
@@ -626,18 +630,18 @@ feat(chat): add plain-class ChatDashScopeQwen + DashScopeCallOptions + sse adapt
 
 **任务**
 
-- [ ]  `state.py`：定义 LangGraph TypedDict（`session_id` / `child_user_id` / `child_profile` / `messages` / `audit_state` / `generated_token_count` / `client_alive` / `user_stop_requested` 等字段）
-- [ ]  `graph.py`：实现 **5 节点 + 1 router**（持久化与 enqueue 收敛到 generator，**不进图**）：
+- [x]  `state.py`：定义 LangGraph TypedDict（`session_id` / `child_user_id` / `child_profile` / `messages` / `audit_state` / `generated_token_count` / `client_alive` / `user_stop_requested` 等字段）
+- [x]  `graph.py`：实现 **5 节点 + 1 router**（持久化与 enqueue 收敛到 generator，**不进图**）：
     - `load_audit_state`（M6 恒返回空 dict，M8 改读 Redis `audit:{sid}`）
     - `route_by_risk` **conditional router**（**5 信号 → 4 路由输出**：① `crisis_locked=true`（粘性，最高优先级）→ `crisis` ② 本轮 `crisis_detected` → `crisis` ③ 本轮 `redline_triggered` → `redline` ④ `guidance != None` → `guidance`（**进 inject_guidance 前置节点**）⑤ else → `main`；M6 阶段 audit_state 恒空 + guidance 恒 None → 恒走 ⑤ main 分支；详见基线 §7.1.1 / §7.1.2）
     - `call_main_llm`（调 `ChatDashScopeQwen.astream`，传 `build_system_prompt + build_context + 当轮 human + 可选注入后的 messages`，通过 LangGraph `writer` 透出 `AIMessageChunk` 流）
     - `call_crisis_llm` stub（走主 LLM 兜底 + `logger.warning("M6 stub crisis_llm fallback to main")`）
     - `call_redline_llm` stub（同上）
     - `inject_guidance`（**位于 ④ guidance 分支的前置节点，在 call_main_llm 之前**；非 LLM 调用 / 仅 messages 数组改写：**找到最后一条 HumanMessage，在其前插入独立 `SystemMessage(content=audit_state.guidance)`**；**不**拼进首条 SystemMessage（基线 §7.5 弱注入语义 + recency 权重最大化 + 避免污染 prompt cache 命中区）；guidance **不**落 `messages` 表；M6 阶段 audit_state 恒空 → 本节点恒不被触发，代码完整就位 M8 起生效）
-- [ ]  **持久化与 enqueue_audit 不进图**：`persist_ai_turn(db, sid, finish_reason, content)` 与 `enqueue_audit(sid)` 作为 helper 函数放在 `graph.py`（或独立 `persistence.py`）顶层导出，由 [me.py](http://me.py) generator 在合适时机调用（见 Step 8b/8c）。**T5 唯一写入点 = generator**，graph 节点不写 ai 行
-- [ ]  图边：`START → load_audit_state → route_by_risk → {call_crisis_llm | call_redline_llm | inject_guidance | call_main_llm} → END`；inject_guidance 后接 call_main_llm；三个 LLM 节点（main/crisis/redline）均直接 → END。compile 后导出 `main_graph`
-- [ ]  单测 `tests/chat/test_graph.py`：**route_by_risk 5 信号优先级**：① `crisis_locked=true` → "crisis" / ② `crisis_detected=true` → "crisis" / ③ `redline_triggered=true` → "redline" / ④ `guidance != None` → "guidance" / ⑤ else → "main"；**优先级断言**：crisis_locked + redline_triggered 同时命中走 "crisis"（crisis 优先级高于 redline）；M6 `audit_state=\{\}` + `guidance=None` 恒走 ⑤ main；**图边断言**：编译后图中 `inject_guidance → call_main_llm`，三个 LLM（main / crisis / redline）都直接 → `END`，图内**不**写库；**inject_guidance 行为断言**：传入含 `[Sys, Hum A, AI B, Hum C]` 的 messages 与 guidance="X"，返回 `[Sys, Hum A, AI B, Sys(X), Hum C]`（在最后一条 HumanMessage 前插入独立 SystemMessage，不动首条 Sys）；stub 节点（crisis / redline）走主 LLM 兜底且 logger.warning 输出
-- [ ]  单测 `tests/chat/test_persistence.py`：`persist_ai_turn` helper 写入 ai active + finish_reason + content；`enqueue_audit` helper M6 no-op + logger.warning 输出
+- [x]  **持久化与 enqueue_audit 不进图**：`persist_ai_turn(db, sid, finish_reason, content)` 与 `enqueue_audit(sid)` 作为 helper 函数放在 `graph.py`（或独立 `persistence.py`）顶层导出，由 [me.py](http://me.py) generator 在合适时机调用（见 Step 8b/8c）。**T5 唯一写入点 = generator**，graph 节点不写 ai 行
+- [x]  图边：`START → load_audit_state → route_by_risk → {call_crisis_llm | call_redline_llm | inject_guidance | call_main_llm} → END`；inject_guidance 后接 call_main_llm；三个 LLM 节点（main/crisis/redline）均直接 → END。compile 后导出 `main_graph`
+- [x]  单测 `tests/chat/test_graph.py`：**route_by_risk 5 信号优先级**：① `crisis_locked=true` → "crisis" / ② `crisis_detected=true` → "crisis" / ③ `redline_triggered=true` → "redline" / ④ `guidance != None` → "guidance" / ⑤ else → "main"；**优先级断言**：crisis_locked + redline_triggered 同时命中走 "crisis"（crisis 优先级高于 redline）；M6 `audit_state=\{\}` + `guidance=None` 恒走 ⑤ main；**图边断言**：编译后图中 `inject_guidance → call_main_llm`，三个 LLM（main / crisis / redline）都直接 → `END`，图内**不**写库；**inject_guidance 行为断言**：传入含 `[Sys, Hum A, AI B, Hum C]` 的 messages 与 guidance="X"，返回 `[Sys, Hum A, AI B, Sys(X), Hum C]`（在最后一条 HumanMessage 前插入独立 SystemMessage，不动首条 Sys）；stub 节点（crisis / redline）走主 LLM 兜底且 logger.warning 输出
+- [x]  单测 `tests/chat/test_persistence.py`：`persist_ai_turn` helper 写入 ai active + finish_reason + content；`enqueue_audit` helper M6 no-op + logger.warning 输出
 
 **代码片段**
 
@@ -718,11 +722,11 @@ feat(chat): assemble main dialogue graph (5 nodes, no DB writes)
 
 **任务**
 
-- [ ]  `GET /me/sessions`（**keyset 分页，非 offset**）：查询参数 `cursor` (str, optional, base64) + `limit` (int, default=15, max=50)（默认值已与基线 §3.1 锁定为 15）；响应 `{items: [{id, title, last_active_at}], next_cursor: str | null}`；排序 `(last_active_at DESC, id DESC)`；`WHERE child_user_id=? AND status='active'`，cursor 非空时追加 `AND (last_active_at, id) < (cursor.last_active_at, cursor.id)`；cursor 编码 `base64(f"{last_active_at_iso}|{id}")`，对客户端不透明；查询 `LIMIT limit + 1` 探测 has_more，溢出那条作为 `next_cursor`，末页 `next_cursor=null`；**不返回 `in_progress`**、**不探测 Redis**
-- [ ]  `GET /me/sessions/{id}/messages`（**keyset 分页，非 offset**）：查询参数 `cursor` (str, optional, base64) + `limit` (int, default=50, max=100)；响应 `{items: [...], next_cursor: str | null, in_progress: bool}`；排序 `(created_at DESC, id DESC)` —— 首屏取最新 N 条，向上翻历史靠 cursor；`WHERE session_id=? AND status='active'`，cursor 非空时追加 `AND (created_at, id) < (cursor.created_at, cursor.id)`；cursor 编码 `base64(f"{created_at_iso}|{id}")`，对客户端不透明；前端展示时反转为时间正序；403 child 不匹配 / 404 session 不存在；**响应顶层** `in_progress = bool(await redis.exists(f"chat:lock:{id}"))`
-- [ ]  `DELETE /me/sessions/{id}`：`UPDATE sessions SET status='deleted' WHERE id=? AND child_user_id=?`；不物理删 messages；403/404 处理；响应 204
-- [ ]  所有端点鉴权用 `Depends(require_child_token)` 已有依赖
-- [ ]  单测 `tests/api/test_me_sessions.py`：cursor 编解码可逆；keyset 翻页 happy path（首页 → next_cursor → 末页 null）；limit 边界（默认 / 最大 / 超限 422）；status='discarded' 行被过滤；DELETE 软删后 GET 返回 404；child 不匹配 403；session 不存在 404；in_progress 锁存在 true / 锁不存在 false
+- [x]  `GET /me/sessions`（**keyset 分页，非 offset**）：查询参数 `cursor` (str, optional, base64) + `limit` (int, default=15, max=50)（默认值已与基线 §3.1 锁定为 15）；响应 `{items: [{id, title, last_active_at}], next_cursor: str | null}`；排序 `(last_active_at DESC, id DESC)`；`WHERE child_user_id=? AND status='active'`，cursor 非空时追加 `AND (last_active_at, id) < (cursor.last_active_at, cursor.id)`；cursor 编码 `base64(f"{last_active_at_iso}|{id}")`，对客户端不透明；查询 `LIMIT limit + 1` 探测 has_more，溢出那条作为 `next_cursor`，末页 `next_cursor=null`；**不返回 `in_progress`**、**不探测 Redis**
+- [x]  `GET /me/sessions/{id}/messages`（**keyset 分页，非 offset**）：查询参数 `cursor` (str, optional, base64) + `limit` (int, default=50, max=100)；响应 `{items: [...], next_cursor: str | null, in_progress: bool}`；排序 `(created_at DESC, id DESC)` —— 首屏取最新 N 条，向上翻历史靠 cursor；`WHERE session_id=? AND status='active'`，cursor 非空时追加 `AND (created_at, id) < (cursor.created_at, cursor.id)`；cursor 编码 `base64(f"{created_at_iso}|{id}")`，对客户端不透明；前端展示时反转为时间正序；403 child 不匹配 / 404 session 不存在；**响应顶层** `in_progress = bool(await redis.exists(f"chat:lock:{id}"))`
+- [x]  `DELETE /me/sessions/{id}`：`UPDATE sessions SET status='deleted' WHERE id=? AND child_user_id=?`；不物理删 messages；403/404 处理；响应 204
+- [x]  所有端点鉴权用 `Depends(require_child_token)` 已有依赖
+- [x]  单测 `tests/api/test_me_sessions.py`：cursor 编解码可逆；keyset 翻页 happy path（首页 → next_cursor → 末页 null）；limit 边界（默认 / 最大 / 超限 422）；status='discarded' 行被过滤；DELETE 软删后 GET 返回 404；child 不匹配 403；session 不存在 404；in_progress 锁存在 true / 锁不存在 false
 
 **代码片段**
 
@@ -791,6 +795,13 @@ feat(api): add me sessions list, messages, soft-delete endpoints
 - tests/api/test_me_sessions.py: pagination + cursor + soft-delete + in_progress
 ```
 
+**Patch（2026-05-07，Iver 手工提交，commit pending）**
+
+- 范围：Step 7 真机 ⏸（Redis cold-start fallback）收口
+- [me.py](http://me.py) `get_messages` `in_progress` 探测加 `try/except RedisError → in_progress=False` + `logger.warning`；新增 `import logging` + `from redis.exceptions import RedisError` + 顶部 `logger = logging.getLogger(__name__)`
+- 不补单测（Iver 决定，业务推导见 [M6 · 执行偏差记录](https://www.notion.so/M6-ae216175294b41418ad609103ed3c494?pvs=21) §「Step 7 patch」段）
+- M6 ⏸ 队列（Step 7/8a 范围）已清空
+
 ---
 
 ### Step 8a · `me.py` · `POST /me/chat/stream` 控制平面 + stub 流
@@ -800,19 +811,19 @@ feat(api): add me sessions list, messages, soft-delete endpoints
 
 **任务**
 
-- [ ]  **请求校验**：`content: str`（重生时空串）+ `session_id: str | None` + `regenerate_for: str | None`
-- [ ]  **节流锁**：`chat:throttle:{child_user_id}` SETNX 1.5s；抢不到 → 429 RequestThrottled
-- [ ]  **session 锁**：首轮内存生成 sid → SETNX；非首轮先 SELECT session 校验存在性 + child 匹配（404/403），再 SETNX；抢不到 → 409 SessionBusy
-- [ ]  **末行检查 + 末行决策矩阵**（基线 §5.4）：`SELECT ... ORDER BY created_at DESC LIMIT 1`；按 `(末行 role, regenerate_for)` 9 行决策分支；孤儿 human 改内容重发 → `UPDATE 旧 human SET status='discarded'` + INSERT 新 human
-- [ ]  **首段事务**：首轮 INSERT session（含 title 截取）+ INSERT human active；非首轮按末行决策矩阵 结果 INSERT/复用 human
-- [ ]  **title 生成**：截 `user_content` 前 12 字符按 grapheme 边界（用 `regex` 库 `\X` 模式，需 `pip install regex` 加到 requirements）
-- [ ]  **emit `session_meta`**：首段事务 commit 后立刻发
-- [ ]  **stub generator**：`async def _stub_stream(aid): yield emit_delta("[stub]"); yield emit_end("stop", aid=aid)` 占位，在 8b 替换为真实 graph 流
-- [ ]  **finally 释锁**：`release_session_lock(redis, sid, nonce)` Lua（running_streams 注册留 8c）
-- [ ]  **child_profile 装载到 initial_state**：在 `Depends(require_child)` 拿到 [user.id](http://user.id) 后，复用 [me.py](http://me.py) 已有的 `ChildProfile` 查询（`SELECT * FROM child_profiles WHERE child_user_id=?`），把 `gender` + `compute_age(birth_date)` 拼成 `child_profile` 字典塞入传给 `main_graph.astream` 的 `initial_state`；child_profile 不存在 → 500（前置鉴权应已保证存在，此为异常态）。**该字段是 build_system_prompt(age, gender) 的唯一数据源**
-- [ ]  **regenerate_for 语义锁定**：请求体 model 上注释明确「regenerate_for 必须为该 session 当前末行 active 的 human message id；指向更早的 human / 指向 ai / 行不存在 → 400 RegenerateForInvalid」；末行决策矩阵 9 行覆盖该校验
-- [ ]  在 `pyproject.toml` 的 `[project].dependencies` 加 `regex`，再跑 `uv pip freeze > requirements.txt` 重生 lock（项目用 uv 管理依赖；`requirements.txt` 是 freeze 产物，**禁止手编**）
-- [ ]  单测 `tests/api/test_chat_stream_control_plane.py`：末行决策矩阵 9 行全覆盖（不存在/null、不存在/非null、ai/null、ai/非null、孤儿/null、孤儿/=hid、孤儿/≠hid、session 不存在、child 不匹配）；节流锁 1s 内连发两次第二次 429；session 锁同 sid 锁未释放发第二次 409；title 12 grapheme 截取（ASCII / 中文 / emoji ZWJ / 组合字符）；首段事务正确写入 session+human active；session_meta 帧 首段事务 commit 后立刻发；finally 锁正确释放
+- [x]  **请求校验**：`content: str`（重生时空串）+ `session_id: str | None` + `regenerate_for: str | None`
+- [x]  **节流锁**：`chat:throttle:{child_user_id}` SETNX 1.5s；抢不到 → 429 RequestThrottled
+- [x]  **session 锁**：首轮内存生成 sid → SETNX；非首轮先 SELECT session 校验存在性 + child 匹配（404/403），再 SETNX；抢不到 → 409 SessionBusy
+- [x]  **末行检查 + 末行决策矩阵**（基线 §5.4）：`SELECT ... ORDER BY created_at DESC LIMIT 1`；按 `(末行 role, regenerate_for)` 9 行决策分支；孤儿 human 改内容重发 → `UPDATE 旧 human SET status='discarded'` + INSERT 新 human
+- [x]  **首段事务**：首轮 INSERT session（含 title 截取）+ INSERT human active；非首轮按末行决策矩阵 结果 INSERT/复用 human
+- [x]  **title 生成**：截 `user_content` 前 12 字符按 grapheme 边界（用 `regex` 库 `\X` 模式，需 `pip install regex` 加到 requirements）
+- [x]  **emit `session_meta`**：首段事务 commit 后立刻发
+- [x]  **stub generator**：`async def _stub_stream(aid): yield emit_delta("[stub]"); yield emit_end("stop", aid=aid)` 占位，在 8b 替换为真实 graph 流
+- [x]  **finally 释锁**：`release_session_lock(redis, sid, nonce)` Lua（running_streams 注册留 8c）
+- [x]  **child_profile 装载到 initial_state**：在 `Depends(require_child)` 拿到 [user.id](http://user.id) 后，复用 [me.py](http://me.py) 已有的 `ChildProfile` 查询（`SELECT * FROM child_profiles WHERE child_user_id=?`），把 `gender` + `compute_age(birth_date)` 拼成 `child_profile` 字典塞入传给 `main_graph.astream` 的 `initial_state`；child_profile 不存在 → 500（前置鉴权应已保证存在，此为异常态）。**该字段是 build_system_prompt(age, gender) 的唯一数据源**
+- [x]  **regenerate_for 语义锁定**：请求体 model 上注释明确「regenerate_for 必须为该 session 当前末行 active 的 human message id；指向更早的 human / 指向 ai / 行不存在 → 400 RegenerateForInvalid」；末行决策矩阵 9 行覆盖该校验
+- [x]  在 `pyproject.toml` 的 `[project].dependencies` 加 `regex`，再跑 `uv pip freeze > requirements.txt` 重生 lock（项目用 uv 管理依赖；`requirements.txt` 是 freeze 产物，**禁止手编**）
+- [x]  单测 `tests/api/test_chat_stream_control_plane.py`：末行决策矩阵 9 行全覆盖（不存在/null、不存在/非null、ai/null、ai/非null、孤儿/null、孤儿/=hid、孤儿/≠hid、session 不存在、child 不匹配）；节流锁 1s 内连发两次第二次 429；session 锁同 sid 锁未释放发第二次 409；title 12 grapheme 截取（ASCII / 中文 / emoji ZWJ / 组合字符）；首段事务正确写入 session+human active；session_meta 帧 首段事务 commit 后立刻发；finally 锁正确释放
 
 **代码片段**
 
@@ -867,6 +878,14 @@ feat(api): add me chat stream endpoint control plane (stub stream)
 - tests/api/test_chat_stream_control_plane.py: decision-O matrix + locks + title + T2
 ```
 
+**收口标注（2026-05-07，闸门 B v3 ✅）**
+
+- 实装 commit：`70c36a5`（feat/m6-main-chat-backend，已 push）
+- 实测：349 passed deterministic / ruff All checks passed / docstring ↔ 代码 1:1
+- 矩阵规模实际落地为 **7 行**（闸门 A 经 NoNo 论证从原文 9 行 → 8 行 → 7 行；上文 task 文字「9 行」未回写，详见 [M6 · 执行偏差记录](https://www.notion.so/M6-ae216175294b41418ad609103ed3c494?pvs=21) §8.1）
+- 闸门 B 共 3 轮：v1 `ff409d0` 真回炉 / v2 `8d22975` 真回炉 / **v3 `70c36a5` 通过**
+- ⏸ 真机：本步无新增真机项（控制平面行为已被单测穷举；M6 真机 ⏸ 队列在 Step 7 patch（2026-05-07）后已清空）
+
 ---
 
 ### Step 8b · `me.py` · 接入 LangGraph 主图 + T5
@@ -876,13 +895,13 @@ feat(api): add me chat stream endpoint control plane (stub stream)
 
 **任务**
 
-- [ ]  删除 8a 的 `_stub_stream`，替换为 `async for chunk in main_graph.astream(initial_state, stream_mode="custom")`
-- [ ]  用 `stream_to_sse(...)` 包裹 chunk 流，emit `thinking_start` / `thinking_end` / `delta`
-- [ ]  边消费边累积 `accumulated_content`：从每个 chunk 的 `chunk.content` 累加（reasoning_content **不**入库）
-- [ ]  **末段事务（T5 唯一写入点）**：流自然结束 → 从消费过程累积的 `last_finish_reason`（兜底 `'stop'`，每条 chunk 的 `response_metadata["finish_reason"]` 命中时覆盖）取真实值，调用 `persist_ai_turn(db, sid, finish_reason=last_finish_reason, content=accumulated)` helper（INSERT ai active + UPDATE sessions.last_active_at）；`emit_end` 也用真实值。**graph 内不再有 persist_turn 节点**（Step 6 修订），ai 行只在此处写入一次
-- [ ]  **emit `end`**：末段事务 commit 后发，含 aid
-- [ ]  **emit `error`**：try/except 捕获 graph 内部异常 → emit error 帧 + 不写 ai 行（保留 human active）+ 释锁
-- [ ]  单测 `tests/api/test_chat_stream_graph.py`：mock `main_graph.astream` 返回 reasoning + content 双流 → SSE 顺序 `session_meta → thinking_start → thinking_end → delta×N → end`；末段事务写 ai active + 真实 finish_reason + last_active_at 更新；**finish_reason 三态覆盖**（mock 末帧分别为 `stop` / `length` / `content_filter` → DB 行 + SSE `end` 帧均落对应值）；graph 抛异常 → SSE error 帧 + DB 末态末行 human active（A4）+ 锁释放
+- [x]  删除 8a 的 `_stub_stream`，替换为 `async for chunk in main_graph.astream(initial_state, stream_mode="custom")`
+- [x]  用 `stream_to_sse(...)` 包裹 chunk 流，emit `thinking_start` / `thinking_end` / `delta`
+- [x]  边消费边累积 `accumulated_content`：从每个 chunk 的 `chunk.content` 累加（reasoning_content **不**入库）
+- [x]  **末段事务（T5 唯一写入点）**：流自然结束 → 从消费过程累积的 `last_finish_reason`（兜底 `'stop'`，每条 chunk 的 `additional_kwargs["response_metadata"]["finish_reason"]` 命中时覆盖(**真实路径见 Step 0 顶部架构演进通知**;**不是** `chunk.response_metadata` 顶层属性)）取真实值，调用 `persist_ai_turn(db, sid, finish_reason=last_finish_reason, content=accumulated)` helper（INSERT ai active + UPDATE sessions.last_active_at）；`emit_end` 也用真实值。**graph 内不再有 persist_turn 节点**（Step 6 修订），ai 行只在此处写入一次
+- [x]  **emit `end`**：末段事务 commit 后发，含 aid
+- [x]  **emit `error`**：try/except 捕获 graph 内部异常 → emit error 帧 + 不写 ai 行（保留 human active）+ 释锁
+- [x]  单测 `tests/api/test_chat_stream_graph.py`：mock `main_graph.astream` 返回 reasoning + content 双流 → SSE 顺序 `session_meta → thinking_start → thinking_end → delta×N → end`；末段事务写 ai active + 真实 finish_reason + last_active_at 更新；**finish_reason 三态覆盖**（mock 末帧分别为 `stop` / `length` / `content_filter` → DB 行 + SSE `end` 帧均落对应值）；graph 抛异常 → SSE error 帧 + DB 末态末行 human active（A4）+ 锁释放
 
 **代码片段**
 
@@ -890,13 +909,15 @@ feat(api): add me chat stream endpoint control plane (stub stream)
 # backend/app/api/me.py (内 generator 替换 8a stub)
 async def generator():
     accumulated = ""
-    last_finish_reason = "stop"  # 兜底；末帧 chunk.response_metadata 命中时覆盖
+    last_finish_reason = "stop"  # 兜底；末帧 ak["response_metadata"]["finish_reason"] 命中时覆盖
     try:
         yield emit_session_meta(sid, hid)
         async for chunk in main_graph.astream(initial_state, stream_mode="custom"):
             if chunk.content:
                 accumulated += chunk.content
-            fr = (chunk.response_metadata or {}).get("finish_reason")
+            # finish_reason 真实路径: ak["response_metadata"]["finish_reason"] (langchain-openai 兼容层)
+            ak = chunk.additional_kwargs or {}
+            fr = ak.get("response_metadata", {}).get("finish_reason")
             if fr:
                 last_finish_reason = fr  # stop / length / content_filter
             async for sse in stream_to_sse([chunk]):
@@ -929,6 +950,17 @@ feat(api): wire main graph stream and t5 persist
 - tests/api/test_chat_stream_graph.py: 7-event sequence + T5 + error path
 ```
 
+**收口标注（2026-05-08，闸门 B v4 ✅）**
+
+- 实装 commit：`b6e8599`（feat/m6-main-chat-backend，已 push）
+- hotfix commit：`645fd64`（finish_reason 字段路径回退到 [graph.py](http://graph.py) 节点内 `ak.get("response_metadata", {}).get("finish_reason")` + 白名单过滤 + test_[graph.py](http://graph.py) 4 测试 chunk 构造迁移到 `additional_kwargs={"response_metadata": {...}}` + test_chat_stream_[graph.py](http://graph.py) cross-connection 改 `conn.execute()` 不污染外层事务，已 push）
+- 实测：**360 passed deterministic** / ruff 全通过
+- **finish_reason 字段位置真相**：`graph.py` `call_main_llm` 节点用 `chunk.additional_kwargs["response_metadata"]["finish_reason"]`（langchain-openai 兼容层标准位置；`chunk.response_metadata` 顶层属性恒 `{}` 是 LangChain Pydantic 字段默认值行为，**不是**真实数据位置），白名单过滤 `stop` / `length` / `content_filter`，非白名单（如 `tool_calls`）不透传；通过 LangGraph `writer` 透出到 custom stream
+- [**me.py](http://me.py) generator 消费的是 graph 透传的 payload dict**（`{"delta": text}` / `{"finish_reason": fr}`），不直接消费 `AIMessageChunk`；finish_reason 真实路径解析在 graph 节点内完成
+- 闸门 B 共 **4 轮**：v1 `ff409d0` 真回炉 / v2 `8d22975` 真回炉 / v3 `70c36a5`（实为 Step 8a 段收口）/ v4 第一次 ⛔ 撤回（NoNo 第 8 次自踩红线 + P0-D 误判：未读偏差档 §Step 2.5 三段决策档案就拍 verdict，派出修法 ① 把 [graph.py](http://graph.py) 反向改成 `chunk.response_metadata.get("finish_reason")` 错路径，造真生产 bug）→ v4 第二次 ✅ 通过（基于 `b6e8599` + hotfix `645fd64`）
+- ⏸ 真机：本步无新增真机项（mock 集成测穷举 7 事件序列 + T5 写入 + finish_reason 三态 + 错误路径 + cross-connection 持久化；M6 真机 ⏸ 队列保持空）
+- 详细修法 ① 反向修复造 bug 全过程 + Iver 14:35 ⓔ Docker 复现脚本证伪 + 修法 ②' hotfix 派出过程 + [me.py](http://me.py) L515 注释 lag 小瑕疵：详见 [M6 · 执行偏差记录](https://www.notion.so/M6-ae216175294b41418ad609103ed3c494?pvs=21) §Step 8b
+
 ---
 
 ### Step 8c · `me.py` · stop 检测 + 不 cancel + StopKind 二分支
@@ -957,7 +989,7 @@ async def generator():
     running_streams[sid] = event
     has_emitted_content = False
     accumulated = ""
-    last_finish_reason = "stop"  # 兜底；末帧 chunk.response_metadata 命中时覆盖
+    last_finish_reason = "stop"  # 兜底；末帧 ak["response_metadata"]["finish_reason"] 命中时覆盖
     try:
         yield emit_session_meta(sid, hid)
         async for chunk in main_graph.astream(initial_state, stream_mode="custom"):
@@ -966,7 +998,9 @@ async def generator():
             if chunk.content:
                 has_emitted_content = True
                 accumulated += chunk.content
-            fr = (chunk.response_metadata or {}).get("finish_reason")
+            # finish_reason 真实路径: ak["response_metadata"]["finish_reason"] (langchain-openai 兼容层)
+            ak = chunk.additional_kwargs or {}
+            fr = ak.get("response_metadata", {}).get("finish_reason")
             if fr:
                 last_finish_reason = fr
             async for sse in stream_to_sse([chunk]):
@@ -1184,9 +1218,9 @@ docs(m6): record verification results and deviations
 
 ## 五、发现与建议
 
-（执行过程中遇到的设计偏差 / 妥协项 / 后续优化点登记到这里。每条形如：「Step N 实施时发现 X，原计划是 Y，实际改为 Z，原因 W」。重要妥协同步登记到 [](https://www.notion.so/08702b0844724c1eaeb4707fe8f2f72e?pvs=21)。）
+本节偏差全文已迁至 [M6 · 执行偏差记录](https://www.notion.so/M6-ae216175294b41418ad609103ed3c494?pvs=21)（Step 1 / Step 2 / Step 2.5 / 事实补丁一/二 / Step 3 / Step 4 / M5 hotfix / Step 6 / Step 7 全部 Step 偏差均按 Step 序登记在该页）。本节保留作执行登记触发点：执行过程中遇到偏差 → 直接登记到偏差记录页对应 Step 段；重要妥协同步登记到 [](https://www.notion.so/08702b0844724c1eaeb4707fe8f2f72e?pvs=21)。
 
-*本节由执行 agent 在每步结束时增量填写。*
+*执行 agent 每步结束时把偏差增量回写至 [M6 · 执行偏差记录](https://www.notion.so/M6-ae216175294b41418ad609103ed3c494?pvs=21)；NoNo（步骤差异审核 skill）在闸门 B 通过后做事实补丁与跨页同步登记。*
 
 ## 六、相关文档
 
@@ -1195,6 +1229,8 @@ docs(m6): record verification results and deviations
 - 公共上下文：[LittleBox · 公共上下文](https://www.notion.so/LittleBox-0151a091547f4684982113e456acd5dd?pvs=21)
 - 路线图：[执行规划：17 个里程碑](https://www.notion.so/17-de81294334b947ef8d598245c73832ad?pvs=21)
 - 编写指引：[Agent 指引 · 实施计划编写](https://www.notion.so/Agent-8edba833b10344dcbb5feb9193161952?pvs=21)
-- 步骤执行 skill：[Step-Execute Skill v1.4 更新稿](https://www.notion.so/Step-Execute-Skill-v1-4-a92066d4fc6f43a8b3cc177c55c1d560?pvs=21)
+- 步骤执行 skill：[Step-Execute Skill v1.5 更新稿](https://www.notion.so/Step-Execute-Skill-v1-5-a92066d4fc6f43a8b3cc177c55c1d560?pvs=21)
 - 步骤偏差审核：[Agent 指引 · 步骤差异审核](https://www.notion.so/Agent-d2d23aab6c7e44b899783ba60af9e6f0?pvs=21)
 - 妥协跟踪：[](https://www.notion.so/08702b0844724c1eaeb4707fe8f2f72e?pvs=21)
+
+[M6 · 执行偏差记录](https://www.notion.so/M6-ae216175294b41418ad609103ed3c494?pvs=21)
