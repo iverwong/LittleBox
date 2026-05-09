@@ -7,7 +7,7 @@ from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, BaseMixin
-from app.models.enums import InterventionType, MessageRole, SessionStatus
+from app.models.enums import InterventionType, MessageRole, MessageStatus, SessionStatus
 
 
 class Session(BaseMixin, Base):
@@ -56,6 +56,16 @@ class Message(BaseMixin, Base):
     intervention_type: Mapped[Optional[InterventionType]] = mapped_column(
         nullable=True,
         comment="null=正常回复, crisis=危机接管, redline=红线接管, guided=二级注入后回复",
+    )
+    status: Mapped[MessageStatus] = mapped_column(
+        default=MessageStatus.active,
+        server_default="active",
+        nullable=False,
+    )
+    finish_reason: Mapped[Optional[str]] = mapped_column(
+        String(length=50),
+        nullable=True,
+        comment="LLM finish_reason: stop/length/content_filter/user_stopped 等",
     )
 
     # relationships

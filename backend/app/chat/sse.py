@@ -13,6 +13,9 @@ dev_chat 协议 4 类帧语义：
 stream_chat() 使用 LangGraph custom stream mode（stream_mode="custom"），
 节点内部通过 get_stream_writer() 发送增量，不依赖 astream_events / on_chat_model_stream。
 """
+# TODO(M7 cleanup): delete _sse_pack() M3 single-line protocol framer and
+#   stream_chat() dev-chat compatibility entry point; only _frame_sse_event
+#   and stream_graph_to_sse remain.
 
 import asyncio
 import json
@@ -21,10 +24,11 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import anyio
-from langchain_core.messages import AIMessageChunk, HumanMessage
+from langchain_core.messages import HumanMessage
 from starlette.requests import ClientDisconnect
 
 from app.chat.graph import main_graph
+from app.chat.state import MainDialogueState
 
 logger = logging.getLogger(__name__)
 
@@ -50,39 +54,31 @@ def _frame_sse_event(event_type: str, data: dict) -> bytes:
     return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
 
 
-async def stream_to_sse(graph_stream) -> AsyncIterator[bytes]:
-    """将 AIMessageChunk 流转为 SSE 多行协议帧（me 主路径）。
+async def stream_graph_to_sse(payloads) -> AsyncIterator[bytes]:
+    """将 LangGraph custom-stream dict payload 流转为 SSE 多行协议帧（me 主路径）。
 
-    事件序列：
-      reasoning chunk 首次到达 → thinking_start（仅信号，不含文本）
-      reasoning 结束（首次出现 content chunk 或 reasoning 为空）→ thinking_end
-      content chunk → delta
+    Graph writer 合同（Step 6 实施）：每个 chunk 发 dict
+      {"delta": "text"}  → content chunk
+      {"finish_reason": "stop"|"length"|"content_filter"} → finish reason 帧
 
-    注意：reasoning_content 不发进 delta（仅作内部信号，thinking_end 不带文本）。
+    事件序列（当前实现）：
+      delta chunk   → delta
+      finish_reason → 更新内部变量（透传给调用方，适配器不直接 emit end）
+      流结束       → 无额外帧（end 帧由调用方 emit）
+
+    Note: reasoning_content branch removed in Step 8b because me.py
+    generator sends each payload individually to stream_graph_to_sse
+    (per-payload _payloads() wrapper), making cross-payload state
+    tracking (thinking_started) impossible.  If future graph forwards
+    reasoning chunks, refactor to a long-lived async iterable pattern
+    instead of the current per-payload wrapper.
     """
-    thinking_started = False
-    async for chunk in graph_stream:
-        if not isinstance(chunk, AIMessageChunk):
+    async for payload in payloads:
+        if not isinstance(payload, dict):
             continue
-        r = chunk.additional_kwargs.get("reasoning_content")
-        c = chunk.content
-
-        if r and not thinking_started:
-            # reasoning chunk 首次到达 → emit thinking_start
-            yield _frame_sse_event("thinking_start", {})
-            thinking_started = True
-
-        if thinking_started and not r:
-            # reasoning 结束 → emit thinking_end（仅信号，不含文本）
-            yield _frame_sse_event("thinking_end", {})
-            thinking_started = False
-
-        if c:
-            yield _frame_sse_event("delta", {"content": c})
-
-    # 流结束时尚未发送 thinking_end，补一个（防御性）
-    if thinking_started:
-        yield _frame_sse_event("thinking_end", {})
+        d = payload.get("delta")
+        if d:
+            yield _frame_sse_event("delta", {"content": d})
 
 
 # ---- dev_chat 兼容入口（M3 单行协议） ----
@@ -98,17 +94,29 @@ async def stream_chat(user_message: str, session_id: str) -> AsyncIterator[str]:
     通过 get_stream_writer() 发送增量。
     """
     yield _sse_pack("start", session_id=session_id)
-
+    finish_reason = "stop"  # 兜底默认值
     try:
-        async for payload in main_graph.astream(
-            {"messages": [HumanMessage(content=user_message)]},
-            stream_mode="custom",
-        ):
-            # stream_mode="custom" 时每次 yield 一个 dict（writer({...}) 的字典）
+        # M6 graph expects MainDialogueState; fields not read by call_main_llm
+        # are populated by load_audit_state node (audit_state / pending_guidance)
+        initial_state: MainDialogueState = {
+            "session_id": session_id,
+            "child_user_id": "",
+            "child_profile": None,
+            "provider": "deepseek",  # dev_chat 默认 provider
+            "messages": [HumanMessage(content=user_message)],
+            "audit_state": {},
+            "pending_guidance": None,
+            "generated_token_count": 0,
+            "client_alive": True,
+            "user_stop_requested": False,
+        }
+        async for payload in main_graph.astream(initial_state, stream_mode="custom"):
             if "delta" in payload:
                 yield _sse_pack("delta", content=payload["delta"])
             elif "finish_reason" in payload:
-                yield _sse_pack("end", finish_reason=payload["finish_reason"])
+                finish_reason = payload["finish_reason"]
+        # 循环正常结束兜底发 end 帧（即使节点漏 writer finish_reason）
+        yield _sse_pack("end", finish_reason=finish_reason)
     except asyncio.CancelledError, ClientDisconnect, anyio.BrokenResourceError:
         raise
     except Exception as exc:
