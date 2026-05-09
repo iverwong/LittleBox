@@ -13,6 +13,9 @@ dev_chat 协议 4 类帧语义：
 stream_chat() 使用 LangGraph custom stream mode（stream_mode="custom"），
 节点内部通过 get_stream_writer() 发送增量，不依赖 astream_events / on_chat_model_stream。
 """
+# TODO(M7 cleanup): delete _sse_pack() M3 single-line protocol framer and
+#   stream_chat() dev-chat compatibility entry point; only _frame_sse_event
+#   and stream_graph_to_sse remain.
 
 import asyncio
 import json

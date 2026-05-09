@@ -7,7 +7,7 @@ Architecture (baseline §7.1 / §7.5):
   consumed by call_main_llm to assemble the LLM prompt.
   NOT persisted — stays in-graph only.
 - audit_state: M6 all-False stub; M8 reads Redis audit:{sid}
-  TODO(M8) anchors: load_audit_state node, inject_guidance node, enqueue_audit helper
+  TODO(M8) anchor doc, not a cleanup point: load_audit_state / inject_guidance / enqueue_audit
 """
 
 from __future__ import annotations

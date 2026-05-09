@@ -16,6 +16,8 @@ Usage (caller-side pattern):
     history = await build_context(session_id, db)
     llm_messages = [system, *history, HumanMessage(content=new_message)]
 """
+# TODO(M8 cleanup): replace rolling_summaries fallback with real summary injection
+#   when M8 review worker is live; the fallback currently drops summary context.
 
 from uuid import UUID
 

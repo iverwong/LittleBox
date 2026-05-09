@@ -1,3 +1,4 @@
+// TODO(M7 cleanup): delete this file; frontend counterpart of dev_chat.py (M3 demo page)
 import { useRef, useState } from 'react'
 import { Button, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { router } from 'expo-router'
