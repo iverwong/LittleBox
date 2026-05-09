@@ -37,3 +37,23 @@ async def test_redis_round_trip(redis_client):
 async def test_api_client_health(api_client):
     r = await api_client.get("/health")
     assert r.status_code == 200
+
+
+class TestProdDbGuard:
+    """_prod_db_row_count_guard session autouse fixture 自检。"""
+
+    async def test_guard_pass_without_pollution(self, db_session):
+        """Given: 正常经 db_session fixture 操作测试库
+        When: session 结束
+        Then: guard 不报错（测试库写入不污染真库 baseline）
+        """
+        from app.models.accounts import Family
+
+        db_session.add(Family())
+        await db_session.commit()
+        count = await db_session.scalar(text("SELECT count(*) FROM families"))
+        assert count == 1
+
+    # test_guard_skip_with_env_var: 手动验证
+    #   LB_SKIP_PROD_GUARD=1 pytest tests/ -x 应全量通过，guard 不比对。
+    #   本文件不包含该用例（需要 env var 前置条件）。

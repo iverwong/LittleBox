@@ -1,261 +1,161 @@
-"""Step 8 CLI scripts 冒烟测试：create_parent + reset_parent_password。
+"""CLI 业务函数测试（M6-patch 重写）：import 业务函数 + conftest fixture，零 subprocess。
 
-C2 · DB 着陆断言：验证 CLI 写入了正确的 DB 记录。
+测试隔离铁律（M6-patch）：
+- 不调 subprocess / Popen
+- 不自建 create_async_engine
+- 不拼 os.environ LB_DATABASE_URL
+- 所有 DB/Redis 经 conftest fixture 注入
 """
 
 from __future__ import annotations
 
-import os
-import re
-import subprocess
-import sys
-from pathlib import Path
+import uuid
+from contextlib import asynccontextmanager
 
 import pytest
 
-# backend 根目录（tests 的父级）
-_BACKEND_ROOT = Path(__file__).parent.parent
-
-
-def _cli_test_env() -> dict:
-    """构建 CLI subprocess 环境：LB_DATABASE_URL 指向 littlebox_test，与 conftest 隔离。
-
-    原理：pydantic-settings 的 env_prefix=LB_ 意味着 LB_DATABASE_URL 会覆盖 settings.database_url。
-    CLI scripts（create_parent / reset_parent_password）通过 app.config.settings 读取此值，
-    subprocess 继承这份 env 就自然指向 littlebox_test。
-    """
-    base = os.environ.copy()
-    _host = os.environ.get("LB_DB_HOST", "db")
-    _port = os.environ.get("LB_DB_PORT", "5432")
-    _user = os.environ.get("LB_DB_USER", "postgres")
-    _pass = os.environ.get("LB_DB_PASSWORD", "postgres")
-    base["LB_DATABASE_URL"] = f"postgresql+asyncpg://{_user}:{_pass}@{_host}:{_port}/littlebox_test"
-    return base
-
-
-# 验证用 DB URL（subprocess 内联脚本访问同一个 littlebox_test）
-_TEST_DB_URL = f"postgresql+asyncpg://{os.environ.get('LB_DB_USER', 'postgres')}:{os.environ.get('LB_DB_PASSWORD', 'postgres')}@{os.environ.get('LB_DB_HOST', 'db')}:{os.environ.get('LB_DB_PORT', '5432')}/littlebox_test"
+from app.scripts.create_parent import _create_parent
+from app.scripts.create_parent import _main as create_parent_main
+from app.scripts.reset_parent_password import _reset_password
 
 
 class TestCreateParent:
-    def _run_create_parent(self, note: str) -> tuple[int, str, str]:
-        """在子进程中运行 create_parent，返回 (returncode, stdout, stderr)。"""
-        proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "app.scripts.create_parent",
-                "--note",
-                note,
-            ],
-            cwd=str(_BACKEND_ROOT),
-            env=_cli_test_env(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        stdout, stderr = proc.communicate()
-        return proc.returncode, stdout, stderr
+    @pytest.mark.asyncio
+    async def test_creates_parent_and_family(self, db_session, redis_client):
+        """Given: 干净的测试库 + fakeredis
+        When: 调用 _create_parent
+        Then: ParentInfo 返回; users/families/family_members 各写入 1 行; phone 为 4 字母
+        """
+        info = await _create_parent(db_session, redis_client, note="unit-test")
 
-    def test_create_parent_success(self) -> None:
-        """create_parent --note '测试' → 0 + stdout 含 phone / password / user_id / note + DB 已写入。"""
-        returncode, stdout, stderr = self._run_create_parent("测试父账号")
-        assert returncode == 0, f"stderr: {stderr}"
-        assert "✅ parent created" in stdout
-        assert "phone:    " in stdout
-        assert "password: " in stdout
-        assert "user_id:  " in stdout
-        assert "测试父账号" in stdout
-        # password 是 8 位字母（去 i/l/o）
-        pw_match = re.search(r"password: +([a-z]{8})", stdout)
-        assert pw_match, f"password format unexpected in stdout: {stdout}"
-        # 明文密码只打印一次
-        assert stdout.count(pw_match.group(1)) == 1, "password should appear exactly once"
+        # ParentInfo 字段类型
+        assert len(info.phone) == 4
+        assert len(info.plain_password) == 8
+        assert isinstance(info.user_id, uuid.UUID)
+        assert isinstance(info.family_id, uuid.UUID)
 
-        # C2 · DB 着陆：phone 已在 test DB 写入，admin_note 匹配（subprocess 异步验证）
-        phone_match = re.search(r"phone:    +([a-z]{4})", stdout)
-        assert phone_match, f"phone format unexpected: {stdout}"
-        phone = phone_match.group(1)
-
-        check_script = f"""
-import asyncio
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-
-_DB_URL = {_TEST_DB_URL!r}
-
-async def _check():
-    engine = create_async_engine(_DB_URL)
-    sm = async_sessionmaker(engine, expire_on_commit=False)
-    async with sm() as session:
+        # DB 写入断言
         from app.models.accounts import Family, FamilyMember, User
         from app.models.enums import UserRole
-        row = await session.execute(
-            select(User).where(
-                User.phone == {phone!r},
-                User.role == UserRole.parent,
-                User.is_active.is_(True),
-            )
+
+        user = await db_session.get(User, info.user_id)
+        assert user is not None
+        assert user.phone == info.phone
+        assert user.admin_note == "unit-test"
+        assert user.role == UserRole.parent
+        assert user.is_active is True
+
+        family = await db_session.get(Family, info.family_id)
+        assert family is not None
+
+        from sqlalchemy import select
+
+        stmt = select(FamilyMember).where(
+            FamilyMember.family_id == info.family_id,
+            FamilyMember.user_id == info.user_id,
         )
-        user = row.scalar_one_or_none()
-        assert user is not None, f"parent {phone!r} not found"
-        assert user.admin_note == "测试父账号", f"note mismatch: {{user.admin_note!r}}"
-        assert user.family_id is not None
-        fm = await session.execute(
-            select(FamilyMember).where(
-                FamilyMember.user_id == user.id,
-                FamilyMember.family_id == user.family_id,
-                FamilyMember.role == UserRole.parent,
-            )
-        )
-        assert fm.scalar_one_or_none() is not None, "FamilyMember not found"
-        print("DB OK", user.id, user.family_id)
-    await engine.dispose()
+        fm = (await db_session.execute(stmt)).scalar_one_or_none()
+        assert fm is not None
+        assert fm.role == UserRole.parent
 
-asyncio.run(_check())
-"""
-        result = subprocess.run(
-            [sys.executable, "-c", check_script],
-            capture_output=True, text=True, cwd=str(_BACKEND_ROOT),
-        )
-        assert result.returncode == 0, f"DB check failed: {result.stderr}"
-        assert "DB OK" in result.stdout
+    @pytest.mark.asyncio
+    async def test_admin_note_appears_in_db(self, db_session, redis_client):
+        """Given: 不同的 note 值
+        When: 分别创建两个 parent
+        Then: 每个 parent 的 admin_note 正确对应
+        """
+        info_a = await _create_parent(db_session, redis_client, note="note-aaa")
+        info_b = await _create_parent(db_session, redis_client, note="note-bbb")
 
-
-class TestResetParentPassword:
-    def _run_create_parent(self, note: str) -> tuple[int, str, str]:
-        """在子进程中运行 create_parent，返回 (returncode, stdout, stderr)。"""
-        proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "app.scripts.create_parent",
-                "--note",
-                note,
-            ],
-            cwd=str(_BACKEND_ROOT),
-            env=_cli_test_env(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        stdout, stderr = proc.communicate()
-        return proc.returncode, stdout, stderr
-
-    def _run_reset_password(self, phone: str) -> tuple[int, str, str]:
-        """在子进程中运行 reset_parent_password，返回 (returncode, stdout, stderr)。"""
-        proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "app.scripts.reset_parent_password",
-                "--phone",
-                phone,
-            ],
-            cwd=str(_BACKEND_ROOT),
-            env=_cli_test_env(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        stdout, stderr = proc.communicate()
-        return proc.returncode, stdout, stderr
-
-    def test_reset_password_unknown_phone_exits_nonzero(self) -> None:
-        """--phone 不存在 → 非 0 退出码 + stderr 含错误信息 + DB 无副作用。"""
-        returncode, stdout, stderr = self._run_reset_password("zzzz")
-        assert returncode != 0, f"expected non-zero exit, got {returncode}"
-        assert "ERROR" in stderr or "no active parent" in stderr
-
-        # C2 · 无副作用断言：phone=zzzz 不存在于 DB（确保没有残留写入）
-        check_script = f"""
-import asyncio
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-
-async def _check():
-    engine = create_async_engine({_TEST_DB_URL!r})
-    sm = async_sessionmaker(engine, expire_on_commit=False)
-    async with sm() as session:
         from app.models.accounts import User
-        from app.models.enums import UserRole
-        row = await session.execute(
-            select(User).where(
-                User.phone == "zzzz",
-                User.role == UserRole.parent,
-            )
-        )
-        assert row.scalar_one_or_none() is None, "zzzz should not exist in DB"
-        print("NO SIDE EFFECTS OK")
-    await engine.dispose()
 
-asyncio.run(_check())
-"""
-        result = subprocess.run(
-            [sys.executable, "-c", check_script],
-            capture_output=True, text=True, cwd=str(_BACKEND_ROOT),
-        )
-        assert result.returncode == 0, f"DB check failed: {result.stderr}"
-        assert "NO SIDE EFFECTS OK" in result.stdout
+        user_a = await db_session.get(User, info_a.user_id)
+        user_b = await db_session.get(User, info_b.user_id)
+        assert user_a.admin_note == "note-aaa"
+        assert user_b.admin_note == "note-bbb"
 
-    def test_reset_password_success_flow(self) -> None:
-        """完整流程：create_parent → 用其 phone reset_password → 验证输出 + DB 已更新。"""
-        # 1. 创建 parent
-        returncode, stdout, stderr = self._run_create_parent("reset 测试")
-        assert returncode == 0, f"create_parent failed: {stderr}"
-        phone_match = re.search(r"phone:    +([a-z]{4})", stdout)
-        assert phone_match, f"phone format unexpected: {stdout}"
-        phone = phone_match.group(1)
-        original_pw = re.search(r"password: +([a-z]{8})", stdout).group(1)
 
-        # 2. reset password
-        returncode2, stdout2, stderr2 = self._run_reset_password(phone)
-        assert returncode2 == 0, f"reset_password failed: {stderr2}"
-        assert "✅ password reset" in stdout2
-        assert phone in stdout2
-        pw_match = re.search(r"password: +([a-z]{8})", stdout2)
-        assert pw_match, f"new password format unexpected in stdout2: {stdout2}"
-        new_pw = pw_match.group(1)
-        # 明文密码只打印一次
-        assert stdout2.count(new_pw) == 1
+class TestResetPassword:
+    @pytest.mark.asyncio
+    async def test_resets_password(self, db_session, redis_client):
+        """Given: 已创建的 parent 账号
+        When: 调用 _reset_password
+        Then: 返回 ResetResult; 新密码 != 原密码; DB 密码 hash 已变更
+        """
+        info = await _create_parent(db_session, redis_client, note="reset-test")
 
-        # C2 · DB 着陆：旧密码失效（subprocess 异步验证）
-        # 如果 verify_password 抛出 InvalidHashError（hash 已损坏），说明从未成功过，等效于"已失效"
-        check_script = f"""
-import asyncio
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from argon2.exceptions import InvalidHashError
-
-async def _check():
-    engine = create_async_engine({_TEST_DB_URL!r})
-    sm = async_sessionmaker(engine, expire_on_commit=False)
-    async with sm() as session:
         from app.models.accounts import User
-        from app.models.enums import UserRole
-        row = await session.execute(
-            select(User).where(
-                User.phone == {phone!r},
-                User.role == UserRole.parent,
-                User.is_active.is_(True),
-            )
-        )
-        user = row.scalar_one()
-        try:
-            from app.auth.password import verify_password
-            valid = verify_password({original_pw!r}, user.password_hash)
-        except InvalidHashError:
-            # hash 已损坏（reset 前未正确哈希），等效于旧密码已失效
-            valid = False
-        assert not valid, "original password should be invalidated after reset"
-        print("PASSWORD OK")
-    await engine.dispose()
 
-asyncio.run(_check())
-"""
-        result = subprocess.run(
-            [sys.executable, "-c", check_script],
-            capture_output=True, text=True, cwd=str(_BACKEND_ROOT),
-        )
-        assert result.returncode == 0, f"DB check failed: {result.stderr}"
-        assert "PASSWORD OK" in result.stdout
+        old_user = await db_session.get(User, info.user_id)
+        old_hash = old_user.password_hash
+
+        result = await _reset_password(db_session, redis_client, phone=info.phone)
+
+        assert result.phone == info.phone
+        assert result.plain_password != info.plain_password
+
+        new_user = await db_session.get(User, info.user_id)
+        assert new_user.password_hash != old_hash
+
+        # 旧密码不应再通过验证
+        from app.auth.password import verify_password
+
+        assert not verify_password(new_user.password_hash, info.plain_password)
+        assert verify_password(new_user.password_hash, result.plain_password)
+
+    @pytest.mark.asyncio
+    async def test_unknown_phone_raises(self, db_session, redis_client):
+        """Given: 不存在的 phone
+        When: 调用 _reset_password
+        Then: 抛出 ValueError
+        """
+        with pytest.raises(ValueError, match="no active parent found with phone"):
+            await _reset_password(db_session, redis_client, phone="zzzz")
+
+
+class TestCliEntrypoint:
+    @pytest.mark.asyncio
+    async def test_create_parent_main_output(self, monkeypatch, capsys, db_session, redis_client):
+        """Given: argv 含 --note, cli_runtime 被 monkeypatch 成产出测试 fixture
+        When: 调用 _main()
+        Then: stdout 含 phone/password/user_id/note
+        """
+        monkeypatch.setattr("sys.argv", ["create_parent", "--note", "smoke"])
+
+        @asynccontextmanager
+        async def _fake_runtime():
+            yield (db_session, redis_client)
+
+        monkeypatch.setattr("app.scripts.create_parent.cli_runtime", _fake_runtime)
+
+        await create_parent_main()
+        out = capsys.readouterr().out
+        assert "✅ parent created" in out
+        assert "phone:" in out
+        assert "password:" in out
+        assert "user_id:" in out
+        assert "smoke" in out
+
+    @pytest.mark.asyncio
+    async def test_reset_password_main_output(self, monkeypatch, capsys, db_session, redis_client):
+        """Given: argv 含 --phone, cli_runtime monkeypatch
+        When: 先创建 parent 再调 _main()
+        Then: stdout 含 phone/password/user_id
+        """
+        info = await _create_parent(db_session, redis_client, note="cli-reset")
+
+        monkeypatch.setattr("sys.argv", ["reset_password", "--phone", info.phone])
+
+        @asynccontextmanager
+        async def _fake_runtime():
+            yield (db_session, redis_client)
+
+        monkeypatch.setattr("app.scripts.reset_parent_password.cli_runtime", _fake_runtime)
+
+        from app.scripts.reset_parent_password import _main as reset_main
+
+        await reset_main()
+        out = capsys.readouterr().out
+        assert "✅ password reset" in out
+        assert info.phone in out
+        assert "password:" in out

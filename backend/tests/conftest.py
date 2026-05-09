@@ -7,14 +7,35 @@
   teardown rollback 外层 → 零持久化 → 测试完全隔离
 - Redis：fakeredis 进程内模拟，每测试独立实例
 - FastAPI：`dependency_overrides` 注入 `get_db` / `get_redis` 指向测试 fixture
+
+测试隔离铁律（M6-patch 后强制纪律）：
+所有涉及 DB / Redis 的测试**必须**通过本文件的 fixture 进入:
+- DB: db_session (savepoint rollback, 作用域 function)
+- HTTP: api_client (ASGI in-process)
+- Redis: redis_client (fakeredis, 作用域 function)
+
+禁止:
+- subprocess 跑 `app.scripts.*` 连真实库
+- httpx 直连真 server (localhost:8000 等)
+- redis.Redis(...) 显式连真实 host
+- from app.config import settings 后用 settings.database_url 自建 engine
+- flushdb() / flushall()
+
+双层运行时防御:
+- 模块级 _test_url() 断言（本文件顶部）
+- session 级 _prod_db_row_count_guard fixture
+
+历史教训: M6-patch · 测试隔离纪律加固
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 from collections.abc import AsyncGenerator
 
+import pytest
 import pytest_asyncio
 from fakeredis.aioredis import FakeRedis
 from fastapi import FastAPI
@@ -33,15 +54,11 @@ TEST_DB_NAME = "littlebox_test"
 
 
 def _base_url() -> str:
-    """从 settings.database_url 派生，保证 host / port / 凭证 与开发一致。
-    用 render_as_string(hide_password=False)：SQLAlchemy URL 的 __str__ 默认会把
-    密码遮蔽成 ***，create_async_engine 拿到 *** 直接触发 asyncpg 密码认证失败。
-    详见决策背景 §11.1。"""
+    """从 settings.database_url 派生，保证 host / port / 凭证 与开发一致。"""
     return make_url(settings.database_url).render_as_string(hide_password=False)
 
 
 def _admin_url() -> str:
-    # postgres 镜像默认存在的维护库；用于 DROP/CREATE 测试库
     return (
         make_url(settings.database_url)
         .set(database="postgres")
@@ -55,6 +72,15 @@ def _test_url() -> str:
         .set(database=TEST_DB_NAME)
         .render_as_string(hide_password=False)
     )
+
+
+# ---------- 模块级 fail-fast 断言 ----------
+#  放在 _test_url() 定义之后，确保函数已就绪
+_RESOLVED_TEST_URL = _test_url()
+assert "_test" in make_url(_RESOLVED_TEST_URL).database, (
+    f"FATAL: 测试库 URL 数据库名必须含 '_test', 实际 {_RESOLVED_TEST_URL}。"
+    f"请检查 TEST_DB_NAME 是否误删 '_test' 后缀。"
+)
 
 
 # ---------- session scope：建库 + migration ----------
@@ -281,7 +307,7 @@ async def rate_limit_parent(db_session: AsyncSession) -> tuple:
     user = User(
         family_id=fam.id,
         role=UserRole.parent,
-        phone="abcd",  # 固定 phone，用于 rate-limit 测试
+        phone="abcd",
         password_hash=hash_password(pw),
         is_active=True,
     )
@@ -291,3 +317,44 @@ async def rate_limit_parent(db_session: AsyncSession) -> tuple:
     db_session.add(FamilyMember(family_id=fam.id, user_id=user.id, role=UserRole.parent))
     await db_session.commit()
     return user, pw
+
+
+# ---------- session scope：真库行数兜底（M6-patch T4 防御） ----------
+
+_GUARD_TABLES = [
+    "users", "families", "family_members",
+    "data_deletion_requests", "notifications",
+]
+
+
+async def _async_count_rows(url: str, tables: list[str]) -> dict[str, int]:
+    from sqlalchemy import text as _text
+    engine = create_async_engine(url)
+    try:
+        async with engine.connect() as conn:
+            return {
+                t: (await conn.execute(_text(f"SELECT COUNT(*) FROM {t}"))).scalar_one()
+                for t in tables
+            }
+    finally:
+        await engine.dispose()
+
+
+def _count_rows(url: str, tables: list[str]) -> dict[str, int]:
+    """同步调用 async COUNT 查询。asyncio.run() 创建独立事件循环。"""
+    return asyncio.run(_async_count_rows(url, tables))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _prod_db_row_count_guard():
+    """启动记录真库 baseline, session 结束比对。任一目标表行数变化即 fail。"""
+    if os.getenv("LB_SKIP_PROD_GUARD") == "1":
+        yield
+        return
+
+    prod_url = settings.database_url
+    baseline = _count_rows(prod_url, _GUARD_TABLES)
+    yield
+    final = _count_rows(prod_url, _GUARD_TABLES)
+    diffs = {t: (baseline[t], final[t]) for t in _GUARD_TABLES if baseline[t] != final[t]}
+    assert not diffs, f"FATAL: 真库行数变化(测试污染): {diffs}"
