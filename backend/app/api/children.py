@@ -23,8 +23,6 @@ from app.schemas.children import ChildSummary, CreateChildRequest, ListChildrenR
 from app.services.age_converter import age_to_birth_date
 from app.services.child_deletion import hard_delete_child
 
-CHILD_QUOTA_PER_FAMILY = 3
-
 router = APIRouter(prefix="/api/v1/children", tags=["children"])
 
 
