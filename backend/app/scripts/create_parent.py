@@ -21,8 +21,12 @@ Details:
 from __future__ import annotations
 
 import asyncio
+import uuid
+from dataclasses import dataclass
 
+from redis.asyncio import Redis
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.password import generate_password, generate_phone, hash_password
 from app.auth.redis_ops import commit_with_redis
@@ -33,7 +37,16 @@ from app.scripts._common import build_arg_parser, cli_runtime, run_main
 MAX_PHONE_RETRIES = 10
 
 
-async def _ensure_unique_phone(db, max_retries: int = MAX_PHONE_RETRIES) -> str:
+@dataclass(frozen=True)
+class ParentInfo:
+    """_create_parent 的返回值。CLI 与测试共用。"""
+    phone: str
+    plain_password: str
+    user_id: uuid.UUID
+    family_id: uuid.UUID
+
+
+async def _ensure_unique_phone(db: AsyncSession, max_retries: int = MAX_PHONE_RETRIES) -> str:
     """生成唯一 phone，若撞已有 active parent 则重试最多 max_retries 次。"""
     for _ in range(max_retries):
         phone = generate_phone()
@@ -51,56 +64,62 @@ async def _ensure_unique_phone(db, max_retries: int = MAX_PHONE_RETRIES) -> str:
     raise RuntimeError(f"failed to generate unique phone after {max_retries} retries")
 
 
-async def _create_parent(note: str) -> None:
-    async with cli_runtime() as (db, redis):
-        # 1. 新建 Family
-        family = Family()
-        db.add(family)
-        await db.flush()
+async def _create_parent(db: AsyncSession, redis: Redis, *, note: str) -> ParentInfo:
+    """创建 parent 账户。CLI 与测试共用入口，不含 IO 副作用。
 
-        # 2. 生成 phone（防碰撞重试）
-        phone = await _ensure_unique_phone(db)
+    返回 ParentInfo 供调用方决定输出格式（CLI 打印 stdout / 测试断言）。
+    """
+    family = Family()
+    db.add(family)
+    await db.flush()
 
-        # 3. 生成明文 password（此时不打印）
-        password = generate_password()
+    phone = await _ensure_unique_phone(db)
+    password = generate_password()
 
-        # 4. 新建 User(role=parent)
-        user = User(
+    user = User(
+        family_id=family.id,
+        role=UserRole.parent,
+        phone=phone,
+        password_hash=hash_password(password),
+        is_active=True,
+        admin_note=note,
+    )
+    db.add(user)
+    await db.flush()
+
+    db.add(
+        FamilyMember(
             family_id=family.id,
+            user_id=user.id,
             role=UserRole.parent,
-            phone=phone,
-            password_hash=hash_password(password),
-            is_active=True,
-            admin_note=note,
         )
-        db.add(user)
-        await db.flush()
+    )
 
-        # 5. 新建 FamilyMember
-        db.add(
-            FamilyMember(
-                family_id=family.id,
-                user_id=user.id,
-                role=UserRole.parent,
-            )
-        )
+    await commit_with_redis(db, redis)
 
-        # 6. commit（无 Redis op 也走统一入口）
-        await commit_with_redis(db, redis)
+    return ParentInfo(
+        phone=phone,
+        plain_password=password,
+        user_id=user.id,
+        family_id=family.id,
+    )
 
-        # 7. 提交成功后打印密码（只打印一次）
+
+async def _main() -> None:
+    parser = build_arg_parser(note_required=True)
+    args = parser.parse_args()
+    async with cli_runtime() as (db, redis):
+        info = await _create_parent(db, redis, note=args.note)
         print("✅ parent created")
-        print(f"   phone:    {phone}")
-        print(f"   password: {password}")
-        print(f"   user_id:  {user.id}")
-        print(f"   note:     {note}")
+        print(f"   phone:    {info.phone}")
+        print(f"   password: {info.plain_password}")
+        print(f"   user_id:  {info.user_id}")
+        print(f"   note:     {args.note}")
         print("⚠️  明文密码仅此一次打印，请立即妥善保管。")
 
 
 def main() -> None:
-    parser = build_arg_parser(note_required=True)
-    args = parser.parse_args()
-    asyncio.run(run_main(lambda: _create_parent(args.note)))
+    asyncio.run(run_main(_main))
 
 
 if __name__ == "__main__":
