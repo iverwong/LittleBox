@@ -6,7 +6,8 @@ is the primary provider (preserving reasoning_content); ChatOpenAI is
 registered for future M11+ experiments but not used in M6.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
+from functools import lru_cache
 from typing import Any
 
 from langchain_core.language_models import LanguageModelInput
@@ -16,8 +17,8 @@ from langchain_deepseek import ChatDeepSeek
 from langchain_openai import ChatOpenAI
 
 
-class ProviderNotRegistered(LookupError):
-    """Raised when build_main_llm receives an unregistered provider name."""
+class ProviderNotRegisteredError(LookupError):
+    """Provider 名未在 _PROVIDER_REGISTRY 中注册时抛出。"""
 
 
 def _build_chat_deepseek(
@@ -29,7 +30,7 @@ def _build_chat_deepseek(
 ) -> ChatDeepSeek:
     """Construct ChatDeepSeek with thinking mode enabled."""
     return ChatDeepSeek(
-        api_key=api_key,
+        api_key=api_key,  # type: ignore[arg-type]
         base_url=base_url,
         model=model,
         timeout=timeout,
@@ -48,7 +49,7 @@ def _build_chat_openai(
 ) -> ChatOpenAI:
     """Construct ChatOpenAI (no thinking — reserved for M11+ experiments)."""
     return ChatOpenAI(
-        api_key=api_key,
+        api_key=api_key,  # type: ignore[arg-type]
         base_url=base_url,
         model=model,
         timeout=timeout,
@@ -76,12 +77,12 @@ def build_provider_llm(provider: str, settings: Any) -> Runnable:
     """Build a single LLM instance for the given provider name.
 
     Raises:
-        ProviderNotRegistered: if provider is not in the registry.
+        ProviderNotRegisteredError: if provider is not in the registry.
     """
     builder = _PROVIDER_REGISTRY.get(provider)
     if builder is None:
         msg = f"Unknown provider '{provider}'. Registered: {list(_PROVIDER_REGISTRY)}"
-        raise ProviderNotRegistered(msg)
+        raise ProviderNotRegisteredError(msg)
     return builder(settings)
 
 
@@ -113,8 +114,6 @@ def build_main_llm(settings: Any) -> Runnable[LanguageModelInput, BaseMessage]:
 
 
 # ---- backward compat (M6 Step 2.5 API) — remove after graph.py migration (Step 11.2) ----
-
-from functools import lru_cache
 
 
 @lru_cache(maxsize=1)

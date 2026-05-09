@@ -102,6 +102,7 @@ async def stream_chat(user_message: str, session_id: str) -> AsyncIterator[str]:
             "session_id": session_id,
             "child_user_id": "",
             "child_profile": None,
+            "provider": "deepseek",  # dev_chat 默认 provider
             "messages": [HumanMessage(content=user_message)],
             "audit_state": {},
             "pending_guidance": None,

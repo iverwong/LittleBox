@@ -57,12 +57,18 @@ class ChatStreamRequest(BaseModel):
             non-existent row) returns 400 ``RegenerateForInvalid``.
     """
 
-    content: str = Field(description="User message text. Empty allowed only for row-7 regeneration.")
-    session_id: str | None = Field(default=None, description="null = first turn; existing session id = subsequent turn.")
+    content: str = Field(
+        description="User message text. Empty allowed only for row-7 regeneration."
+    )
+    session_id: str | None = Field(
+        default=None,
+        description="null = first turn; existing session id = subsequent turn.",
+    )
     regenerate_for: str | None = Field(
         default=None,
         description=(
             "Must be the id of the session's current last active human message. "
-            "Pointing to an earlier human / to an ai / to a non-existent row → 400 RegenerateForInvalid."
+            "Pointing to an earlier human / to an ai / to a non-existent row"
+            " → 400 RegenerateForInvalid."
         ),
     )

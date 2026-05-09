@@ -41,8 +41,6 @@ def extract_finish_reason(chunk: AIMessageChunk, provider: str) -> str | None:
     Returns:
         白名单内的 finish_reason 值，或 None
     """
-    path = _FINISH_REASON_PATH.get(provider, _FINISH_REASON_PATH["deepseek"])
-    # path is "response_metadata.finish_reason" — navigate additional_kwargs
     ak = chunk.additional_kwargs or {}
     metadata = ak.get("response_metadata") or {}
     fr = metadata.get("finish_reason")

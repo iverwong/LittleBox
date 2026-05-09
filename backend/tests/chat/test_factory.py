@@ -12,7 +12,7 @@ from langchain_deepseek import ChatDeepSeek
 from langchain_openai import ChatOpenAI
 
 from app.chat.factory import (
-    ProviderNotRegistered,
+    ProviderNotRegisteredError,
     _PROVIDER_REGISTRY,
     build_main_llm,
     build_provider_llm,
@@ -87,7 +87,7 @@ class TestBuildProviderLlm:
 
     def test_unknown_provider_raises(self) -> None:
         settings = _FakeSettings()
-        with pytest.raises(ProviderNotRegistered, match="unknown"):
+        with pytest.raises(ProviderNotRegisteredError, match="unknown"):
             build_provider_llm("unknown", settings)
 
 
@@ -139,11 +139,11 @@ class TestBuildMainLlmNoFallback:
 
 
 class TestBuildMainLlmUnknown:
-    """main_provider="unknown" triggers ProviderNotRegistered."""
+    """main_provider="unknown" triggers ProviderNotRegisteredError."""
 
     def test_unknown_main_provider_raises(self) -> None:
         settings = _FakeSettings(main_provider="unknown")
-        with pytest.raises(ProviderNotRegistered, match="unknown"):
+        with pytest.raises(ProviderNotRegisteredError, match="unknown"):
             build_main_llm(settings)
 
 
@@ -173,20 +173,13 @@ class TestChatDeepSeekConstruction:
             "reasoning_effort": "high",
         }
 
-    def test_openai_construction_params(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Mock ChatOpenAI.__init__ to verify base_url / api_key / model."""
-        captured: dict[str, Any] = {}
-
-        def mock_init(self, **kwargs: Any) -> None:
-            captured.update(kwargs)
-
-        monkeypatch.setattr(ChatOpenAI, "__init__", mock_init)
-
+    def test_openai_construction_params(self) -> None:
+        """Construct ChatOpenAI via registry and verify params on instance."""
         settings = _FakeSettings()
-        _PROVIDER_REGISTRY["openai"](settings)
-
-        assert captured.get("base_url") == "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        assert captured.get("model") == "deepseek-v4-flash"
+        llm = _PROVIDER_REGISTRY["openai"](settings)
+        # ChatOpenAI maps base_url → openai_api_base via Pydantic alias
+        assert llm.openai_api_base.startswith("https://dashscope.aliyuncs.com")
+        assert llm.model == "deepseek-v4-flash"
 
 
 # ---- T5b: ChatDeepSeek thinking params (Step 11.3) ----

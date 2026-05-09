@@ -35,7 +35,7 @@ class MainDialogueState(TypedDict):
     session_id: str
     child_user_id: str
     child_profile: ChildProfile | None  # set by generator (Step 8b); M6 nodes do not read
-    provider: str  # 当前对话使用的 provider 名（deepseek / openai），由 me.py 从 settings.main_provider 填入
+    provider: str  # 当前对话 provider 名，由 me.py 从 settings.main_provider 填入
     messages: Annotated[list[BaseMessage], add_messages]
     audit_state: dict  # M6: all False; M8: read Redis audit:{sid} + PG rolling_summaries
     pending_guidance: str | None  # staging — not persisted, not written to messages table

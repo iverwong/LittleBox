@@ -554,7 +554,6 @@ async def chat_stream(
             from langchain_core.messages import HumanMessage
 
             from app.chat.state import MainDialogueState
-
             from app.config import settings as _app_settings
 
             initial_state: MainDialogueState = {

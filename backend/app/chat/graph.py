@@ -25,7 +25,13 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+)
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, StateGraph
 from sqlalchemy import update
@@ -207,8 +213,11 @@ async def call_main_llm(state: MainDialogueState) -> dict:
     provider = state.get("provider", "deepseek")
 
     async for chunk in llm.astream(llm_messages):
+        # astream() yields AIMessageChunk at runtime despite BaseMessage type annotation
+        _chunk_typed: AIMessageChunk = chunk  # type: ignore[assignment]
+
         # reasoning passthrough (signal only, no text, baseline §3.2)
-        if extract_reasoning_content(chunk, provider):
+        if extract_reasoning_content(_chunk_typed, provider):
             writer({"reasoning": True})
 
         text = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
@@ -217,7 +226,7 @@ async def call_main_llm(state: MainDialogueState) -> dict:
             parts.append(text)
 
         # finish_reason passthrough (whitelist only, helper dispatch)
-        fr = extract_finish_reason(chunk, provider)
+        fr = extract_finish_reason(_chunk_typed, provider)
         if fr:
             writer({"finish_reason": fr})
 
