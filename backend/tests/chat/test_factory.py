@@ -189,6 +189,58 @@ class TestChatDeepSeekConstruction:
         assert captured.get("model") == "deepseek-v4-flash"
 
 
+# ---- T5b: ChatDeepSeek thinking params (Step 11.3) ----
+# Source: langchain_deepseek/chat_models.py — no top-level thinking/reasoning_effort
+# field on ChatDeepSeek (lines 31-521). Must pass via extra_body (inherited from
+# BaseChatOpenAI, confirmed 2026-05-09).
+
+
+class TestChatDeepSeekThinkingParams:
+    """Verify extra_body thinking params survive on a real ChatDeepSeek instance."""
+
+    def test_extra_body_thinking_on_real_instance(self) -> None:
+        """Construct ChatDeepSeek with extra_body and verify attribute."""
+        llm = ChatDeepSeek(
+            api_key="sk-test",
+            base_url="https://api.deepseek.com/v1",
+            model="deepseek-v4-flash",
+            extra_body={
+                "thinking": {"type": "enabled"},
+                "reasoning_effort": "high",
+            },
+        )
+        assert llm.extra_body == {
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": "high",
+        }
+
+    def test_extra_body_default_reasoning_effort(self) -> None:
+        """Verify reasoning_effort=high is the default."""
+        llm = ChatDeepSeek(
+            api_key="sk-test",
+            base_url="https://api.deepseek.com/v1",
+            model="deepseek-v4-flash",
+            extra_body={
+                "thinking": {"type": "enabled"},
+                "reasoning_effort": "high",
+            },
+        )
+        assert llm.extra_body["reasoning_effort"] == "high"  # type: ignore[index]
+
+    def test_extra_body_thinking_enabled(self) -> None:
+        """Verify thinking type is enabled."""
+        llm = ChatDeepSeek(
+            api_key="sk-test",
+            base_url="https://api.deepseek.com/v1",
+            model="deepseek-v4-flash",
+            extra_body={
+                "thinking": {"type": "enabled"},
+                "reasoning_effort": "high",
+            },
+        )
+        assert llm.extra_body["thinking"] == {"type": "enabled"}  # type: ignore[index]
+
+
 # ---- T6: get_chat_llm backward compat ----
 
 
