@@ -32,6 +32,11 @@ class Session(BaseMixin, Base):
         server_default=func.now(),
         nullable=False,
     )
+    context_token_count: Mapped[int] = mapped_column(
+        default=0,
+        server_default="0",
+        nullable=False,
+    )
 
     # relationships
     messages: Mapped[list["Message"]] = relationship(
