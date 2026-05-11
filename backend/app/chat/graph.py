@@ -198,7 +198,7 @@ async def call_main_llm(state: MainDialogueState) -> dict:
 
     finish_reason passthrough: only white-list values
     (stop / length / content_filter) are forwarded; others fall through
-    to the stream_chat caller which emits "stop" as the default.
+    to the caller which emits "stop" as the default.
 
     No DB writes: persist_ai_turn is called from me.py generator after
     the stream ends (T5 single-write-point = generator).

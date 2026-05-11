@@ -550,7 +550,7 @@ async def chat_stream(
             client_alive = True
             user_stopped = False
 
-            # Build initial state for main_graph (same shape as stream_chat dev path)
+            # Build initial state for main_graph
             from langchain_core.messages import HumanMessage
 
             from app.chat.state import MainDialogueState
