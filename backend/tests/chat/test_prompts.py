@@ -214,14 +214,15 @@ class TestBuildSystemPrompt:
 
 
 class TestStubCount:
-    """关注点 6：TODO(prompts-content) grep 命中 9 处"""
+    """关注点 6：TODO(prompts-content) grep 命中 12 处"""
 
     def test_todo_content_slots_count(self) -> None:
-        """实际 slot 数：9 处 stub 函数注释 + 2 处说明性文字 = 11 total。
+        """实际 slot 数：9 处 stub 函数注释 + 2 处说明性文字 + 1 COMPRESSION_PROMPT_STUB = 12。
 
         关注点 6 要求 "grep 命中数与实际 stub 函数数一致"——
         9 个 stub 函数（_identity_block/_safety_block 各1 + _tier_block 5档 + _gender_block 2状态）
         均在函数体内有 # TODO(prompts-content) 行。
+        M6-patch3 Step 2 新增 COMPRESSION_PROMPT_STUB 含第 12 处。
         """
         import subprocess
 
@@ -232,6 +233,6 @@ class TestStubCount:
             cwd="/app",
         )
         count = int(result.stdout.strip())
-        # 9 stub function body comments + 2 explanatory in docstring/comment = 11
-        assert count == 11, f"expected 11 TODO(prompts-content) lines, got {count}"
+        # 9 stub function body comments + 2 explanatory + 1 COMPRESSION_PROMPT_STUB = 12
+        assert count == 12, f"expected 12 TODO(prompts-content) lines, got {count}"
 
