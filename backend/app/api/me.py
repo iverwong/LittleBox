@@ -32,7 +32,7 @@ from app.chat.sse import stream_graph_to_sse
 from app.chat.compression import CONTEXT_COMPRESS_THRESHOLD_TOKENS, estimate_tokens
 from app.chat.context import build_context
 from app.chat.prompts import build_system_prompt
-from app.chat.session_policy import SHANGHAI, should_switch_session, today_session_title
+from app.chat.session_policy import SHANGHAI, logical_day, should_switch_session, today_session_title
 from app.db import get_db
 from app.models.accounts import ChildProfile, User
 from app.models.chat import Message
@@ -164,9 +164,27 @@ async def list_sessions(
     limit: Annotated[int, Query(ge=1, le=50)] = 15,
     cursor: str | None = None,
 ) -> SessionListResponse:
-    """List sessions for the authenticated child (keyset pagination, no in_progress)."""
+    """List sessions for the authenticated child (keyset pagination, no in_progress).
+
+    M6-patch3：响应顶层附 today_session_id；sessions 数组过滤今日 logical_day。
+    """
     if cursor is not None and cursor == "":
         cursor = None
+
+    now = datetime.now(SHANGHAI)
+    latest = (
+        await db.execute(
+            select(SessionModel)
+            .where(SessionModel.child_user_id == current.id, SessionModel.status == "active")
+            .order_by(SessionModel.last_active_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    today_sid = (
+        latest.id
+        if latest and logical_day(latest.last_active_at) == logical_day(now)
+        else None
+    )
 
     stmt = (
         select(SessionModel.id, SessionModel.title, SessionModel.last_active_at)
@@ -177,6 +195,8 @@ async def list_sessions(
         .order_by(SessionModel.last_active_at.desc(), SessionModel.id.desc())
         .limit(limit + 1)
     )
+    if today_sid is not None:
+        stmt = stmt.where(SessionModel.id != today_sid)
     if cursor:
         last_active_at_dt, sid = _decode_cursor(cursor)
         stmt = stmt.where(
@@ -195,10 +215,11 @@ async def list_sessions(
         next_cursor = None
 
     return SessionListResponse(
-        items=[
+        sessions=[
             SessionListItem(id=row.id, title=row.title, last_active_at=row.last_active_at)
             for row in items
         ],
+        today_session_id=today_sid,
         next_cursor=next_cursor,
     )
 

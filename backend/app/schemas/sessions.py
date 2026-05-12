@@ -20,7 +20,8 @@ class SessionListItem(BaseModel):
 class SessionListResponse(BaseModel):
     """GET /me/sessions response."""
 
-    items: list[SessionListItem]
+    sessions: list[SessionListItem]
+    today_session_id: uuid.UUID | None = None
     next_cursor: str | None
 
 
