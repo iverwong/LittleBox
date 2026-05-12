@@ -16,6 +16,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
+pytestmark = pytest.mark.asyncio(loop_scope="function")
 from fakeredis.aioredis import FakeRedis
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select

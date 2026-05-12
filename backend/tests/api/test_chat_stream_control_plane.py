@@ -27,6 +27,7 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
+pytestmark = pytest.mark.asyncio(loop_scope="function")
 from fakeredis.aioredis import FakeRedis
 from httpx import AsyncClient
 from sqlalchemy import select
