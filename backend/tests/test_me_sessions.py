@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
@@ -113,10 +113,10 @@ class TestListSessionsHappy:
         )
         assert resp.status_code == 200, resp.json()
         data = resp.json()
-        assert len(data["items"]) == 2
+        assert len(data["sessions"]) == 2
         # Ordered by last_active_at DESC
-        assert data["items"][0]["title"] == "Session 1"
-        assert data["items"][1]["title"] == "Session 2"
+        assert data["sessions"][0]["title"] == "Session 1"
+        assert data["sessions"][1]["title"] == "Session 2"
         assert data["next_cursor"] is None
 
     @pytest.mark.asyncio
@@ -133,7 +133,10 @@ class TestListSessionsHappy:
         )
 
         for i in range(3):
-            db_session.add(SessionModel(child_user_id=child_id, title=f"S{i}", status="active"))
+            db_session.add(SessionModel(
+                child_user_id=child_id, title=f"S{i}", status="active",
+                last_active_at=datetime.now(timezone.utc) - timedelta(days=2, hours=i),
+            ))
         await db_session.commit()
 
         resp = await api_client.get(
@@ -141,7 +144,9 @@ class TestListSessionsHappy:
             headers={"Authorization": f"Bearer {child_token}", "X-Device-Id": "child_device"},
         )
         assert resp.status_code == 200
-        assert len(resp.json()["items"]) == 3
+        data = resp.json()
+        assert len(data["sessions"]) == 3
+        assert data["today_session_id"] is None
 
     @pytest.mark.asyncio
     async def test_limit_50_ok(
@@ -220,7 +225,7 @@ class TestListSessionsKeysetPagination:
         resp1 = await api_client.get("/api/v1/me/sessions?limit=2", headers=hdrs)
         assert resp1.status_code == 200
         data1 = resp1.json()
-        assert len(data1["items"]) == 2
+        assert len(data1["sessions"]) == 2
         assert data1["next_cursor"] is not None
 
         # Page 2 with cursor
@@ -230,7 +235,7 @@ class TestListSessionsKeysetPagination:
         )
         assert resp2.status_code == 200
         data2 = resp2.json()
-        assert len(data2["items"]) == 1
+        assert len(data2["sessions"]) == 1
         assert data2["next_cursor"] is None  # last page
 
 
@@ -321,7 +326,10 @@ class TestListSessionsCursorValidation:
         child_id, child_token = await _child_with_token_via_api(
             api_client, db_session, seeded_parent, phone="ch23"
         )
-        db_session.add(SessionModel(child_user_id=child_id, title="S1", status="active"))
+        db_session.add(SessionModel(
+            child_user_id=child_id, title="S1", status="active",
+            last_active_at=datetime.now(timezone.utc) - timedelta(days=2),
+        ))
         await db_session.commit()
 
         resp = await api_client.get(
@@ -329,7 +337,7 @@ class TestListSessionsCursorValidation:
             headers={"Authorization": f"Bearer {child_token}", "X-Device-Id": "child_device"},
         )
         assert resp.status_code == 200
-        assert len(resp.json()["items"]) == 1
+        assert len(resp.json()["sessions"]) == 1
 
     @pytest.mark.asyncio
     async def test_cursor_cross_account_protection(
@@ -369,15 +377,15 @@ class TestListSessionsCursorValidation:
         # child1 lists → only sees own session
         resp = await api_client.get("/api/v1/me/sessions", headers=hdrs)
         assert resp.status_code == 200
-        assert len(resp.json()["items"]) == 1
-        assert resp.json()["items"][0]["title"] == "Child1 S1"
+        assert len(resp.json()["sessions"]) == 1
+        assert resp.json()["sessions"][0]["title"] == "Child1 S1"
 
         # Encode child2's session cursor and use it as child1 — WHERE child_user_id protects
         cursor = _make_cursor(s2.last_active_at, str(s2.id))
         resp2 = await api_client.get(f"/api/v1/me/sessions?cursor={cursor}", headers=hdrs)
         # child1 can't see child2's session — returns empty (WHERE child_user_id=child1)
         assert resp2.status_code == 200
-        assert len(resp2.json()["items"]) == 0
+        assert len(resp2.json()["sessions"]) == 0
         assert resp2.json()["next_cursor"] is None
 
 
@@ -397,8 +405,14 @@ class TestListSessionsStatus:
             api_client, db_session, seeded_parent, phone="ch30"
         )
 
-        db_session.add(SessionModel(child_user_id=child_id, title="Active", status="active"))
-        db_session.add(SessionModel(child_user_id=child_id, title="Deleted", status="deleted"))
+        db_session.add(SessionModel(
+            child_user_id=child_id, title="Active", status="active",
+            last_active_at=datetime.now(timezone.utc) - timedelta(days=2),
+        ))
+        db_session.add(SessionModel(
+            child_user_id=child_id, title="Deleted", status="deleted",
+            last_active_at=datetime.now(timezone.utc) - timedelta(days=2),
+        ))
         await db_session.commit()
 
         resp = await api_client.get(
@@ -406,7 +420,7 @@ class TestListSessionsStatus:
             headers={"Authorization": f"Bearer {child_token}", "X-Device-Id": "child_device"},
         )
         assert resp.status_code == 200
-        assert [i["title"] for i in resp.json()["items"]] == ["Active"]
+        assert [i["title"] for i in resp.json()["sessions"]] == ["Active"]
 
 
 # ---------------------------------------------------------------------------
