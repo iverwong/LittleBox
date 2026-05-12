@@ -228,10 +228,12 @@ async def test_decision_row1_first_turn(api_client_with_eval, auth_headers_child
         .scalars()
         .all()
     )
-    assert len(msgs) == 1
+    assert len(msgs) == 2
     assert msgs[0].role == MessageRole.human
     assert msgs[0].content == "Hello world"
     assert msgs[0].status == MessageStatus.active
+    # commit② 内联写入的 ai 消息
+    assert msgs[1].role == MessageRole.ai
 
 
 # ---------------------------------------------------------------------------
@@ -301,9 +303,9 @@ async def test_decision_row3_ai_continuation(api_client_with_eval, auth_headers_
         .scalars()
         .all()
     )
-    # AI (earlier) + new human (later) = 2 active messages
-    assert len(msgs) == 2, (
-        f"Expected 2 messages, got {len(msgs)}: {[(m.role, m.content[:20]) for m in msgs]}"
+    # AI (earlier) + new human (later) + commit② AI = 3 active messages
+    assert len(msgs) == 3, (
+        f"Expected 3 messages, got {len(msgs)}: {[(m.role, m.content[:20]) for m in msgs]}"
     )
     human_msgs = [m for m in msgs if m.role == MessageRole.human]
     assert len(human_msgs) == 1
@@ -390,15 +392,16 @@ async def test_decision_row5_orphan_regen_null(
         .scalars()
         .all()
     )
-    # Old discarded + new active = 2 rows total
-    assert len(msgs) == 2
+    # Old discarded + new human active + commit② AI = 3 rows total
+    assert len(msgs) == 3
     discarded = [m for m in msgs if m.status == MessageStatus.discarded]
     active = [m for m in msgs if m.status == MessageStatus.active]
     assert len(discarded) == 1, f"Expected 1 discarded, got {[(m.id, m.status) for m in msgs]}"
     assert discarded[0].id == orphan_id
-    assert len(active) == 1
+    assert len(active) == 2, f"Expected 2 active (human + ai), got {len(active)}"
     assert active[0].role == MessageRole.human
     assert active[0].content == "New content"
+    assert active[1].role == MessageRole.ai
 
 
 # ---------------------------------------------------------------------------
@@ -451,9 +454,11 @@ async def test_decision_row6_orphan_reuse(
     msgs = (
         (await db_session.execute(select(Message).where(Message.session_id == sid))).scalars().all()
     )
-    assert len(msgs) == 1  # no new row inserted
+    # 复用 orphan + commit② AI = 2 rows
+    assert len(msgs) == 2
     assert msgs[0].id == orphan_id
     assert msgs[0].content == "Original question"  # content unchanged
+    assert msgs[1].role == MessageRole.ai
 
 
 @pytest.mark.asyncio
@@ -581,7 +586,7 @@ async def test_decision_row3_with_prior_human(
         .scalars()
         .all()
     )
-    assert len(msgs) == 3  # H1 + AI + H2
+    assert len(msgs) == 4  # H1 + AI + H2 + commit② AI
     human_msgs = [m for m in msgs if m.role == MessageRole.human]
     assert len(human_msgs) == 2
     new_human = next(m for m in human_msgs if m.id != human_id)
@@ -648,12 +653,12 @@ async def test_decision_row5_with_prior_ai(
         (await db_session.execute(select(Message).where(Message.session_id == sid)
                                   .order_by(Message.created_at, Message.id))).scalars().all()
     )
-    assert len(msgs) == 4  # H1 + A1 + H2(discarded) + H3
+    assert len(msgs) == 5  # H1 + A1 + H2(discarded) + H3 + commit② AI
     discarded = [m for m in msgs if m.status == MessageStatus.discarded]
     active = [m for m in msgs if m.status == MessageStatus.active]
     assert len(discarded) == 1
     assert discarded[0].id == h2_id
-    assert len(active) == 3
+    assert len(active) == 4  # H1 + A1 + H3 + commit② AI
     new_human = next(m for m in active if m.role == MessageRole.human and m.content == "H3 content")
     assert str(new_human.id) == hid_in_meta  # hid is H3, not H2
 
@@ -719,7 +724,7 @@ async def test_decision_row6_with_prior_ai_reuse(
         (await db_session.execute(select(Message).where(Message.session_id == sid)
                                   .order_by(Message.created_at, Message.id))).scalars().all()
     )
-    assert len(msgs) == 3  # H1 + A1 + H2 (no new row)
+    assert len(msgs) == 4  # H1 + A1 + H2 + commit② AI
     h2_row = next(m for m in msgs if m.id == h2_id)
     assert h2_row.content == "H2 original"  # content unchanged
     assert h2_row.status == MessageStatus.active

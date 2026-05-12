@@ -23,7 +23,6 @@ Graph topology (baseline §7.1):
 
 import logging
 import uuid
-from datetime import datetime, timezone
 
 from langchain_core.messages import (
     AIMessage,
@@ -34,7 +33,6 @@ from langchain_core.messages import (
 )
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, StateGraph
-from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chat.extractors import extract_finish_reason, extract_reasoning_content
@@ -58,10 +56,11 @@ async def persist_ai_turn(
     content: str,
     intervention_type: InterventionType | None = None,
 ) -> uuid.UUID:
-    """Persist one AI turn as an active message row + update session last_active_at.
+    """Persist one AI turn as an active message row (M6-patch3: no longer updates last_active_at).
 
     T5 single-write-point: called from me.py generator after the stream ends.
     This helper does NOT touch the messages table inside the graph.
+    last_active_at 由 commit① 独占（F 决策），commit② 不再覆写。
 
     Args:
         db: async DB session
@@ -83,12 +82,6 @@ async def persist_ai_turn(
     )
     db.add(msg)
     await db.flush()  # populate msg.id
-
-    # Update session last_active_at
-    await db.execute(
-        update(Session).where(Session.id == sid).values(last_active_at=datetime.now(timezone.utc))
-    )
-
     return msg.id
 
 

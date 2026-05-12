@@ -21,7 +21,7 @@ from starlette.responses import StreamingResponse
 
 from app.auth.deps import get_current_account, require_child
 from app.auth.redis_client import get_redis
-from app.chat.graph import main_graph, persist_ai_turn
+from app.chat.graph import enqueue_audit, main_graph, persist_ai_turn
 from app.chat.locks import (
     acquire_session_lock,
     acquire_throttle_lock,
@@ -29,7 +29,9 @@ from app.chat.locks import (
     running_streams,
 )
 from app.chat.sse import stream_graph_to_sse
-from app.chat.compression import estimate_tokens
+from app.chat.compression import CONTEXT_COMPRESS_THRESHOLD_TOKENS, estimate_tokens
+from app.chat.context import build_context
+from app.chat.prompts import build_system_prompt
 from app.chat.session_policy import SHANGHAI, should_switch_session, today_session_title
 from app.db import get_db
 from app.models.accounts import ChildProfile, User
@@ -469,6 +471,18 @@ async def chat_stream(
         if not is_new_session and session.child_user_id != current.id:
             raise HTTPException(403, "SessionForbidden")
 
+        # ---- 构建 system prompt + history（在 decision matrix 前，确保不含本轮 user_msg） ----
+        child_profile = await db.get(ChildProfile, current.id)
+        if child_profile is not None:
+            from app.chat.prompts import compute_age
+            _age = compute_age(child_profile.birth_date)
+            _gender = child_profile.gender.value if child_profile.gender else None
+        else:
+            _age = 8  # 兜底默认值（测试环境常见值）
+            _gender = None
+        history = await build_context(sid, db)
+        system_prompt = build_system_prompt(_age, _gender)
+
         # ---- decision matrix O + first-turn / subsequent-turn transaction ----
         last_msg = (
             await db.execute(
@@ -559,10 +573,13 @@ async def chat_stream(
         if user_msg is not None:
             session.last_active_at = user_msg.created_at
             session.context_token_count += estimate_tokens(req.content)
+        # 缓存 token 计数快照（generator 中 ORM 已 expired，不可直接访问）
+        _token_count: int = session.context_token_count
         await db.commit()
 
         # ---- streaming response ----
         async def generator() -> AsyncGenerator[bytes, None]:
+            nonlocal _token_count
             accumulated = ""
             last_finish_reason = "stop"  # 兜底；末帧 finish_reason 命中时覆盖
             has_emitted_content = False
@@ -580,7 +597,7 @@ async def chat_stream(
                 "child_user_id": str(current.id),
                 "child_profile": None,  # M6: not read by nodes
                 "provider": _app_settings.main_provider,
-                "messages": [HumanMessage(content=req.content)],
+                "messages": [system_prompt, *history, HumanMessage(content=req.content)],
                 "audit_state": {},  # M6: all-False stub
                 "pending_guidance": None,
                 "generated_token_count": 0,
@@ -649,14 +666,36 @@ async def chat_stream(
                         client_alive = False
 
                 # 关注点3: user_stopped 与自然结束互斥（persist_ai_turn 至多 1 次）
+                # ---- commit② — ai 消息落库 + 累加器 + 阈值判定 + 审查 ----
                 if user_stopped:
-                    # 关注点2: StopKind 二分支 — finish_reason 强制覆盖为 'user_stopped'
+                    # 关注点2: StopKind 二分支
                     if has_emitted_content:
-                        aid = await persist_ai_turn(
-                            db, sid,
-                            finish_reason="user_stopped", content=accumulated,
+                        ai_msg = Message(
+                            session_id=sid,
+                            role=MessageRole.ai,
+                            content=accumulated,
+                            status=MessageStatus.active,
+                            finish_reason="user_stopped",
                         )
-                        await db.commit()  # commit②: persist AI row + last_active_at
+                        db.add(ai_msg)
+                        await db.flush()
+                        aid = ai_msg.id
+                        _token_count += estimate_tokens(accumulated)
+                        await db.execute(
+                            update(SessionModel)
+                            .where(SessionModel.id == sid)
+                            .values(context_token_count=_token_count)
+                        )
+                        await db.commit()
+
+                        if _token_count >= CONTEXT_COMPRESS_THRESHOLD_TOKENS:
+                            logger.warning(
+                                "context exceeded threshold",
+                                extra={"session_id": str(sid), "token_count": _token_count},
+                            )
+
+                        asyncio.create_task(enqueue_audit(sid, db))
+
                         if client_alive:
                             yield _frame_sse_event(
                                 "stopped",
@@ -669,18 +708,40 @@ async def chat_stream(
                                 {"finish_reason": "user_stopped"},
                             )
                 else:
-                    # 自然结束分支：T5 唯一写入点
-                    aid = await persist_ai_turn(
-                        db, sid,
-                        finish_reason=last_finish_reason, content=accumulated,
+                    # 自然结束分支：commit②
+                    ai_msg = Message(
+                        session_id=sid,
+                        role=MessageRole.ai,
+                        content=accumulated,
+                        status=MessageStatus.active,
+                        finish_reason=last_finish_reason,
+                    )
+                    db.add(ai_msg)
+                    await db.flush()
+                    aid = ai_msg.id
+                    _token_count += estimate_tokens(accumulated)
+                    await db.execute(
+                        update(SessionModel)
+                        .where(SessionModel.id == sid)
+                        .values(context_token_count=_token_count)
                     )
                     await db.commit()
+
+                    if _token_count >= CONTEXT_COMPRESS_THRESHOLD_TOKENS:
+                        logger.warning(
+                            "context exceeded threshold",
+                            extra={"session_id": str(sid), "token_count": _token_count},
+                        )
+
+                    asyncio.create_task(enqueue_audit(sid, db))
+
                     if client_alive:
                         yield _frame_sse_event(
                             "end",
                             {"finish_reason": last_finish_reason, "aid": str(aid)},
                         )
             except Exception as e:
+                logger.exception("chat_stream generator failed")
                 if client_alive:
                     yield _frame_sse_event(
                         "error", {"message": str(e), "code": "InternalError"},
