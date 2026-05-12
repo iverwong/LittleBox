@@ -12,7 +12,6 @@ from typing import Annotated
 from uuid import UUID, uuid4
 
 import anyio
-import regex
 from fastapi import APIRouter, Depends, HTTPException, Query
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
@@ -30,6 +29,8 @@ from app.chat.locks import (
     running_streams,
 )
 from app.chat.sse import stream_graph_to_sse
+from app.chat.compression import estimate_tokens
+from app.chat.session_policy import SHANGHAI, should_switch_session, today_session_title
 from app.db import get_db
 from app.models.accounts import ChildProfile, User
 from app.models.chat import Message
@@ -347,12 +348,6 @@ async def stop_session(
 # ---------------------------------------------------------------------------
 
 
-def _truncate_title(content: str, max_graphemes: int = 12) -> str:
-    """Truncate content to at most max_graphemes grapheme clusters via regex \\X."""
-    graphemes = regex.findall(r"\X", content)
-    return "".join(graphemes[:max_graphemes])
-
-
 def _frame_sse_event(event_type: str, data: dict) -> bytes:
     """SSE multi-line protocol frame (M6): event: <type>\\ndata: <json>\\n\\n."""
     return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
@@ -387,7 +382,7 @@ async def chat_stream(
     if graph stream fails.
 
     Decision matrix O (baseline §5.4, 7 rows):
-      Row 1: last=None   + regen=null  → INSERT session + INSERT human (active)
+      Row 1: last=None   + regen=null  → INSERT human (active) [session resolved via policy]
       Row 2: last=None   + regen=!null → 400 RegenerateForInvalid
       Row 3: last=AI      + regen=null  → INSERT human (active)
       Row 4: last=AI      + regen=!null → 400 RegenerateForInvalid
@@ -411,6 +406,7 @@ async def chat_stream(
 
     SSE 7-event sequence (M6, §8.1):
       session_meta → [thinking_start → thinking_end] → delta×N → end
+    session_meta.session_id 始终为服务端最终生效 sid（非客户端传入的 hint）。
     error path: emit error frame (human active row retained, no ai row).
 
     Lock-release contract: session lock released in generator finally block
@@ -430,27 +426,48 @@ async def chat_stream(
     if not await acquire_throttle_lock(redis, str(current.id)):
         raise HTTPException(429, "RequestThrottled")
 
-    # ---- resolve / generate session id ----
-    sid: UUID
-    if req.session_id:
-        sid = UUID(req.session_id)
-    else:
-        sid = uuid4()
+    # ---- session policy resolution（确定生效 sid） ----
+    now = datetime.now(SHANGHAI)
+    latest = (
+        await db.execute(
+            select(SessionModel)
+            .where(SessionModel.child_user_id == current.id, SessionModel.status == "active")
+            .order_by(SessionModel.last_active_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
 
-    # ---- session lock: must release on every HTTPException path (P0-2) ----
+    sid: UUID
+    session: SessionModel
+    is_new_session: bool
+
+    if should_switch_session(latest.last_active_at if latest else None, now):
+        sid = uuid4()
+        session = SessionModel(
+            id=sid,
+            child_user_id=current.id,
+            title=today_session_title(now),
+            status="active",
+            last_active_at=now,
+            context_token_count=0,
+        )
+        db.add(session)
+        is_new_session = True
+    else:
+        sid = latest.id
+        session = latest
+        is_new_session = False
+
+    # ---- session lock（新建 session 无 race，但为简化统一 lock） ----
     nonce = await acquire_session_lock(redis, str(sid))
     if not nonce:
         raise HTTPException(409, "SessionBusy")
 
     # Ensure lock is released when HTTPException is raised before StreamingResponse
     try:
-        # ---- session existence + child ownership check (done before SETNX: no lock leak) ----
-        if req.session_id:
-            session_row = await db.get(SessionModel, sid)
-            if session_row is None:
-                raise HTTPException(404, "SessionNotFound")
-            if session_row.child_user_id != current.id:
-                raise HTTPException(403, "SessionForbidden")
+        # ---- session ownership check（仅复用 session 需验证） ----
+        if not is_new_session and session.child_user_id != current.id:
+            raise HTTPException(403, "SessionForbidden")
 
         # ---- decision matrix O + first-turn / subsequent-turn transaction ----
         last_msg = (
@@ -463,20 +480,13 @@ async def chat_stream(
         ).scalar_one_or_none()
 
         hid: UUID  # human message id for session_meta event
+        user_msg: Message | None = None  # 追踪本轮新增的 human message，供 commit① 用
 
         if last_msg is None:
             # Row 1 or Row 2
             if req.regenerate_for is not None:
                 raise HTTPException(400, "RegenerateForInvalid")
-            # Row 1: first turn (INSERT human active)
-            title = _truncate_title(req.content)
-            session = SessionModel(
-                id=sid,
-                child_user_id=current.id,
-                title=title,
-                status=MessageStatus.active,
-            )
-            db.add(session)
+            # Row 1: first turn（INSERT human active；session 已在 policy resolution 中建好）
             human = Message(
                 session_id=sid,
                 role=MessageRole.human,
@@ -486,6 +496,7 @@ async def chat_stream(
             db.add(human)
             await db.flush()
             hid = human.id
+            user_msg = human
         # Row 3: last is AI, regen=null → INSERT human
         elif last_msg.role == MessageRole.ai:
             if req.regenerate_for is not None:
@@ -499,6 +510,7 @@ async def chat_stream(
             db.add(human)
             await db.flush()
             hid = human.id
+            user_msg = human
         else:
             # last_msg.role == MessageRole.human
             # Closing argument (Gate A): last_msg is the LATEST active row by
@@ -517,6 +529,8 @@ async def chat_stream(
                         .where(Message.id == last_msg.id)
                         .values(status=MessageStatus.discarded),
                     )
+                    # 累加器对冲：废弃的 human 内容从总和中扣除
+                    session.context_token_count -= estimate_tokens(last_msg.content)
                     new_human = Message(
                         session_id=sid,
                         role=MessageRole.human,
@@ -526,12 +540,13 @@ async def chat_stream(
                     db.add(new_human)
                     await db.flush()
                     hid = new_human.id
+                    user_msg = new_human
                 elif req.regenerate_for == str(last_msg.id):
                     # Row 6: orphan + =hid → reuse orphan (no new row, no content update)
-                    # Option A: assert content is empty (strict contract)
                     if req.content != "":
                         raise HTTPException(400, "RegenerateForInvalid")
                     hid = last_msg.id
+                    # user_msg stays None — 复用已有消息，不新增
                 else:
                     # Row 7: orphan + ≠hid → 400
                     raise HTTPException(400, "RegenerateForInvalid")
@@ -540,6 +555,10 @@ async def chat_stream(
                 # This branch is unreachable — raise to catch future state-space bugs.
                 raise AssertionError("unreachable: non-orphan human cannot be last active row")
 
+        # commit① — user 消息落库（同事务内同步 last_active_at + 累加 token）
+        if user_msg is not None:
+            session.last_active_at = user_msg.created_at
+            session.context_token_count += estimate_tokens(req.content)
         await db.commit()
 
         # ---- streaming response ----

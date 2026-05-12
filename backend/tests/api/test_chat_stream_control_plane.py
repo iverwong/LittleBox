@@ -1,7 +1,7 @@
 """tests for POST /me/chat/stream control plane (Step 8a).
 
 Decision matrix O (baseline §5.4, 7 rows):
-    Row 1: last=None   + regen=null  → INSERT session + INSERT human (active)
+    Row 1: last=None   + regen=null  → INSERT human (active) [session resolved via policy]
     Row 2: last=None   + regen=!null → 400 RegenerateForInvalid
     Row 3: last=AI     + regen=null  → INSERT human (active)
     Row 4: last=AI     + regen=!null → 400 RegenerateForInvalid
@@ -186,7 +186,7 @@ def _mock_persist_ai_turn(db, sid, finish_reason, content, intervention_type=Non
 
 @pytest.mark.asyncio
 async def test_decision_row1_first_turn(api_client_with_eval, auth_headers_child, db_session):
-    """Row 1: first turn (no session) creates session + human active, returns 200."""
+    """Row 1: first turn (session resolved via policy) creates human active, returns 200."""
     headers, child = auth_headers_child
     body = make_payload(content="Hello world")
 
@@ -217,7 +217,7 @@ async def test_decision_row1_first_turn(api_client_with_eval, auth_headers_child
             assert session_row is not None
             assert session_row.status == MessageStatus.active
             assert session_row.child_user_id == child.id
-            assert session_row.title == "Hello world"
+            assert "周" in session_row.title and "月" in session_row.title
 
     msgs = (
         (
@@ -802,61 +802,6 @@ async def test_session_lock_rejects_concurrent(
 
 
 @pytest.mark.asyncio
-async def test_nonexistent_session_returns_404(api_client_with_eval, auth_headers_child):
-    """Session does not exist → 404, no session lock acquired."""
-    headers, _ = auth_headers_child
-    fake_sid = str(uuid4())
-    body = make_payload(content="hello", session_id=fake_sid)
-
-    resp = await api_client_with_eval.post(
-                "/api/v1/me/chat/stream", json=body, headers=headers
-            )
-    assert resp.status_code == 404
-    assert "SessionNotFound" in resp.text
-
-
-@pytest.mark.asyncio
-async def test_child_mismatch_returns_403(api_client_with_eval, auth_headers_child, db_session):
-    """Session belongs to a different child → 403, no lock acquired."""
-    headers, _ = auth_headers_child
-    sid = uuid4()
-
-    # Create session belonging to a DIFFERENT child
-    other_fam = Family()
-    db_session.add(other_fam)
-    await db_session.flush()
-    other_child = User(
-        family_id=other_fam.id,
-        role=UserRole.child,
-        phone="9999",
-        is_active=True,
-    )
-    db_session.add(other_child)
-    await db_session.flush()
-    db_session.add(
-        FamilyMember(family_id=other_fam.id, user_id=other_child.id, role=UserRole.child)
-    )
-    db_session.add(
-        SessionModel(
-            id=sid, child_user_id=other_child.id, title="other", status=MessageStatus.active
-        )
-    )
-    await db_session.commit()
-
-    body = make_payload(content="hello", session_id=str(sid))
-    resp = await api_client_with_eval.post(
-                "/api/v1/me/chat/stream", json=body, headers=headers
-            )
-    assert resp.status_code == 403
-    assert "SessionForbidden" in resp.text
-
-
-# ---------------------------------------------------------------------------
-# 400 path releases session lock (P0-2 review point)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
 async def test_400_releases_session_lock(
     api_client_with_eval, auth_headers_child, redis_client, db_session
 ):
@@ -949,11 +894,9 @@ async def test_title_12_graphemes_ascii(api_client_with_eval, auth_headers_child
 
             sid = _parse_sse_stream(resp.text)[0]["data"]["session_id"]
     session = await db_session.get(SessionModel, sid)
-    # regex \X = TR29 grapheme clusters
-    # "👨‍👩‍👧" (ZWJ sequence) = 1 grapheme per TR29
-    # Total graphemes in input: H e l l o (space) 你 好 (space) 👨‍👩‍👧 (space) a b c d e f = 17
-    # First 12: H e l l o (space) 你 好 (space) 👨‍👩‍👧 (space) a = "Hello 你好 👨‍👩‍👧 a"
-    assert session.title == "Hello 你好 👨‍👩‍👧 a"
+    # M6-patch3 Step 6: session title = today_session_title() 中文日期格式
+    assert session.title is not None
+    assert "周" in session.title and "月" in session.title and "日" in session.title
 
 
 @pytest.mark.asyncio
@@ -979,8 +922,9 @@ async def test_title_zwj_emoji_counts_as_one_grapheme(
 
             sid = _parse_sse_stream(resp.text)[0]["data"]["session_id"]
     session = await db_session.get(SessionModel, sid)
-    # Single ZWJ emoji family = 1 grapheme, title = full content
-    assert session.title == "👨‍👩‍👧‍👦‍👧"
+    # M6-patch3 Step 6: session title = today_session_title() 中文日期格式
+    assert session.title is not None
+    assert "周" in session.title and "月" in session.title and "日" in session.title
 
 
 # ---------------------------------------------------------------------------
