@@ -2,7 +2,7 @@
 
 关注点覆盖（5 条硬约束 + 1 条 session_notes 护栏）：
 1. empty session → []
-2. 25 条 active → 截 20 条 + 时间正序
+2. 25 条 total（5 discarded + 20 active）→ 仅返回 20 active，无 LIMIT 截断
 3. discarded 行被过滤
 4. rolling_summaries 三态 fallback:
    (a) 表无该 session 行 → fallback
@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.chat.context import _row_to_message, build_context
+from app.chat.context import _to_lc_message, build_context
 from app.models.audit import RollingSummary
 from app.models.chat import Message, Session
 from app.models.enums import MessageRole, MessageStatus
@@ -49,7 +49,7 @@ async def test_empty_session_returns_empty_list(db_session, child_user) -> None:
 
 @pytest.mark.asyncio
 async def test_window_20_messages_ascending(db_session, child_user) -> None:
-    """25 条 active → 截最近 20 条，时间正序，discarded 被过滤。"""
+    """25 条 total（5 discarded + 20 active）→ 仅返回 20 active，时间正序，无 LIMIT 截断。"""
     sid = await _seed_session(db_session, child_user.id)
 
     base = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
@@ -245,28 +245,28 @@ async def test_session_notes_not_injected(db_session, child_user) -> None:
             assert sentinel not in m.content, "session_notes leaked into LLM input"
 
 
-# ---- _row_to_message unit ----
+# ---- _to_lc_message unit ----
 
 
-def test_row_to_message_human() -> None:
-    """_row_to_message: role=human → HumanMessage"""
+def test_to_lc_message_human() -> None:
+    """_to_lc_message: role=human → HumanMessage"""
 
     class FakeRow:
         role = MessageRole.human
         content = "hello"
 
-    msg = _row_to_message(FakeRow())
+    msg = _to_lc_message(FakeRow())
     assert msg.__class__.__name__ == "HumanMessage"
     assert msg.content == "hello"
 
 
-def test_row_to_message_ai() -> None:
-    """_row_to_message: role=ai → AIMessage"""
+def test_to_lc_message_ai() -> None:
+    """_to_lc_message: role=ai → AIMessage"""
 
     class FakeRow:
         role = MessageRole.ai
         content = "assistant reply"
 
-    msg = _row_to_message(FakeRow())
+    msg = _to_lc_message(FakeRow())
     assert msg.__class__.__name__ == "AIMessage"
     assert msg.content == "assistant reply"
