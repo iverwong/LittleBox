@@ -492,17 +492,15 @@ async def chat_stream(
         if not is_new_session and session.child_user_id != current.id:
             raise HTTPException(403, "SessionForbidden")
 
-        # ---- 构建 system prompt + history（在 decision matrix 前，确保不含本轮 user_msg） ----
+        # ---- 准备 child_profile 数据（无 DB 写入依赖） ----
         child_profile = await db.get(ChildProfile, current.id)
         if child_profile is not None:
             from app.chat.prompts import compute_age
             _age = compute_age(child_profile.birth_date)
             _gender = child_profile.gender.value if child_profile.gender else None
         else:
-            _age = 8  # 兜底默认值（测试环境常见值）
+            _age = 8  # 兜底默认值
             _gender = None
-        history = await build_context(sid, db)
-        system_prompt = build_system_prompt(_age, _gender)
 
         # ---- decision matrix O + first-turn / subsequent-turn transaction ----
         last_msg = (
@@ -590,6 +588,10 @@ async def chat_stream(
                 # This branch is unreachable — raise to catch future state-space bugs.
                 raise AssertionError("unreachable: non-orphan human cannot be last active row")
 
+        # ---- 构建 history + system prompt（在 decision matrix + flush 后，orphan discard 已可见） ----
+        history = await build_context(sid, db)
+        system_prompt = build_system_prompt(_age, _gender)
+
         # commit① — user 消息落库（同事务内同步 last_active_at + 累加 token）
         if user_msg is not None:
             session.last_active_at = user_msg.created_at
@@ -618,7 +620,7 @@ async def chat_stream(
                 "child_user_id": str(current.id),
                 "child_profile": None,  # M6: not read by nodes
                 "provider": _app_settings.main_provider,
-                "messages": [system_prompt, *history, HumanMessage(content=req.content)],
+                "messages": [system_prompt, *history],
                 "audit_state": {},  # M6: all-False stub
                 "pending_guidance": None,
                 "generated_token_count": 0,
