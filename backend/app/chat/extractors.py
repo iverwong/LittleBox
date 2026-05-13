@@ -47,6 +47,26 @@ def extract_finish_reason(chunk: AIMessageChunk, provider: str) -> str | None:
     return fr if fr in ALLOWED_FINISH_REASONS else None
 
 
+def extract_usage(chunk: AIMessageChunk) -> dict | None:
+    """从 LLM 末帧提取 usage 元数据。
+
+    真路径（已验证 langchain_openai BaseChatOpenAI._convert_chunk_to_generation_chunk）：
+      chunk.usage_metadata（AIMessageChunk 标准字段，末帧由 SDK 自动设置）
+
+    Returns:
+        {"input_tokens": int, "output_tokens": int, "total_tokens": int}
+        或 None（usage 不可用时）
+    """
+    um = chunk.usage_metadata
+    if um is None:
+        return None
+    return {
+        "input_tokens": um.get("input_tokens", 0) if isinstance(um, dict) else um.input_tokens,
+        "output_tokens": um.get("output_tokens", 0) if isinstance(um, dict) else um.output_tokens,
+        "total_tokens": um.get("total_tokens", 0) if isinstance(um, dict) else um.total_tokens,
+    }
+
+
 def extract_reasoning_content(chunk: AIMessageChunk, provider: str) -> str | None:
     """Extract reasoning content (thinking text) by provider. None if absent.
 

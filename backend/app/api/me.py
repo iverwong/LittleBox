@@ -29,8 +29,9 @@ from app.chat.locks import (
     running_streams,
 )
 from app.chat.sse import stream_graph_to_sse
-from app.chat.compression import CONTEXT_COMPRESS_THRESHOLD_TOKENS, estimate_tokens
+from app.chat.compression import CONTEXT_COMPRESS_THRESHOLD_TOKENS
 from app.chat.context import build_context
+from app.chat.extractors import extract_usage
 from app.chat.prompts import build_system_prompt
 from app.chat.session_policy import SHANGHAI, logical_day, should_switch_session, today_session_title
 from app.db import get_db
@@ -472,7 +473,6 @@ async def chat_stream(
             title=today_session_title(now),
             status="active",
             last_active_at=now,
-            context_token_count=0,
         )
         db.add(session)
         is_new_session = True
@@ -562,8 +562,6 @@ async def chat_stream(
                         .where(Message.id == last_msg.id)
                         .values(status=MessageStatus.discarded),
                     )
-                    # 累加器对冲：废弃的 human 内容从总和中扣除
-                    session.context_token_count -= estimate_tokens(last_msg.content)
                     new_human = Message(
                         session_id=sid,
                         role=MessageRole.human,
@@ -592,19 +590,16 @@ async def chat_stream(
         history = await build_context(sid, db)
         system_prompt = build_system_prompt(_age, _gender)
 
-        # commit① — user 消息落库（同事务内同步 last_active_at + 累加 token）
+        # commit① — user 消息落库（同事务内同步 last_active_at）
         if user_msg is not None:
             session.last_active_at = user_msg.created_at
-            session.context_token_count += estimate_tokens(req.content)
-        # 缓存 token 计数快照（generator 中 ORM 已 expired，不可直接访问）
-        _token_count: int = session.context_token_count
         await db.commit()
 
         # ---- streaming response ----
         async def generator() -> AsyncGenerator[bytes, None]:
-            nonlocal _token_count
             accumulated = ""
             last_finish_reason = "stop"  # 兜底；末帧 finish_reason 命中时覆盖
+            usage_meta: dict | None = None  # 由 call_main_llm 转发的末帧 usage 快照
             has_emitted_content = False
             client_alive = True
             user_stopped = False
@@ -637,7 +632,52 @@ async def chat_stream(
 
                 # Consume graph stream: accumulate content + forward to SSE
                 thinking_started = False  # thinking 信号状态机（基线 §3.2）
+                # ---- 阻塞压缩检查（scheme R）：needs_compression=True → 同步压缩 ----
+                if session.needs_compression:
+                    try:
+                        yield _frame_sse_event("compression_progress", {
+                            "stage": "compressing",
+                            "message": "正在为对话腾出更多空间",
+                        })
+                        from app.chat.compression import build_compression_prompt
+                        from app.chat.factory import get_chat_llm as _get_compression_llm
+                        actives_orm = (
+                            await db.execute(
+                                select(Message)
+                                .where(Message.session_id == sid, Message.status == "active")
+                                .order_by(Message.created_at.asc())
+                            )
+                        ).scalars().all()
+                        if actives_orm:
+                            # 用 build_context 获取 LC 格式的 messages 供 LLM 输入
+                            ctx = await build_context(sid, db)
+                            c_llm = _get_compression_llm()
+                            c_result = await c_llm.ainvoke(build_compression_prompt(ctx))
+                            for mo in actives_orm:
+                                mo.status = "compressed"
+                            db.add(Message(
+                                session_id=sid, role=MessageRole.summary,
+                                status=MessageStatus.active,
+                                content=c_result.content if hasattr(c_result, "content") else str(c_result),
+                            ))
+                            session.needs_compression = False
+                            await db.commit()
+                            # 重建上下文供 LLM 使用（压缩后 history 仅含 summary）
+                            _hist = await build_context(sid, db)
+                            _sp = build_system_prompt(_age, _gender)
+                            initial_state["messages"] = [_sp, *_hist]
+                    except Exception:
+                        logger.exception("compression failed for session %s", sid)
+                        yield _frame_sse_event("error", {
+                            "message": "压缩失败，请重试", "code": "CompressionError",
+                        })
+                        return
+
                 async for payload in main_graph.astream(initial_state, stream_mode="custom"):
+                    # usage_metadata 快照（由 call_main_llm 末帧转发）
+                    if payload.get("usage_metadata"):
+                        usage_meta = payload["usage_metadata"]
+
                     # reasoning 信号（基线 §3.2, signal-only, 不传文本）
                     if payload.get("reasoning"):
                         if not thinking_started and client_alive:
@@ -689,7 +729,7 @@ async def chat_stream(
                         client_alive = False
 
                 # 关注点3: user_stopped 与自然结束互斥（persist_ai_turn 至多 1 次）
-                # ---- commit② — ai 消息落库 + 累加器 + 阈值判定 + 审查 ----
+                # ---- commit② — ai 消息落库 + usage 快照 + needs_compression 标志 + 审查 ----
                 if user_stopped:
                     # 关注点2: StopKind 二分支
                     if has_emitted_content:
@@ -703,19 +743,14 @@ async def chat_stream(
                         db.add(ai_msg)
                         await db.flush()
                         aid = ai_msg.id
-                        _token_count += estimate_tokens(accumulated)
-                        await db.execute(
-                            update(SessionModel)
-                            .where(SessionModel.id == sid)
-                            .values(context_token_count=_token_count)
-                        )
-                        await db.commit()
 
-                        if _token_count >= CONTEXT_COMPRESS_THRESHOLD_TOKENS:
-                            logger.warning(
-                                "context exceeded threshold",
-                                extra={"session_id": str(sid), "token_count": _token_count},
-                            )
+                        # usage 快照：写 LLM 真值，不累加
+                        if usage_meta:
+                            _usage_total = usage_meta["input_tokens"] + usage_meta["output_tokens"]
+                            session.context_size_tokens = _usage_total
+                            if _usage_total >= CONTEXT_COMPRESS_THRESHOLD_TOKENS:
+                                session.needs_compression = True
+                        await db.commit()
 
                         asyncio.create_task(enqueue_audit(sid, db))
 
@@ -742,19 +777,14 @@ async def chat_stream(
                     db.add(ai_msg)
                     await db.flush()
                     aid = ai_msg.id
-                    _token_count += estimate_tokens(accumulated)
-                    await db.execute(
-                        update(SessionModel)
-                        .where(SessionModel.id == sid)
-                        .values(context_token_count=_token_count)
-                    )
-                    await db.commit()
 
-                    if _token_count >= CONTEXT_COMPRESS_THRESHOLD_TOKENS:
-                        logger.warning(
-                            "context exceeded threshold",
-                            extra={"session_id": str(sid), "token_count": _token_count},
-                        )
+                    # usage 快照：写 LLM 真值，不累加
+                    if usage_meta:
+                        _usage_total = usage_meta["input_tokens"] + usage_meta["output_tokens"]
+                        session.context_size_tokens = _usage_total
+                        if _usage_total >= CONTEXT_COMPRESS_THRESHOLD_TOKENS:
+                            session.needs_compression = True
+                    await db.commit()
 
                     asyncio.create_task(enqueue_audit(sid, db))
 

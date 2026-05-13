@@ -102,16 +102,11 @@ def build_system_prompt(age: int, gender: str | None) -> SystemMessage:
     return SystemMessage(content="\n\n".join(parts))
 
 
-# ---- M8 上下文压缩 prompt（占位） ----
+# ---- 摘要前缀（context.py build_context 使用） ----
 
+SUMMARY_PREFIX = "[历史对话摘要]\n"
+
+# ---- M8 上下文压缩 prompt（占位，scheme R 已移至 compression.py） ----
 
 COMPRESSION_PROMPT_STUB = "TODO(prompts-content): compression instruction"
-
-
-def build_compression_prompt() -> SystemMessage:
-    """Build compression system message for M8 review worker.
-
-    M8 替换内联 log.warning 为 ARQ enqueue 时调用此函数。
-    """
-    return SystemMessage(content=COMPRESSION_PROMPT_STUB)
 

@@ -14,21 +14,26 @@ from app.models.chat import Message, Session
 
 
 class TestSessionORM:
-    """Session 模型：context_token_count 字段 + last_active_at tz 核验。"""
+    """Session 模型：context_size_tokens + needs_compression 字段 + last_active_at tz 核验。"""
 
-    def test_context_token_count_field_exists(self):
-        """Session ORM 含 context_token_count: Mapped[int]。"""
+    def test_context_size_tokens_field_exists(self):
+        """Session ORM 含 context_size_tokens: Mapped[int | None]。"""
         cols = {c.name: c for c in inspect(Session).columns}
-        assert "context_token_count" in cols
-        col = cols["context_token_count"]
+        assert "context_size_tokens" in cols
+        col = cols["context_size_tokens"]
+        assert col.nullable is True  # 快照字段可为 NULL
+
+    def test_needs_compression_field_exists(self):
+        """Session ORM 含 needs_compression: Mapped[bool]。"""
+        cols = {c.name: c for c in inspect(Session).columns}
+        assert "needs_compression" in cols
+        col = cols["needs_compression"]
         assert col.nullable is False
 
-    def test_context_token_default_zero(self):
-        """server_default = '0'。"""
+    def test_context_token_count_removed(self):
+        """context_token_count 已 rename。"""
         cols = {c.name: c for c in inspect(Session).columns}
-        col = cols["context_token_count"]
-        assert col.server_default is not None
-        assert col.server_default.arg == "0"
+        assert "context_token_count" not in cols
 
     def test_last_active_at_timezone_aware(self):
         """last_active_at 列配置 TIMESTAMP(timezone=True)。"""
@@ -40,10 +45,10 @@ class TestSessionORM:
         assert col.server_default is not None
 
     def test_session_field_count(self):
-        """Session 字段数从 6 增至 7（+context_token_count）。
+        """Session 字段数从 7 增至 8（+needs_compression）。
 
         当前字段：id, created_at(BaseMixin), child_user_id, title,
-        status, last_active_at, context_token_count
+        status, last_active_at, context_size_tokens, needs_compression
         """
         cols = [c.name for c in inspect(Session).columns]
-        assert len(cols) == 7
+        assert len(cols) == 8

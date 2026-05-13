@@ -35,7 +35,7 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, StateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.chat.extractors import extract_finish_reason, extract_reasoning_content
+from app.chat.extractors import extract_finish_reason, extract_reasoning_content, extract_usage
 from app.chat.factory import get_chat_llm
 from app.chat.state import MainDialogueState
 from app.models.chat import Message, Session
@@ -222,6 +222,12 @@ async def call_main_llm(state: MainDialogueState) -> dict:
         fr = extract_finish_reason(_chunk_typed, provider)
         if fr:
             writer({"finish_reason": fr})
+
+        # usage_metadata passthrough：末帧 usage-only chunk 由 SDK 自动注入
+        if _chunk_typed.usage_metadata is not None:
+            usage = extract_usage(_chunk_typed)
+            if usage:
+                writer({"usage_metadata": usage})
 
     return {"messages": [AIMessage(content="".join(parts))]}
 

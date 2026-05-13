@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.audit import RollingSummary
 from app.models.chat import Message
 from app.models.enums import MessageRole
+from app.chat.prompts import SUMMARY_PREFIX
 
 
 async def build_context(sid: UUID, db: AsyncSession) -> list[BaseMessage]:
@@ -75,5 +76,7 @@ def _to_lc_message(m: Message) -> BaseMessage:
         return HumanMessage(content=m.content)
     if m.role == MessageRole.ai:
         return AIMessage(content=m.content)
+    if m.role == MessageRole.summary:
+        return SystemMessage(content=SUMMARY_PREFIX + m.content)
     # 防御性兜底：未知 role → HumanMessage 防止崩溃
     return HumanMessage(content=m.content)

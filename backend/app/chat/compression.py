@@ -1,16 +1,37 @@
-"""上下文 token 累加器辅助。
+"""上下文压缩辅助：阈值常量 + 压缩 prompt + 累计器（已迁移至 scheme R 快照）。
 
-M6-patch3 范围：仅提供 estimate_tokens 单函数 + 阈值常量。
-累加器写入 / 阈值触发判定都在 me.py 主对话事务内联完成。
-M8 升级：内联 log.warning → arq_pool.enqueue_job("compress_session", sid)；
-本文件可保持不变或扩展。
+M6-patch3 scheme R：commit② 写 LLM usage 真值快照（非累加），
+阈值命中翻 needs_compression 标志，下一轮 user 到达时阻塞压缩。
+
+历史残留（K 决策）：
+- estimate_tokens 函数已删除（被 extract_usage 取代）
+- context_token_count 字段已 rename 为 context_size_tokens
 """
+
+import logging
+
+from langchain_core.messages import BaseMessage, SystemMessage
+
+logger = logging.getLogger(__name__)
 
 CONTEXT_COMPRESS_THRESHOLD_TOKENS = 500_000  # V4 1M 上下文的 50%
 
+# 压缩 prompt 占位文案；TODO(prompts-content): 专人审核后填充正式摘要指令
+COMPRESSION_PROMPT_STUB = (
+    "请将以下对话历史压缩为简洁的客观摘要，"
+    "保留事件、决定、待办与重要细节；"
+    "不带情绪标签、不做风险评估、不做安全判断。"
+)
 
-def estimate_tokens(content: str) -> int:
-    """中文 1 char = 1 token；ASCII 4 char = 1 token。M8 可换 tiktoken。"""
-    cjk = sum(1 for c in content if "一" <= c <= "鿿")
-    ascii_chars = len(content) - cjk
-    return cjk + (ascii_chars + 3) // 4
+
+def build_compression_prompt(history: list[BaseMessage]) -> list[BaseMessage]:
+    """构建压缩 LLM 的 prompt。
+
+    Args:
+        history: 待压缩的 active 消息列表
+
+    Returns:
+        可直接传入 llm.ainvoke() 的消息列表
+    """
+    messages = [SystemMessage(content=COMPRESSION_PROMPT_STUB), *history]
+    return messages
