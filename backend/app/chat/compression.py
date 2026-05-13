@@ -1,11 +1,7 @@
-"""上下文压缩辅助：阈值常量 + 压缩 prompt + 累计器（已迁移至 scheme R 快照）。
+"""上下文压缩辅助：阈值常量 + 压缩 prompt。
 
-M6-patch3 scheme R：commit② 写 LLM usage 真值快照（非累加），
+M6-patch3 scheme R：commit② 写 LLM usage 真值快照，
 阈值命中翻 needs_compression 标志，下一轮 user 到达时阻塞压缩。
-
-历史残留（K 决策）：
-- estimate_tokens 函数已删除（被 extract_usage 取代）
-- context_token_count 字段已 rename 为 context_size_tokens
 """
 
 import logging

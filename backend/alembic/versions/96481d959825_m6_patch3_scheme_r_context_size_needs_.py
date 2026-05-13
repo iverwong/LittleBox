@@ -5,8 +5,8 @@
 - ADD  sessions.needs_compression BOOLEAN NOT NULL DEFAULT FALSE
 - ADD VALUE 'summary' TO TYPE messagerole
 - ADD VALUE 'compressed' TO TYPE messagestatus
-- 索引 reconciliation：drop 旧 partial indexes（WHERE 子句引用 messagestatus），
-  create 新 non-partial indexes（与 ORM __table_args__ 对齐）
+- upgrade 保留 partial indexes（生产性能最优）；
+  downgrade 暂 drop → 列变更 → 重建 partial（规避 WHERE 子句 <-> 列类型耦合）
 
 Revision ID: 96481d959825
 Revises: 84781fbc465a
@@ -26,23 +26,17 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # （1）索引 reconciliation：drop 旧 partial indexes（WHERE 引用 messagestatus），
-    #    create 新 non-partial indexes（与 ORM 对齐，避免 autogenerate 反复检测 diff）
-    op.drop_index("idx_messages_session_active_created", table_name="messages")
-    op.drop_index("idx_sessions_child_active_lastactive", table_name="sessions")
-    op.create_index("idx_messages_session", "messages", ["session_id", "created_at"])
-    op.create_index("idx_sessions_child", "sessions", ["child_user_id", "status"])
-
-    # （2）messages 枚举扩值（先 enum，后列变更）
+    """upgrade 保留 partial indexes（idx_messages_session_active_created 等持续优化 build_context 热点查询）。"""
+    # （1）messages 枚举扩值（先 enum，后列变更）
     op.execute("ALTER TYPE messagerole ADD VALUE 'summary'")
     op.execute("ALTER TYPE messagestatus ADD VALUE 'compressed'")
 
-    # （3）RENAME COLUMN 保留历史数据（旧 0 值不洗，新逻辑读 0 不触发压缩）
+    # （2）RENAME COLUMN 保留历史数据（旧 0 值不洗，新逻辑读 0 不触发压缩）
     op.alter_column("sessions", "context_token_count",
                     new_column_name="context_size_tokens",
                     nullable=True)
 
-    # （4）新增标志列
+    # （3）新增标志列
     op.add_column("sessions",
                   sa.Column("needs_compression", sa.Boolean(),
                             server_default=sa.text("false"),
@@ -50,13 +44,14 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # ---- 前置：drop upgrade 创建的 non-partial indexes（避免与后续 ALTER COLUMN TYPE 冲突）----
-    op.drop_index("idx_messages_session", table_name="messages")
-    op.drop_index("idx_sessions_child", table_name="sessions")
+    # ---- 前置：drop partial indexes（WHERE 子句引用 messagestatus，列类型变更前必须清除）----
+    op.drop_index("idx_messages_session_active_created", table_name="messages")
+    op.drop_index("idx_sessions_child_active_lastactive", table_name="sessions")
 
     # ---- messages: 枚举回退 ----
     # PG 不支持 DROP VALUE，采用「转 text → drop → create → 转回」四步式
-    # 前置清理：summary 行 delete（有损回退），compressed 行降级为 discarded
+    # 前置清理：summary 行 delete（有损回退，压缩本来就是有损操作）；
+    # compensated 行降级为 discarded（放弃本次压缩成果）
     op.execute("DELETE FROM messages WHERE role = 'summary'")
     op.execute("UPDATE messages SET status = 'discarded' WHERE status = 'compressed'")
 
@@ -69,7 +64,7 @@ def downgrade() -> None:
         "USING role::messagerole"
     )
 
-    # MessageStatus: 先 DROP DEFAULT，再通过 text 中转
+    # MessageStatus: 先 DROP DEFAULT（DEFAULT 引用了旧 enum），再通过 text 中转
     op.execute("ALTER TABLE messages ALTER COLUMN status DROP DEFAULT")
     op.execute("ALTER TABLE messages ALTER COLUMN status TYPE text USING status::text")
     op.execute("DROP TYPE IF EXISTS messagestatus")
