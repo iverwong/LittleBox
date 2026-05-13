@@ -19,11 +19,13 @@ class SessionStatus(str, enum.Enum):
 class MessageStatus(str, enum.Enum):
     active = "active"
     discarded = "discarded"
+    compressed = "compressed"
 
 
 class MessageRole(str, enum.Enum):
     human = "human"
     ai = "ai"
+    summary = "summary"
 
 
 class NotificationType(str, enum.Enum):
