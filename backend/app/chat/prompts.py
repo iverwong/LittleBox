@@ -1,11 +1,13 @@
-"""System prompt builder for the main dialogue.
+"""所有 LLM prompt 字符串单一来源 = 本文件。
 
-Skeleton aligned with baseline §7.3:
-- single SystemMessage, 5 sections (L1 -> L4 cache-optimized order)
-- consumes only age + gender from child_profile
-- 9 content slots are stubs; grep `TODO(prompts-content)` to locate.
+外部仅通过 import 函数 / 常量访问，禁止在其他模块内联 prompt 字面量。
 
-Actual templates are pending a dedicated review.
+当前内容：
+- build_system_prompt — 主对话 5 段 system prompt（年龄 + 性别驱动）
+- COMPRESSION_PROMPT_STUB — M8 上下文压缩 prompt 占位
+- build_compression_prompt — 同上，返回 SystemMessage 包装
+
+9 个 TODO(prompts-content) slot 待专人审核后填充。
 """
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -98,4 +100,13 @@ def build_system_prompt(age: int, gender: str | None) -> SystemMessage:
         parts.append(f"# 关于对方的性别\n{g}")
     parts.append(f"# 当前对话上下文\n对方今年 {age} 岁。")
     return SystemMessage(content="\n\n".join(parts))
+
+
+# ---- 摘要前缀（context.py build_context 使用） ----
+
+SUMMARY_PREFIX = "[历史对话摘要]\n"
+
+# ---- M8 上下文压缩 prompt（占位，scheme R 已移至 compression.py） ----
+
+COMPRESSION_PROMPT_STUB = "TODO(prompts-content): compression instruction"
 

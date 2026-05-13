@@ -20,7 +20,8 @@ class SessionListItem(BaseModel):
 class SessionListResponse(BaseModel):
     """GET /me/sessions response."""
 
-    items: list[SessionListItem]
+    sessions: list[SessionListItem]
+    today_session_id: uuid.UUID | None = None
     next_cursor: str | None
 
 
@@ -62,7 +63,11 @@ class ChatStreamRequest(BaseModel):
     )
     session_id: str | None = Field(
         default=None,
-        description="null = first turn; existing session id = subsequent turn.",
+        description=(
+            "前端 hint；服务端按日切策略强制重判生效 sid，"
+            "不一致时通过 SSE session_meta.session_id 回灌生效 sid。"
+            "null = first turn；非 null = existing session id hint。"
+        ),
     )
     regenerate_for: str | None = Field(
         default=None,

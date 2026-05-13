@@ -1,23 +1,28 @@
-"""build_context: sliding-window dialogue history for LLM input.
+"""build_context：全量 active 对话历史，供 LLM 输入。
 
-M6 always falls through (read-only rolling_summaries, never writes).
-M8 review worker auto-consumes pre-inserted summaries; this file needs no changes.
+职责边界：
+- 本函数返回对话历史列表：
+  [SystemMessage（rolling-summary，M8 可选）, HumanMessage, AIMessage, ...]
+  按 created_at 升序排列，返回全量 active 消息（无 LIMIT 截断）。
+- 返回列表**不含**主 system prompt。主 prompt（身份 / 安全 / 分级 / 性别 / 年龄）
+  由 `prompts.build_system_prompt(age, gender)` 独立生成。
+  调用方拼接：[build_system_prompt(...), *build_context(...), HumanMessage(user_content)]
 
-Responsibility boundary:
-- This function returns a *dialogue history* list
-  [SystemMessage(rolling-summary, optional, M8 only), HumanMessage, AIMessage, ...]
-  in chronological (ascending) order, max 20 most-recent active messages.
-- It is NOT the main system prompt. The main prompt (identity/safety/tier/gender/context)
-  is produced by `prompts.build_system_prompt(age, gender)` independently.
-  Callers concatenate: [build_system_prompt(...), *build_context(...), HumanMessage(user_content)]
+5 项语义约束：
+  1. 仅返回 status='active' 的消息（discarded 行被过滤）
+  2. 按 created_at ASC 排序，无 LIMIT
+  3. rolling_summaries 在 M6 为只读路径（始终 fall through）；M8 后 turn_summaries
+     非空时注入 SystemMessage 在列表首位（fallthrough 路径）
+  4. session_notes 永不注入主 LLM（架构基线 §四「字段消费分工」）
+  5. 未知 role 兜底转为 HumanMessage（防御性）
 
-Usage (caller-side pattern):
+调用方模式：
     system = build_system_prompt(age=child.age, gender=child.gender)
     history = await build_context(session_id, db)
     llm_messages = [system, *history, HumanMessage(content=new_message)]
 """
-# TODO(M8 cleanup): replace rolling_summaries fallback with real summary injection
-#   when M8 review worker is live; the fallback currently drops summary context.
+# TODO(M8 cleanup)：rolling_summaries fallback 替换为真实摘要注入
+#   M8 review worker 上线后此文件无需改动；当前 fallback 丢弃摘要上下文。
 
 from uuid import UUID
 
@@ -27,52 +32,51 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit import RollingSummary
 from app.models.chat import Message
-from app.models.enums import MessageRole, MessageStatus
+from app.models.enums import MessageRole
+from app.chat.prompts import SUMMARY_PREFIX
 
 
-async def build_context(session_id: UUID, db: AsyncSession) -> list[BaseMessage]:
-    """Return the last 20 active messages for session_id in chronological order.
+async def build_context(sid: UUID, db: AsyncSession) -> list[BaseMessage]:
+    """返回 sid 所有 active 消息，按 created_at ASC，无 LIMIT。
 
-    - Filters to status='active' only (discarded rows are excluded).
-    - Orders by created_at DESC, takes top 20, then reverses to ascending.
-    - rolling_summaries is read-only in M6; when turn_summaries is non-empty
-      a SystemMessage is prepended (M8 fallthrough path; not exercised in M6).
-    - session_notes is never read or injected into the main LLM.
+    - 过滤条件：status='active'（discarded 行排除）
+    - 排序：created_at ASC（全量返回）
+    - rolling_summaries：M6 只读不回写；M8 当 turn_summaries 非空时，
+      将 SystemMessage 注入列表首位
+    - session_notes：永不注入主 LLM
     """
-    # Active messages, last 20, reversed to chronological
-    stmt = (
-        select(Message.role, Message.content)
-        .where(Message.session_id == session_id, Message.status == MessageStatus.active)
-        .order_by(Message.created_at.desc())
-        .limit(20)
+    rows = await db.execute(
+        select(Message)
+        .where(Message.session_id == sid, Message.status == "active")
+        .order_by(Message.created_at.asc())
     )
-    rows = (await db.execute(stmt)).all()
 
-    messages: list[BaseMessage] = [_row_to_message(r) for r in reversed(rows)]
+    messages: list[BaseMessage] = [_to_lc_message(m) for m in rows.scalars().all()]
 
-    # Read-only rolling_summaries in M6 — always fall through
-    # (M8 review worker will have inserted turn_summaries rows)
+    # rolling_summaries：M6 只读路径，始终 fall through
+    # （M8 review worker 写入后改由非空 turn_summaries 触发注入）
     sm_stmt = (
         select(RollingSummary.turn_summaries)
-        .where(RollingSummary.session_id == session_id)
+        .where(RollingSummary.session_id == sid)
         .limit(1)
     )
     row = (await db.execute(sm_stmt)).scalar_one_or_none()
 
-    # scalar_one_or_none(): None when row absent, empty list [] when column is NULL or empty
-    if row:  # non-empty list → M8 fallthrough; empty list [] is falsy → fallback
+    # scalar_one_or_none()：None=无行；[]=空列表（二者均 falsy → fallback）
+    if row:  # 非空列表 → M8 fallthrough；空列表 [] 为 falsy → fallback
         summary_text = "\n".join(f"Turn {s['turn']}: {s['summary']}" for s in row)
         messages.insert(0, SystemMessage(content=summary_text))
 
     return messages
 
 
-def _row_to_message(row) -> BaseMessage:
-    """Convert a DB row to a LangChain message."""
-    role, content = row.role, row.content
-    if role == MessageRole.human:
-        return HumanMessage(content=content)
-    if role == MessageRole.ai:
-        return AIMessage(content=content)
-    # Defensive: unknown role → treat as human to avoid crashes
-    return HumanMessage(content=content)
+def _to_lc_message(m: Message) -> BaseMessage:
+    """将 Message ORM 对象转换为 LangChain 消息。"""
+    if m.role == MessageRole.human:
+        return HumanMessage(content=m.content)
+    if m.role == MessageRole.ai:
+        return AIMessage(content=m.content)
+    if m.role == MessageRole.summary:
+        return SystemMessage(content=SUMMARY_PREFIX + m.content)
+    # 防御性兜底：未知 role → HumanMessage 防止崩溃
+    return HumanMessage(content=m.content)

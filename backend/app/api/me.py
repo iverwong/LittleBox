@@ -12,7 +12,6 @@ from typing import Annotated
 from uuid import UUID, uuid4
 
 import anyio
-import regex
 from fastapi import APIRouter, Depends, HTTPException, Query
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
@@ -22,7 +21,7 @@ from starlette.responses import StreamingResponse
 
 from app.auth.deps import get_current_account, require_child
 from app.auth.redis_client import get_redis
-from app.chat.graph import main_graph, persist_ai_turn
+from app.chat.graph import enqueue_audit, main_graph, persist_ai_turn
 from app.chat.locks import (
     acquire_session_lock,
     acquire_throttle_lock,
@@ -30,6 +29,11 @@ from app.chat.locks import (
     running_streams,
 )
 from app.chat.sse import stream_graph_to_sse
+from app.chat.compression import CONTEXT_COMPRESS_THRESHOLD_TOKENS
+from app.chat.context import build_context
+from app.chat.extractors import extract_usage
+from app.chat.prompts import build_system_prompt
+from app.chat.session_policy import SHANGHAI, logical_day, should_switch_session, today_session_title
 from app.db import get_db
 from app.models.accounts import ChildProfile, User
 from app.models.chat import Message
@@ -161,9 +165,27 @@ async def list_sessions(
     limit: Annotated[int, Query(ge=1, le=50)] = 15,
     cursor: str | None = None,
 ) -> SessionListResponse:
-    """List sessions for the authenticated child (keyset pagination, no in_progress)."""
+    """List sessions for the authenticated child (keyset pagination, no in_progress).
+
+    M6-patch3：响应顶层附 today_session_id；sessions 数组过滤今日 logical_day。
+    """
     if cursor is not None and cursor == "":
         cursor = None
+
+    now = datetime.now(SHANGHAI)
+    latest = (
+        await db.execute(
+            select(SessionModel)
+            .where(SessionModel.child_user_id == current.id, SessionModel.status == "active")
+            .order_by(SessionModel.last_active_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    today_sid = (
+        latest.id
+        if latest and logical_day(latest.last_active_at) == logical_day(now)
+        else None
+    )
 
     stmt = (
         select(SessionModel.id, SessionModel.title, SessionModel.last_active_at)
@@ -174,6 +196,8 @@ async def list_sessions(
         .order_by(SessionModel.last_active_at.desc(), SessionModel.id.desc())
         .limit(limit + 1)
     )
+    if today_sid is not None:
+        stmt = stmt.where(SessionModel.id != today_sid)
     if cursor:
         last_active_at_dt, sid = _decode_cursor(cursor)
         stmt = stmt.where(
@@ -192,10 +216,11 @@ async def list_sessions(
         next_cursor = None
 
     return SessionListResponse(
-        items=[
+        sessions=[
             SessionListItem(id=row.id, title=row.title, last_active_at=row.last_active_at)
             for row in items
         ],
+        today_session_id=today_sid,
         next_cursor=next_cursor,
     )
 
@@ -347,12 +372,6 @@ async def stop_session(
 # ---------------------------------------------------------------------------
 
 
-def _truncate_title(content: str, max_graphemes: int = 12) -> str:
-    """Truncate content to at most max_graphemes grapheme clusters via regex \\X."""
-    graphemes = regex.findall(r"\X", content)
-    return "".join(graphemes[:max_graphemes])
-
-
 def _frame_sse_event(event_type: str, data: dict) -> bytes:
     """SSE multi-line protocol frame (M6): event: <type>\\ndata: <json>\\n\\n."""
     return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
@@ -387,7 +406,7 @@ async def chat_stream(
     if graph stream fails.
 
     Decision matrix O (baseline §5.4, 7 rows):
-      Row 1: last=None   + regen=null  → INSERT session + INSERT human (active)
+      Row 1: last=None   + regen=null  → INSERT human (active) [session resolved via policy]
       Row 2: last=None   + regen=!null → 400 RegenerateForInvalid
       Row 3: last=AI      + regen=null  → INSERT human (active)
       Row 4: last=AI      + regen=!null → 400 RegenerateForInvalid
@@ -411,6 +430,7 @@ async def chat_stream(
 
     SSE 7-event sequence (M6, §8.1):
       session_meta → [thinking_start → thinking_end] → delta×N → end
+    session_meta.session_id 始终为服务端最终生效 sid（非客户端传入的 hint）。
     error path: emit error frame (human active row retained, no ai row).
 
     Lock-release contract: session lock released in generator finally block
@@ -430,27 +450,57 @@ async def chat_stream(
     if not await acquire_throttle_lock(redis, str(current.id)):
         raise HTTPException(429, "RequestThrottled")
 
-    # ---- resolve / generate session id ----
-    sid: UUID
-    if req.session_id:
-        sid = UUID(req.session_id)
-    else:
-        sid = uuid4()
+    # ---- session policy resolution（确定生效 sid） ----
+    now = datetime.now(SHANGHAI)
+    latest = (
+        await db.execute(
+            select(SessionModel)
+            .where(SessionModel.child_user_id == current.id, SessionModel.status == "active")
+            .order_by(SessionModel.last_active_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
 
-    # ---- session lock: must release on every HTTPException path (P0-2) ----
+    sid: UUID
+    session: SessionModel
+    is_new_session: bool
+
+    if should_switch_session(latest.last_active_at if latest else None, now):
+        sid = uuid4()
+        session = SessionModel(
+            id=sid,
+            child_user_id=current.id,
+            title=today_session_title(now),
+            status="active",
+            last_active_at=now,
+        )
+        db.add(session)
+        is_new_session = True
+    else:
+        sid = latest.id
+        session = latest
+        is_new_session = False
+
+    # ---- session lock（新建 session 无 race，但为简化统一 lock） ----
     nonce = await acquire_session_lock(redis, str(sid))
     if not nonce:
         raise HTTPException(409, "SessionBusy")
 
     # Ensure lock is released when HTTPException is raised before StreamingResponse
     try:
-        # ---- session existence + child ownership check (done before SETNX: no lock leak) ----
-        if req.session_id:
-            session_row = await db.get(SessionModel, sid)
-            if session_row is None:
-                raise HTTPException(404, "SessionNotFound")
-            if session_row.child_user_id != current.id:
-                raise HTTPException(403, "SessionForbidden")
+        # ---- session ownership check（仅复用 session 需验证） ----
+        if not is_new_session and session.child_user_id != current.id:
+            raise HTTPException(403, "SessionForbidden")
+
+        # ---- 准备 child_profile 数据（无 DB 写入依赖） ----
+        child_profile = await db.get(ChildProfile, current.id)
+        if child_profile is not None:
+            from app.chat.prompts import compute_age
+            _age = compute_age(child_profile.birth_date)
+            _gender = child_profile.gender.value if child_profile.gender else None
+        else:
+            _age = 8  # 兜底默认值
+            _gender = None
 
         # ---- decision matrix O + first-turn / subsequent-turn transaction ----
         last_msg = (
@@ -463,20 +513,13 @@ async def chat_stream(
         ).scalar_one_or_none()
 
         hid: UUID  # human message id for session_meta event
+        user_msg: Message | None = None  # 追踪本轮新增的 human message，供 commit① 用
 
         if last_msg is None:
             # Row 1 or Row 2
             if req.regenerate_for is not None:
                 raise HTTPException(400, "RegenerateForInvalid")
-            # Row 1: first turn (INSERT human active)
-            title = _truncate_title(req.content)
-            session = SessionModel(
-                id=sid,
-                child_user_id=current.id,
-                title=title,
-                status=MessageStatus.active,
-            )
-            db.add(session)
+            # Row 1: first turn（INSERT human active；session 已在 policy resolution 中建好）
             human = Message(
                 session_id=sid,
                 role=MessageRole.human,
@@ -486,6 +529,7 @@ async def chat_stream(
             db.add(human)
             await db.flush()
             hid = human.id
+            user_msg = human
         # Row 3: last is AI, regen=null → INSERT human
         elif last_msg.role == MessageRole.ai:
             if req.regenerate_for is not None:
@@ -499,6 +543,7 @@ async def chat_stream(
             db.add(human)
             await db.flush()
             hid = human.id
+            user_msg = human
         else:
             # last_msg.role == MessageRole.human
             # Closing argument (Gate A): last_msg is the LATEST active row by
@@ -526,12 +571,13 @@ async def chat_stream(
                     db.add(new_human)
                     await db.flush()
                     hid = new_human.id
+                    user_msg = new_human
                 elif req.regenerate_for == str(last_msg.id):
                     # Row 6: orphan + =hid → reuse orphan (no new row, no content update)
-                    # Option A: assert content is empty (strict contract)
                     if req.content != "":
                         raise HTTPException(400, "RegenerateForInvalid")
                     hid = last_msg.id
+                    # user_msg stays None — 复用已有消息，不新增
                 else:
                     # Row 7: orphan + ≠hid → 400
                     raise HTTPException(400, "RegenerateForInvalid")
@@ -540,17 +586,25 @@ async def chat_stream(
                 # This branch is unreachable — raise to catch future state-space bugs.
                 raise AssertionError("unreachable: non-orphan human cannot be last active row")
 
+        # ---- 构建 history + system prompt（在 decision matrix + flush 后，orphan discard 已可见） ----
+        history = await build_context(sid, db)
+        system_prompt = build_system_prompt(_age, _gender)
+
+        # commit① — user 消息落库（同事务内同步 last_active_at）
+        if user_msg is not None:
+            session.last_active_at = user_msg.created_at
         await db.commit()
 
         # ---- streaming response ----
         async def generator() -> AsyncGenerator[bytes, None]:
             accumulated = ""
             last_finish_reason = "stop"  # 兜底；末帧 finish_reason 命中时覆盖
+            usage_meta: dict | None = None  # 由 call_main_llm 转发的末帧 usage 快照
             has_emitted_content = False
             client_alive = True
             user_stopped = False
 
-            # Build initial state for main_graph (same shape as stream_chat dev path)
+            # Build initial state for main_graph
             from langchain_core.messages import HumanMessage
 
             from app.chat.state import MainDialogueState
@@ -561,7 +615,7 @@ async def chat_stream(
                 "child_user_id": str(current.id),
                 "child_profile": None,  # M6: not read by nodes
                 "provider": _app_settings.main_provider,
-                "messages": [HumanMessage(content=req.content)],
+                "messages": [system_prompt, *history],
                 "audit_state": {},  # M6: all-False stub
                 "pending_guidance": None,
                 "generated_token_count": 0,
@@ -578,7 +632,52 @@ async def chat_stream(
 
                 # Consume graph stream: accumulate content + forward to SSE
                 thinking_started = False  # thinking 信号状态机（基线 §3.2）
+                # ---- 阻塞压缩检查（scheme R）：needs_compression=True → 同步压缩 ----
+                if session.needs_compression:
+                    try:
+                        yield _frame_sse_event("compression_progress", {
+                            "stage": "compressing",
+                            "message": "正在为对话腾出更多空间",
+                        })
+                        from app.chat.compression import build_compression_prompt
+                        from app.chat.factory import get_chat_llm as _get_compression_llm
+                        actives_orm = (
+                            await db.execute(
+                                select(Message)
+                                .where(Message.session_id == sid, Message.status == "active")
+                                .order_by(Message.created_at.asc())
+                            )
+                        ).scalars().all()
+                        if actives_orm:
+                            # 用 build_context 获取 LC 格式的 messages 供 LLM 输入
+                            ctx = await build_context(sid, db)
+                            c_llm = _get_compression_llm()
+                            c_result = await c_llm.ainvoke(build_compression_prompt(ctx))
+                            for mo in actives_orm:
+                                mo.status = "compressed"
+                            db.add(Message(
+                                session_id=sid, role=MessageRole.summary,
+                                status=MessageStatus.active,
+                                content=c_result.content if hasattr(c_result, "content") else str(c_result),
+                            ))
+                            session.needs_compression = False
+                            await db.commit()
+                            # 重建上下文供 LLM 使用（压缩后 history 仅含 summary）
+                            _hist = await build_context(sid, db)
+                            _sp = build_system_prompt(_age, _gender)
+                            initial_state["messages"] = [_sp, *_hist]
+                    except Exception:
+                        logger.exception("compression failed for session %s", sid)
+                        yield _frame_sse_event("error", {
+                            "message": "压缩失败，请重试", "code": "CompressionError",
+                        })
+                        return
+
                 async for payload in main_graph.astream(initial_state, stream_mode="custom"):
+                    # usage_metadata 快照（由 call_main_llm 末帧转发）
+                    if payload.get("usage_metadata"):
+                        usage_meta = payload["usage_metadata"]
+
                     # reasoning 信号（基线 §3.2, signal-only, 不传文本）
                     if payload.get("reasoning"):
                         if not thinking_started and client_alive:
@@ -630,14 +729,31 @@ async def chat_stream(
                         client_alive = False
 
                 # 关注点3: user_stopped 与自然结束互斥（persist_ai_turn 至多 1 次）
+                # ---- commit② — ai 消息落库 + usage 快照 + needs_compression 标志 + 审查 ----
                 if user_stopped:
-                    # 关注点2: StopKind 二分支 — finish_reason 强制覆盖为 'user_stopped'
+                    # 关注点2: StopKind 二分支
                     if has_emitted_content:
-                        aid = await persist_ai_turn(
-                            db, sid,
-                            finish_reason="user_stopped", content=accumulated,
+                        ai_msg = Message(
+                            session_id=sid,
+                            role=MessageRole.ai,
+                            content=accumulated,
+                            status=MessageStatus.active,
+                            finish_reason="user_stopped",
                         )
-                        await db.commit()  # commit②: persist AI row + last_active_at
+                        db.add(ai_msg)
+                        await db.flush()
+                        aid = ai_msg.id
+
+                        # usage 快照：写 LLM 真值，不累加
+                        if usage_meta:
+                            _usage_total = usage_meta["input_tokens"] + usage_meta["output_tokens"]
+                            session.context_size_tokens = _usage_total
+                            if _usage_total >= CONTEXT_COMPRESS_THRESHOLD_TOKENS:
+                                session.needs_compression = True
+                        await db.commit()
+
+                        asyncio.create_task(enqueue_audit(sid, db))
+
                         if client_alive:
                             yield _frame_sse_event(
                                 "stopped",
@@ -650,18 +766,35 @@ async def chat_stream(
                                 {"finish_reason": "user_stopped"},
                             )
                 else:
-                    # 自然结束分支：T5 唯一写入点
-                    aid = await persist_ai_turn(
-                        db, sid,
-                        finish_reason=last_finish_reason, content=accumulated,
+                    # 自然结束分支：commit②
+                    ai_msg = Message(
+                        session_id=sid,
+                        role=MessageRole.ai,
+                        content=accumulated,
+                        status=MessageStatus.active,
+                        finish_reason=last_finish_reason,
                     )
+                    db.add(ai_msg)
+                    await db.flush()
+                    aid = ai_msg.id
+
+                    # usage 快照：写 LLM 真值，不累加
+                    if usage_meta:
+                        _usage_total = usage_meta["input_tokens"] + usage_meta["output_tokens"]
+                        session.context_size_tokens = _usage_total
+                        if _usage_total >= CONTEXT_COMPRESS_THRESHOLD_TOKENS:
+                            session.needs_compression = True
                     await db.commit()
+
+                    asyncio.create_task(enqueue_audit(sid, db))
+
                     if client_alive:
                         yield _frame_sse_event(
                             "end",
                             {"finish_reason": last_finish_reason, "aid": str(aid)},
                         )
             except Exception as e:
+                logger.exception("chat_stream generator failed")
                 if client_alive:
                     yield _frame_sse_event(
                         "error", {"message": str(e), "code": "InternalError"},

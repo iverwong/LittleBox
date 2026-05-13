@@ -69,8 +69,8 @@ async def test_persist_ai_turn_inserts_active_ai_message(db_session, child_user)
 
 
 @pytest.mark.asyncio
-async def test_persist_ai_turn_updates_session_last_active_at(db_session, child_user):
-    """persist_ai_turn updates sessions.last_active_at."""
+async def test_persist_ai_turn_no_longer_updates_last_active_at(db_session, child_user):
+    """M6-patch3: persist_ai_turn no longer updates sessions.last_active_at（F 决策：commit① 独占）。"""
     sid = uuid.uuid4()
     session = Session(id=sid, child_user_id=child_user.id, title="test")
     db_session.add(session)
@@ -90,9 +90,9 @@ async def test_persist_ai_turn_updates_session_last_active_at(db_session, child_
     )
     await db_session.flush()
 
-    updated = (await db_session.execute(_session_last_active(db_session, sid))).scalar_one()
+    unchanged = (await db_session.execute(_session_last_active(db_session, sid))).scalar_one()
 
-    assert updated > old_time
+    assert unchanged == old_time  # persist_ai_turn 不再覆写 last_active_at
 
 
 @pytest.mark.asyncio

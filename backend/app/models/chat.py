@@ -32,6 +32,16 @@ class Session(BaseMixin, Base):
         server_default=func.now(),
         nullable=False,
     )
+    context_size_tokens: Mapped[int | None] = mapped_column(
+        nullable=True,
+        comment="末轮 LLM usage input_tokens + output_tokens 快照",
+    )
+    needs_compression: Mapped[bool] = mapped_column(
+        default=False,
+        server_default="false",
+        nullable=False,
+        comment="阈值命中 → True，下一轮 user 到达时阻塞压缩",
+    )
 
     # relationships
     messages: Mapped[list["Message"]] = relationship(
