@@ -152,15 +152,6 @@ export default function DevHub() {
 						router.push('/dev/components')
 					}}
 				/>
-				<ActionButton
-					label="打开 SSE Chat"
-					sublabel="M3 流式演示"
-					variant="ghost"
-					onPress={() => {
-						log('打开 SSE Chat: /dev/chat')
-						router.push('/dev/chat')
-					}}
-				/>
 			</View>
 
 			{/* Debug Panel */}
