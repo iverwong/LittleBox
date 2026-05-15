@@ -36,7 +36,7 @@ import subprocess
 from collections.abc import AsyncGenerator
 
 # M8 audit pipeline test defaults
-# 必须早于 from app.config import settings（line 49），否则 Settings() 实例化时 env 已读完
+# 必须早于 from app.config import settings，否则 Settings() 实例化时 env 已读完
 os.environ.setdefault("LB_AUDIT_PROVIDER", "deepseek")
 os.environ.setdefault("LB_AUDIT_MODEL", "deepseek-v4-flash")
 os.environ.setdefault("LB_AUDIT_REASONING_EFFORT", "max")
