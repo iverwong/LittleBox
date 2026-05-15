@@ -13,6 +13,7 @@ import { useTheme } from '@/theme'
 export default function ChildSettingsScreen() {
     const theme = useTheme()
     const router = useRouter()
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- M6+ 接入孩子设置时使用
     const { id } = useLocalSearchParams<{ id: string }>()
 
     return (
