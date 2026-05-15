@@ -25,6 +25,22 @@ class Settings(BaseSettings):
     llm_request_timeout_seconds: float = 60.0
     # M5 hotfix: family child count limit
     max_children_per_family: int = 3
+    # M8 审查 LLM 供应商标识，与 _PROVIDER_REGISTRY 注册名对齐
+    audit_provider: str = "deepseek"
+    # M8 审查 LLM 模型名
+    audit_model: str = "deepseek-v4-flash"
+    # M8 推理深度：thinking 模式下 low/medium 被服务端映射为 high，显式 max 才拿最深推理
+    audit_reasoning_effort: str = "max"
+    # M8 启用思考模式（extra_body={"thinking":{"type":"enabled"}}），与 reasoning_effort 联动
+    audit_thinking_enabled: bool = True
+    # M8 主图轮询审查结果超时秒数
+    audit_wait_timeout_seconds: int = 30
+    # M8 审查信号管道 Redis TTL（秒），默认 24h
+    audit_redis_ttl_seconds: int = 86400
+    # M8 ARQ 队列 Redis db 编号，与业务 db=0 隔离
+    arq_redis_db: int = 1
+    # M8 session_notes tool agentic loop 硬上限
+    max_audit_tool_iterations: int = 5
 
     model_config = {"env_prefix": "LB_", "env_file": ".env"}
 

@@ -35,6 +35,17 @@ import os
 import subprocess
 from collections.abc import AsyncGenerator
 
+# M8 audit pipeline test defaults
+# 必须早于 from app.config import settings（line 49），否则 Settings() 实例化时 env 已读完
+os.environ.setdefault("LB_AUDIT_PROVIDER", "deepseek")
+os.environ.setdefault("LB_AUDIT_MODEL", "deepseek-v4-flash")
+os.environ.setdefault("LB_AUDIT_REASONING_EFFORT", "max")
+os.environ.setdefault("LB_AUDIT_THINKING_ENABLED", "True")
+os.environ.setdefault("LB_AUDIT_WAIT_TIMEOUT_SECONDS", "30")
+os.environ.setdefault("LB_AUDIT_REDIS_TTL_SECONDS", "86400")
+os.environ.setdefault("LB_ARQ_REDIS_DB", "1")
+os.environ.setdefault("LB_MAX_AUDIT_TOOL_ITERATIONS", "5")
+
 import pytest
 import pytest_asyncio
 from fakeredis.aioredis import FakeRedis
