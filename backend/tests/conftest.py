@@ -56,7 +56,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.auth.redis_client import get_redis
+from app.auth.redis_client import get_audit_redis, get_redis
 from app.config import settings
 from app.db import get_db
 from app.main import create_app
@@ -207,8 +207,12 @@ async def app(db_session: AsyncSession, redis_client: FakeRedis) -> AsyncGenerat
     async def _get_redis() -> FakeRedis:
         return redis_client
 
+    async def _get_audit_redis() -> FakeRedis:
+        return redis_client
+
     application.dependency_overrides[get_db] = _get_db
     application.dependency_overrides[get_redis] = _get_redis
+    application.dependency_overrides[get_audit_redis] = _get_audit_redis
     try:
         yield application
     finally:
