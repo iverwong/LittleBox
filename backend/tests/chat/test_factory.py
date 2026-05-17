@@ -43,6 +43,10 @@ class _FakeSettings:
         )
         self.bailian_model = kwargs.get("bailian_model", "deepseek-v4-flash")
         self.llm_request_timeout_seconds = 60.0
+        # M8 audit pipeline settings
+        self.audit_model = kwargs.get("audit_model", "deepseek-v4-flash")
+        self.audit_reasoning_effort = kwargs.get("audit_reasoning_effort", "max")
+        self.audit_thinking_enabled = kwargs.get("audit_thinking_enabled", True)
         for k, v in kwargs.items():
             if hasattr(self, k):
                 setattr(self, k, v)
@@ -52,13 +56,16 @@ class _FakeSettings:
 
 
 class TestRegistryKeys:
-    """_PROVIDER_REGISTRY contains exactly deepseek and openai."""
+    """_PROVIDER_REGISTRY contains exactly deepseek, openai and audit_deepseek."""
 
     def test_registry_has_deepseek(self) -> None:
         assert "deepseek" in _PROVIDER_REGISTRY
 
     def test_registry_has_openai(self) -> None:
         assert "openai" in _PROVIDER_REGISTRY
+
+    def test_registry_has_audit_deepseek(self) -> None:
+        assert "audit_deepseek" in _PROVIDER_REGISTRY
 
     def test_registry_keys_are_callable(self) -> None:
         settings = _FakeSettings()
@@ -180,6 +187,24 @@ class TestChatDeepSeekConstruction:
         # ChatOpenAI maps base_url → openai_api_base via Pydantic alias
         assert llm.openai_api_base.startswith("https://dashscope.aliyuncs.com")
         assert llm.model == "deepseek-v4-flash"
+
+    def test_audit_deepseek_construction_params(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Mock ChatDeepSeek.__init__ to verify audit_deepseek uses audit_* settings."""
+        captured: dict[str, Any] = {}
+
+        def mock_init(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        monkeypatch.setattr(ChatDeepSeek, "__init__", mock_init)
+
+        settings = _FakeSettings()
+        _PROVIDER_REGISTRY["audit_deepseek"](settings)
+
+        assert captured.get("model") == "deepseek-v4-flash"
+        assert captured.get("extra_body") == {
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": "max",
+        }
 
 
 # ---- T5b: ChatDeepSeek thinking params (Step 11.3) ----

@@ -27,6 +27,7 @@ def _build_chat_deepseek(
     model: str,
     timeout: float,
     reasoning_effort: str,
+    thinking_enabled: bool = True,
 ) -> ChatDeepSeek:
     """Construct ChatDeepSeek with thinking mode enabled.
 
@@ -34,6 +35,10 @@ def _build_chat_deepseek(
     ``BaseChatOpenAI.openai_api_base`` aliased from ``base_url``).
     The underlying OpenAI client reads ``api_base``, NOT ``openai_api_base``,
     so we pass ``api_base`` instead of ``base_url``.
+
+    ``thinking_enabled`` (added M8 Step 4): controls whether ``extra_body``
+    sets ``thinking.type=enabled`` or ``disabled``. Default ``True`` for
+    backward compatibility with existing callers.
     """
     return ChatDeepSeek(
         api_key=api_key,  # type: ignore[arg-type]
@@ -41,7 +46,7 @@ def _build_chat_deepseek(
         model=model,
         timeout=timeout,
         extra_body={
-            "thinking": {"type": "enabled"},
+            "thinking": {"type": "enabled" if thinking_enabled else "disabled"},
             "reasoning_effort": reasoning_effort,
         },
     )
@@ -75,6 +80,14 @@ _PROVIDER_REGISTRY: dict[str, Callable[..., Runnable]] = {
         base_url=settings.bailian_base_url,
         model=settings.bailian_model,
         timeout=settings.llm_request_timeout_seconds,
+    ),
+    "audit_deepseek": lambda settings: _build_chat_deepseek(
+        api_key=settings.deepseek_api_key.get_secret_value(),
+        base_url=settings.deepseek_base_url,
+        model=settings.audit_model,
+        timeout=settings.llm_request_timeout_seconds,
+        reasoning_effort=settings.audit_reasoning_effort,
+        thinking_enabled=settings.audit_thinking_enabled,
     ),
 }
 
