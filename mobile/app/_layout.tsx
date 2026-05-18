@@ -80,10 +80,10 @@ function RootLayoutNav() {
       return;
     }
     if (role === 'child' && !isChildGroup) {
-      router.replace('/child/welcome' as never);
+      router.replace('/child/chat' as never);
       return;
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- expo-router router 引用稳定
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- expo-router router 引用稳定
   }, [role, segments, hydrated]);
 
   // hydrated 过渡态（hooks 已全部调用完毕，此处仅控制渲染）

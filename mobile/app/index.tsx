@@ -30,7 +30,7 @@ export default function Index() {
     return <Redirect href={'/parent/children' as never} />;
   }
   if (role === 'child') {
-    return <Redirect href={'/child/welcome' as never} />;
+    return <Redirect href={'/child/chat' as never} />;
   }
 
   return <Redirect href={'/auth/landing' as never} />;

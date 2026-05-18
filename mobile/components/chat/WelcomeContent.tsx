@@ -1,7 +1,13 @@
-import { Stack } from 'expo-router'
+/**
+ * M7 · WelcomeShell 内容组件。
+ *
+ * 拉 /me/profile 取 nickname，按是否拿到展示问候文案。
+ * 失败 / 404 / nickname null → 静默走 fallback，无 toast / 无重试（M5 既定纪律）。
+ *
+ * 迁自原 mobile/app/child/welcome.tsx，删原文件后取代之。
+ */
 import { useEffect, useState } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
 
 import { Mascot } from '@/components/mascot/Mascot'
 import { api } from '@/services/api/client'
@@ -13,7 +19,7 @@ type ChildProfileOut = {
     birth_date: string
 }
 
-export default function WelcomeScreen() {
+export function WelcomeContent() {
     const [nickname, setNickname] = useState<string | null>(null)
 
     useEffect(() => {
@@ -24,33 +30,25 @@ export default function WelcomeScreen() {
             if (result.ok && result.data.nickname) {
                 setNickname(result.data.nickname)
             }
-            // 失败 / 404 / nickname 为 null：静默走 fallback 文案，无 toast、无重试
+            // 失败 / 404 / nickname 为 null：静默走 fallback 文案
         }
-        fetchProfile()
+        void fetchProfile()
         return () => {
             cancelled = true
         }
     }, [])
 
     return (
-        <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-            <Stack.Screen options={{ headerShown: false }} />
-            <View style={styles.center}>
-                <Mascot size="xl" />
-                <Text style={styles.greeting}>
-                    {nickname ? `嗨 ${nickname}，我是小盒子！` : '嗨，我是小盒子！'}
-                </Text>
-            </View>
-            <Text style={styles.footnote}>聊天能力将在后续版本开放</Text>
-        </SafeAreaView>
+        <View style={styles.center}>
+            <Mascot />
+            <Text style={styles.greeting}>
+                {nickname ? `嗨 ${nickname}，我是小盒子！` : '嗨，我是小盒子！'}
+            </Text>
+        </View>
     )
 }
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#F2EADF',
-    },
     center: {
         flex: 1,
         justifyContent: 'center',
@@ -63,11 +61,5 @@ const styles = StyleSheet.create({
         color: '#2B2216',
         marginTop: 32,
         textAlign: 'center',
-    },
-    footnote: {
-        fontSize: 14,
-        color: '#998260',
-        textAlign: 'center',
-        paddingBottom: 16,
     },
 })
