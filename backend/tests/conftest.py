@@ -49,6 +49,22 @@ os.environ.setdefault("LB_MAX_AUDIT_TOOL_ITERATIONS", "5")
 import pytest
 import pytest_asyncio
 from fakeredis.aioredis import FakeRedis
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--run-live", action="store_true", default=False,
+        help="run tests marked as live (real LLM API)",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--run-live"):
+        return
+    skip_live = pytest.mark.skip(reason="需要 --run-live 显式触发")
+    for item in items:
+        if "live" in item.keywords:
+            item.add_marker(skip_live)
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
