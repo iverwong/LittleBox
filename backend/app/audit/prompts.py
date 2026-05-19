@@ -1,8 +1,8 @@
 """审查 Agent system prompt。
 
-审查 Agent 使用三个 tool（AppendNote / ReplaceInNotes / AuditOutputSchema），
-通过 `bind_tools(tool_choice="any")` 约束每帧必须选一个 tool 调用。
-详见 D8/D9/D11。
+D11 v3（M8-hotfix）：tool_choice="auto" + system prompt 强约束。
+不再依赖 tool_choice 枚举值约束（DS/BL 思考模式都不支持 required/any），
+而是在 prompt 文本中明确要求模型以 audit_output 工具调用收尾。
 """
 from __future__ import annotations
 
@@ -40,6 +40,11 @@ def _output_requirements() -> str:
 
 **你每帧必须选一个 tool 调用，不能返回纯文本。**
 选择 AuditOutputSchema 表示审查完成，不再继续编辑 session_notes。
+
+你的回复必须以调用 AuditOutputSchema 工具收尾，不允许直接输出文本结论。
+你可以在 AuditOutputSchema 之前调用 append_note / replace_in_notes 记录笔记，
+但最终一定要用 AuditOutputSchema 给出 verdict（pass / warn / fail）。
+若上下文不足以判断，verdict 取 warn 并在 reason 字段说明。
 
 """
 

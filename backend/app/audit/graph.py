@@ -1,4 +1,4 @@
-"""审查 LangGraph agentic loop（M8 Step 5）。
+"""审查 LangGraph agentic loop（M8 Step 5 / M8-hotfix Step 4）。
 
 三阶段（load_context → audit_llm_call ↔ tool loop → write_results）：
 
@@ -8,8 +8,10 @@
                                            │                                └─ "write_results" → write_results → END
                                            └─ "write_results" → write_results → END
 
-D8/D11：三 tool（AppendNote / ReplaceInNotes / AuditOutputSchema）共存，
-tool_choice="any" 约束每帧必选一 tool。AuditOutputSchema 为终止帧。
+D11 v3（M8-hotfix）：tool_choice="auto" + system prompt 强约束 + post-processing 兜底。
+DS/BL 两端在思考模式下均不支持 tool_choice="required" 或 "any"（36 变体穷尽实证），
+走 auto 是覆盖主备两端的唯一可行写法。post-processing 在 LLM 未调 audit_output
+时发起一次追问，仍不调则降级 verdict=warn。
 """
 from __future__ import annotations
 
@@ -35,6 +37,11 @@ logger = logging.getLogger("audit.graph")
 TOOL_NAME_APPEND = "AppendNote"
 TOOL_NAME_REPLACE = "ReplaceInNotes"
 TOOL_NAME_OUTPUT = "AuditOutputSchema"
+
+
+def _has_audit_output(response: AIMessage) -> bool:
+    """检查模型的响应中是否调用了 audit_output 工具（D11 v3 post-processing）。"""
+    return any(tc["name"] == TOOL_NAME_OUTPUT for tc in (response.tool_calls or []))
 
 
 class AuditGraphState(TypedDict):
@@ -67,8 +74,11 @@ def _last_aimessage(messages: list[BaseMessage]) -> AIMessage | None:
     return None
 
 
-def _build_audit_output_default() -> AuditOutputSchema:
-    """构造降级用的默认 AuditOutputSchema（循环超限 / 异常兜底）。"""
+def _build_audit_output_default(
+    guidance: str = "审查循环超限，已降级",
+    turn_summary: str = "审查超时降级",
+) -> AuditOutputSchema:
+    """构造降级用的默认 AuditOutputSchema（循环超限 / post-processing 兜底）。"""
     return AuditOutputSchema(
         dimension_scores=AuditDimensionScores(
             emotional=0, social=0, romance=0, values=0,
@@ -76,8 +86,8 @@ def _build_audit_output_default() -> AuditOutputSchema:
         ),
         crisis_detected=False, crisis_topic=None,
         redline_triggered=False, redline_detail=None,
-        guidance="审查循环超限，已降级",
-        turn_summary="审查超时降级",
+        guidance=guidance,
+        turn_summary=turn_summary,
     )
 
 
@@ -135,11 +145,48 @@ async def load_context(state: AuditGraphState) -> dict:
 
 
 def _make_audit_llm_call(settings: Any):
-    """工厂：创建 audit_llm_call 节点，settings 闭包注入。"""
+    """工厂：创建 audit_llm_call 节点，settings 闭包注入。
+
+    D11 v3（M8-hotfix）：tool_choice="auto" + post-processing 兜底。
+    当模型返回纯文本（无 tool_calls）时，发起一次追问要求调 audit_output；
+    再失败则降级 verdict=warn。中间工具调用（AppendNote/ReplaceInNotes）
+    不走 post-processing，由 tool loop 正常路由。
+    """
     async def audit_llm_call(state: AuditGraphState) -> dict:
-        """调审查 LLM（三 tool + tool_choice="any"）。"""
+        """调审查 LLM（三 tool + tool_choice="auto"）。"""
         llm = build_audit_llm(settings)
-        response = await llm.ainvoke(state["messages"])
+        messages = list(state["messages"])
+        response = await llm.ainvoke(messages)
+
+        # ---- D11 v3 post-processing 兜底 ----
+        # 仅在模型返回纯文本（无任何 tool_calls）时触发；
+        # 模型若调了中间工具（AppendNote/ReplaceInNotes），由 tool loop 继续迭代
+        if not response.tool_calls:
+            messages.append(response)
+            messages.append(
+                HumanMessage(
+                    content="请调用 audit_output 工具给出最终结论"
+                    "（verdict 为 pass / warn / fail），"
+                    "不要直接回复文本。你仍然可以在调用 audit_output"
+                    " 之前先调用 append_note 或 replace_in_notes"
+                    " 记录笔记。",
+                )
+            )
+            response = await llm.ainvoke(messages)
+
+            if not response.tool_calls:
+                # 两次都未调 audit_output → 降级
+                logger.warning(
+                    "audit_pipeline: 模型连续两次未调用 audit_output，默认 verdict=warn"
+                )
+                return {
+                    "messages": [response],
+                    "structured_output": _build_audit_output_default(
+                        guidance="模型未能给出结构化结论",
+                        turn_summary="审查降级：模型未调用 audit_output",
+                    ),
+                }
+
         return {"messages": [response]}
     return audit_llm_call
 

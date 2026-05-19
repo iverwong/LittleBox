@@ -1,19 +1,14 @@
-"""审查 LLM 装配工厂。
+"""审查 LLM 装配工厂（D11 v3）。
 
-复用 M6 `_PROVIDER_REGISTRY` 的 `audit_deepseek` 条目（在 `app/chat/factory.py` 中注册），
-装配 `bind_tools([AppendNote, ReplaceInNotes, AuditOutputSchema])`。
+复用 M6 `_PROVIDER_REGISTRY` 的 `audit_deepseek`（主）和 `audit_bailian`（备）条目，
+装配 `bind_tools([AppendNote, ReplaceInNotes, AuditOutputSchema])`，不传 tool_choice。
 
-Spike 验证结论（2026-05-18 v1 → 2026-05-18 v2 校正）：
-DeepSeek reasoner 模型协议层不支持任何 tool_choice 枚举值（包括 "required"），
-返回 400: "deepseek-reasoner does not support this tool_choice"。
-经由三步骤 spike 收敛：A) bind_tools(tool_choice="required") → 400
-B) .bind(tool_choice="required") → 400
-C) 原生 OpenAI SDK 直连 DeepSeek 端点 → 400。
-结论：协议层硬约束不可行。
-当前实现：不传 tool_choice（默认 "auto"），由 prompt 约束强制模型每帧选一个 tool。
+D11 v3（M8-hotfix）：确认 DS/BL 两端思考模式均不支持 tool_choice="required" 或 "any"
+（36 变体穷尽实证），统一走 "auto" + system prompt 强约束 + post-processing 兜底。
 
-详见 D11 决议 + 模板 A v2 关注点 1 修正选 A：
-放弃 with_structured_output，三 tool 共存，Step 5 graph 按 tool_call.name 路由。
+M8-hotfix 追加 with_retry / with_fallbacks 包装：
+- 主端 3 次重试（瞬态错误自动恢复）
+- 备端百炼（主端全量失败时 fallback）
 """
 from __future__ import annotations
 
@@ -29,13 +24,27 @@ if TYPE_CHECKING:
 
 
 def build_audit_llm(settings: Settings) -> Runnable:
-    """构建审查 LLM，绑定三 tool。
+    """构建审查 LLM：主端（deepseek）+ retry + fallback（百炼），最后 bind_tools。
 
-    不传 tool_choice（默认 "auto"），由 prompt 约束强制模型每帧选择一个工具。
-    三步骤 spike 验证（2026-05-18 v2）：DeepSeek reasoner 协议层拒绝 tool_choice
-    （"deepseek-reasoner does not support this tool_choice"），方案 C 为唯一可行路径。
+    Retry 策略：3 次指数退避，捕获 RateLimitError / APITimeoutError / APIConnectionError。
+    Fallback 策略：主端 3 次重试全失败后，切到百炼备端。
     """
-    base = build_provider_llm("audit_deepseek", settings)
-    return base.bind_tools(
+    from openai import APIConnectionError, APITimeoutError, RateLimitError
+
+    primary = build_provider_llm("audit_deepseek", settings)
+    secondary = build_provider_llm("audit_bailian", settings)
+
+    # 先 bind_tools 再包 retry/fallback，确保工具绑定在各层都生效
+    primary_bound = primary.bind_tools(
         [AppendNote, ReplaceInNotes, AuditOutputSchema],
     )
+    secondary_bound = secondary.bind_tools(
+        [AppendNote, ReplaceInNotes, AuditOutputSchema],
+    )
+
+    retryable = primary_bound.with_retry(
+        retry_if_exception_type=(RateLimitError, APITimeoutError, APIConnectionError),
+        stop_after_attempt=3,
+        wait_exponential_jitter=True,
+    )
+    return retryable.with_fallbacks([secondary_bound])

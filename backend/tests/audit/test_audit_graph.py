@@ -1,4 +1,4 @@
-"""审查 LangGraph agentic loop 测试：7 路径覆盖。"""
+"""审查 LangGraph agentic loop 测试：7 路径覆盖 + D11 v3 post-processing 测试。"""
 from __future__ import annotations
 
 from typing import Any
@@ -23,13 +23,29 @@ pytestmark = pytest.mark.asyncio
 
 
 class FakeAuditLLM:
-    """预定义 AIMessage 响应序列的假 LLM。"""
+    """预定义 AIMessage 响应序列的假 LLM。
 
-    def __init__(self, responses: list[AIMessage]):
+    D11 v3（M8-hotfix）：当响应列表耗尽时，自动返回一个调用了 AuditOutputSchema 的
+    默认响应，以支持 post-processing 追问流程。若需要模拟「两次都不调」场景，
+    设置 ``exhausted_raises=True``。
+    """
+
+    def __init__(
+        self,
+        responses: list[AIMessage],
+        exhausted_raises: bool = False,
+    ):
         self._responses = list(responses)
+        self._exhausted_raises = exhausted_raises
 
     async def ainvoke(self, _input: Any, **kwargs: Any) -> AIMessage:
-        return self._responses.pop(0)
+        if self._responses:
+            return self._responses.pop(0)
+        if self._exhausted_raises:
+            msg = f"FakeAuditLLM exhausted: no more responses (input: {_input})"
+            raise IndexError(msg)
+        # 默认返回 audit_output 以支持 post-processing 追问
+        return _aim(tool_calls=[_TC_OUTPUT])
 
 
 # ---------------------------------------------------------------------------
@@ -79,9 +95,10 @@ def _run(
     responses: list[AIMessage],
     monkeypatch: pytest.MonkeyPatch,
     max_iter: int = 5,
+    exhausted_raises: bool = False,
 ) -> dict:
     """构造 graph + 注入 fake LLM + 调用 ainvoke，返回终态。"""
-    fake = FakeAuditLLM(responses)
+    fake = FakeAuditLLM(responses, exhausted_raises=exhausted_raises)
     monkeypatch.setattr("app.audit.graph.build_audit_llm", lambda s: fake)
     # mock 数据层调用为 no-op
     async def _mock_load(*_): return []
@@ -105,12 +122,14 @@ def _aim(content: str = "", tool_calls: list[dict] | None = None) -> AIMessage:
 
 
 class TestAuditGraph:
-    """7 路径覆盖。"""
+    """7 路径覆盖 + D11 v3 post-processing 测试。"""
 
     async def test_no_tool_call_degradation(self, monkeypatch):
-        """路径 ①：模型返回纯文本（无 tool_calls）→ 兜底走 write_results。"""
+        """路径 ①：模型返回纯文本（无 tool_calls）→ post-processing 追问"
+            " → 终态含 structured_output。"""
         result = await _run([_aim(content="嗯，让我想想...")], monkeypatch)
-        assert result["structured_output"] is None
+        # D11 v3：post-processing 追问后模型调了 audit_output
+        assert result["structured_output"] is not None
         assert result["tool_iter_count"] == 0
 
     async def test_one_append(self, monkeypatch):
@@ -198,3 +217,29 @@ class TestAuditGraph:
         assert "最终观察。" in notes
         assert result["tool_iter_count"] == 3
         assert result["structured_output"] is not None
+
+
+class TestPostProcessing:
+    """D11 v3 post-processing 兜底测试。"""
+
+    async def test_followup_triggers_on_missing_audit_output(self, monkeypatch):
+        """模型首轮未调 audit_output → post-processing 触发追问 → 第二轮调了 → verdict 正确解析。"""
+        result = await _run([
+            _aim(tool_calls=[_TC_APPEND]),  # 首轮只调了 append，没收尾
+            # 追问后自动获得默认 audit_output 响应
+        ], monkeypatch)
+        # post-processing 追问后调了 audit_output
+        assert result["structured_output"] is not None
+
+    async def test_double_fail_degradation(self, monkeypatch):
+        """模型两轮都未调 audit_output → 走 default verdict=warn 分支 + 日志告警。"""
+        result = await _run(
+            [
+                _aim(content="我觉得这个对话很正常"),  # 首轮纯文本
+                _aim(content="好的我再想想"),           # 追问后仍纯文本
+            ],
+            monkeypatch,
+            exhausted_raises=True,  # 不允许默认响应
+        )
+        assert result["structured_output"] is not None
+        assert result["structured_output"].guidance == "模型未能给出结构化结论"

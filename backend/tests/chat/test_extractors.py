@@ -22,13 +22,17 @@ def _chunk(
     finish_reason: str | None = None,
     reasoning_content: str | None = None,
 ) -> AIMessageChunk:
-    """Build an AIMessageChunk with the given additional_kwargs."""
-    ak: dict = {}
+    """Build an AIMessageChunk with the given finish_reason / reasoning_content.
+
+    M8-hotfix: finish_reason 通过 response_metadata 直接属性传入（真路径），
+    不再走 additional_kwargs["response_metadata"] 错误路径。
+    """
+    kwargs: dict = {}
     if finish_reason is not None:
-        ak["response_metadata"] = {"finish_reason": finish_reason}
+        kwargs["response_metadata"] = {"finish_reason": finish_reason}
     if reasoning_content is not None:
-        ak["reasoning_content"] = reasoning_content
-    return AIMessageChunk(content="", additional_kwargs=ak)
+        kwargs["additional_kwargs"] = {"reasoning_content": reasoning_content}
+    return AIMessageChunk(content="", **kwargs)
 
 
 # ---------------------------------------------------------------------------

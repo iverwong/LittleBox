@@ -6,15 +6,66 @@ is the primary provider (preserving reasoning_content); ChatOpenAI is
 registered for future M11+ experiments but not used in M6.
 """
 
+from __future__ import annotations
+
+import importlib.metadata as _metadata
 from collections.abc import Callable
 from functools import lru_cache
 from typing import Any
 
 from langchain_core.language_models import LanguageModelInput
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.runnables import Runnable
 from langchain_deepseek import ChatDeepSeek
 from langchain_openai import ChatOpenAI
+
+# ---- M8-hotfix: _convert_message_to_dict monkeypatch for reasoning_content ----
+# 背景：langchain-openai 的 _convert_message_to_dict 序列化 AIMessage 时，
+# 不会将 additional_kwargs.reasoning_content 传给 OpenAI API。DeepSeek 思考模式
+# 要求：做过 tool_calls 的轮次后续请求必须回传 reasoning_content，否则 API 返回 400。
+# 详见 LLM Provider 探针补4 多轮 agentic 用例。
+# TODO: langchain-deepseek upstream PR 合入后移除本 monkeypatch。
+
+_VERIFIED_LCO_VERSIONS = ("1.2.",)  # 当前已验证版本前缀
+_lco_version = _metadata.version("langchain-openai")
+assert any(
+    _lco_version.startswith(v) for v in _VERIFIED_LCO_VERSIONS
+), (
+    f"langchain-openai 版本 {_lco_version} 未经验证，"
+    f"_convert_message_to_dict monkeypatch 可能失效。"
+    f"已验证版本前缀：{_VERIFIED_LCO_VERSIONS}。"
+    f"升级版本前请重新跑 LLM Provider 探针的补4 用例。"
+)
+
+import langchain_openai.chat_models.base as _lcoai  # noqa: E402 — 必须 at 顶部之后（模块级副作用）
+
+assert hasattr(_lcoai, "_convert_message_to_dict"), (
+    "langchain_openai.chat_models.base._convert_message_to_dict 不存在，"
+    "monkeypatch 失败。请检查 langchain-openai API 是否有变更。"
+)
+
+_orig_convert = _lcoai._convert_message_to_dict
+
+
+def _patched_convert(message, *args, **kwargs):
+    """补 langchain-openai 序列化时丢失 reasoning_content 的缺陷。
+
+    DeepSeek 思考模式下，做过 tool_calls 的轮次后续请求必须回传
+    reasoning_content，否则 API 返回 400。
+    详见 LLM Provider 探针 补4。
+
+    使用 *args, **kwargs 透传以兼容 LangChain 内部可能的位置参数调用。
+    """
+    result = _orig_convert(message, *args, **kwargs)
+    if isinstance(message, AIMessage):
+        rc = (message.additional_kwargs or {}).get("reasoning_content")
+        if rc:
+            result["reasoning_content"] = rc
+    return result
+
+
+_lcoai._convert_message_to_dict = _patched_convert
+# ---- end monkeypatch ----
 
 
 class ProviderNotRegisteredError(LookupError):
@@ -45,6 +96,7 @@ def _build_chat_deepseek(
         api_base=base_url,
         model=model,
         timeout=timeout,
+        max_retries=0,  # SDK 内置重试关掉；统一由 with_retry 在应用层管理
         extra_body={
             "thinking": {"type": "enabled" if thinking_enabled else "disabled"},
             "reasoning_effort": reasoning_effort,
@@ -64,6 +116,7 @@ def _build_chat_openai(
         base_url=base_url,
         model=model,
         timeout=timeout,
+        max_retries=0,  # SDK 内置重试关掉；统一由 with_retry 在应用层管理
     )
 
 
@@ -84,6 +137,14 @@ _PROVIDER_REGISTRY: dict[str, Callable[..., Runnable]] = {
     "audit_deepseek": lambda settings: _build_chat_deepseek(
         api_key=settings.deepseek_api_key.get_secret_value(),
         base_url=settings.deepseek_base_url,
+        model=settings.audit_model,
+        timeout=settings.llm_request_timeout_seconds,
+        reasoning_effort=settings.audit_reasoning_effort,
+        thinking_enabled=settings.audit_thinking_enabled,
+    ),
+    "audit_bailian": lambda settings: _build_chat_deepseek(
+        api_key=settings.bailian_api_key.get_secret_value(),
+        base_url=settings.bailian_base_url,
         model=settings.audit_model,
         timeout=settings.llm_request_timeout_seconds,
         reasoning_effort=settings.audit_reasoning_effort,

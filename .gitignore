@@ -45,6 +45,9 @@ htmlcov/
 # UV
 .uv/
 
+# Probe artifacts (LLM provider probe run outputs, ~70 JSON dumps)
+/backend/tests/audit/llm_provider_probe/artifacts/
+
 # PostgreSQL data
 pgdata/
 
