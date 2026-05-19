@@ -9,10 +9,11 @@
  *
  * 后续 Step：消息列表（Step 2）、ChatInput（Step 3）、SSE sendMessage（Step 4a）。
  */
-import { useEffect } from 'react'
-import { StyleSheet, Text, View } from 'react-native'
+import { useEffect, useState } from 'react'
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
+import { MessageList } from '@/components/chat/MessageList'
 import { SessionList } from '@/components/chat/SessionList'
 import { WelcomeContent } from '@/components/chat/WelcomeContent'
 import { WelcomeShell } from '@/components/chat/WelcomeShell'
@@ -43,6 +44,40 @@ export default function ChatIndex() {
         }
     }, [loadSessions, setActiveSession])
 
+    const [isLoadingMessages, setIsLoadingMessages] = useState(false)
+    const loadMessages = useChatStore((s) => s.loadMessages)
+
+    // §3.10 缓存判定矩阵：activeSessionId 变化时决定是否拉消息历史
+    // - 有 ActiveStream（Step 4a 写入）→ 直接用 store 渲染
+    // - 有缓存 + lastFetchedAt < 30s → 走缓存
+    // - 否则 → 整页 loading + 一次 GET
+    useEffect(() => {
+        if (activeSessionId == null) return
+
+        const state = useChatStore.getState()
+        const bucket = state.messagesBySession.get(activeSessionId)
+        const hasActiveStream = state.activeStreams.has(activeSessionId)
+
+        if (hasActiveStream) return
+        if (bucket != null && Date.now() - bucket.lastFetchedAt < 30_000) return
+
+        let cancelled = false
+        setIsLoadingMessages(true)
+        void (async () => {
+            try {
+                await loadMessages(activeSessionId)
+            } catch (err) {
+                // Step 7 接错误码映射 UI 反馈
+                console.error('[ChatIndex] loadMessages failed', err)
+            } finally {
+                if (!cancelled) setIsLoadingMessages(false)
+            }
+        })()
+        return () => {
+            cancelled = true
+        }
+    }, [activeSessionId, loadMessages])
+
     return (
         <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
             <View style={styles.history}>
@@ -53,10 +88,12 @@ export default function ChatIndex() {
             <View style={styles.main}>
                 {activeSessionId == null ? (
                     <WelcomeShell content={<WelcomeContent />} />
-                ) : (
-                    <View style={styles.messagesPlaceholder}>
-                        <Text style={styles.placeholderText}>消息区域（Step 2 渲染）</Text>
+                ) : isLoadingMessages ? (
+                    <View style={styles.loading}>
+                        <ActivityIndicator size="large" color="#998260" />
                     </View>
+                ) : (
+                    <MessageList sid={activeSessionId} />
                 )}
             </View>
 
@@ -84,7 +121,7 @@ const styles = StyleSheet.create({
         fontWeight: '500',
     },
     main: { flex: 1 },
-    messagesPlaceholder: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+    loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
     placeholderText: { color: '#998260' },
     inputPlaceholder: {
         padding: 16,

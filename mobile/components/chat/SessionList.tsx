@@ -46,8 +46,9 @@ function SessionListItem({ item }: { item: SessionMeta }) {
         <Pressable
             style={styles.item}
             onPress={() => {
-                // Step 3 接历史只读态（跳只读视图 + 「返回继续对话」按钮）
-                console.log('[SessionList] tap', item.id, item.title)
+                // activeSessionId 变化由 chat/index.tsx 的 useEffect 按
+                // §3.10 缓存判定矩阵决定是否触发 loadMessages
+                useChatStore.getState().setActiveSession(item.id)
             }}
         >
             <Text style={styles.title}>{item.title ?? '（无标题）'}</Text>

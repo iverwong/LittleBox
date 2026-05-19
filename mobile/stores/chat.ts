@@ -18,7 +18,12 @@
  */
 
 import { create } from 'zustand';
-import { listSessions, type SessionId } from '@/services/api/chat';
+import {
+  getMessages,
+  listSessions,
+  type MessageListItem,
+  type SessionId,
+} from '@/services/api/chat';
 import type {
   SseEvent,
   ChatStreamHandle,
@@ -46,6 +51,7 @@ export type Message = {
   content: string;
   status: MessageStatus;
   stoppedTag?: boolean;
+  finishReason?: string | null;
   createdAt: string;
 };
 
@@ -106,6 +112,20 @@ export type ChatStore = {
   _cleanupStream: (sid: SessionId, reason: ChatStreamCloseReason) => void;
 };
 
+function mapApiMessageToStore(item: MessageListItem, sid: SessionId): Message {
+  // 后端 messages.items 已过滤 discarded，全部按已固化态映射；
+  // finishReason 透传，便于 Step 5 stoppedTag 判定与 Step 6 A4 失败态识别。
+  return {
+    id: item.id,
+    sid,
+    role: item.role,
+    content: item.content,
+    status: 'committed',
+    finishReason: item.finish_reason,
+    createdAt: item.created_at,
+  };
+}
+
 const notImplemented = (name: string): Promise<never> =>
   Promise.reject(
     new Error(
@@ -157,14 +177,64 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   setActiveSession: (sid) => {
     set({ activeSessionId: sid });
   },
+  loadMessages: async (sid) => {
+    const result = await getMessages(sid, { limit: 50 });
+    if (!result.ok) {
+      throw new Error(`[chatStore] loadMessages failed: HTTP ${result.status}`);
+    }
+    const data = result.data;
 
-  loadMessages: (sid) => {
-    void sid;
-    return notImplemented('loadMessages');
+    set((state) => {
+      const nextMessages = new Map(state.messagesBySession);
+      nextMessages.set(sid, {
+        // 后端按 created_at desc 返回；前端配合 inverted FlatList，
+        // 数组首位 = newest，无需 reverse。
+        messages: data.items.map((item) => mapApiMessageToStore(item, sid)),
+        hasMore: data.next_cursor != null,
+        cursor: data.next_cursor,
+        lastFetchedAt: Date.now(),
+        // in_progress 顶层来自 Redis chat:lock:{sid}（权威态）；
+        // Step 2 仅写入，不接 Resume（Step 8 补 resumeOnEnter）。
+        inProgress: data.in_progress,
+        streamPhase: 'idle',
+      });
+      return { messagesBySession: nextMessages };
+    });
   },
-  loadMoreMessages: (sid) => {
-    void sid;
-    return notImplemented('loadMoreMessages');
+
+  loadMoreMessages: async (sid) => {
+    const bucket = get().messagesBySession.get(sid);
+    if (bucket == null || bucket.cursor == null) {
+      return;
+    }
+    const result = await getMessages(sid, {
+      cursor: bucket.cursor,
+      limit: 50,
+    });
+    if (!result.ok) {
+      throw new Error(
+        `[chatStore] loadMoreMessages failed: HTTP ${result.status}`,
+      );
+    }
+    const data = result.data;
+
+    set((state) => {
+      const prev = state.messagesBySession.get(sid);
+      if (prev == null) return {};
+      const nextMessages = new Map(state.messagesBySession);
+      nextMessages.set(sid, {
+        ...prev,
+        // inverted FlatList 模式，更老一批 append 到数组末尾。
+        messages: [
+          ...prev.messages,
+          ...data.items.map((item) => mapApiMessageToStore(item, sid)),
+        ],
+        hasMore: data.next_cursor != null,
+        cursor: data.next_cursor,
+        // lastFetchedAt 故意不更新：避免上滚加载更多变相延长 30s 缓存窗口。
+      });
+      return { messagesBySession: nextMessages };
+    });
   },
   sendMessage: (sid, content) => {
     void sid;
