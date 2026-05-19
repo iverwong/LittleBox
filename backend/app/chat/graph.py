@@ -33,6 +33,7 @@ from langchain_core.messages import (
 )
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, StateGraph
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chat.extractors import extract_finish_reason, extract_reasoning_content, extract_usage
@@ -82,6 +83,12 @@ async def persist_ai_turn(
     )
     db.add(msg)
     await db.flush()  # populate msg.id
+    # M8: ai_turn_counter 同事务 +1（SQL 列表达式，PG 行锁安全）
+    await db.execute(
+        update(Session)
+        .where(Session.id == sid)
+        .values(ai_turn_counter=Session.ai_turn_counter + 1)
+    )
     return msg.id
 
 

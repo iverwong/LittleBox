@@ -118,6 +118,73 @@ async def test_persist_ai_turn_accepts_intervention_type(db_session, child_user)
 
 
 # ---------------------------------------------------------------------------
+# ai_turn_counter increment (M8 Step 8)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ai_turn_counter_increments_after_each_turn(db_session, child_user):
+    """连续 3 轮后 counter == 3。"""
+    sid = uuid.uuid4()
+    session = Session(id=sid, child_user_id=child_user.id, title="test")
+    db_session.add(session)
+    await db_session.flush()
+
+    for i in range(3):
+        await persist_ai_turn(db_session, sid=sid, finish_reason="stop", content=f"reply{i}")
+        await db_session.flush()
+
+    row = await db_session.execute(
+        select(Session.ai_turn_counter).where(Session.id == sid)
+    )
+    assert row.scalar_one() == 3
+
+
+@pytest.mark.asyncio
+async def test_ai_turn_counter_starts_at_zero(db_session, child_user):
+    """新建 session 的 ai_turn_counter 默认值为 0。"""
+    sid = uuid.uuid4()
+    session = Session(id=sid, child_user_id=child_user.id, title="test")
+    db_session.add(session)
+    await db_session.flush()
+
+    row = await db_session.execute(
+        select(Session.ai_turn_counter).where(Session.id == sid)
+    )
+    assert row.scalar_one() == 0
+
+
+class TestSqlExpressionGuard:
+    """静态防御：persist_ai_turn 必须用 SQL 列表达式自增 ai_turn_counter。
+
+    M8-hotfix-2 偏差闭环。禁止退化为 Python 端读改写（+= / -= / old + 1）。
+    """
+
+    def test_persist_ai_turn_uses_sql_expression(self) -> None:
+        import inspect
+        import re
+        from app.chat import graph
+
+        source = inspect.getsource(graph.persist_ai_turn)
+
+        # 必须包含 SQL 列表达式自增：Session.ai_turn_counter + 1
+        assert re.search(r"Session\.ai_turn_counter\s*\+\s*1", source), (
+            "persist_ai_turn 必须用 SQL 列表达式自增 ai_turn_counter"
+        )
+
+        # 禁止 Python 端复合赋值（+=、-=）作用于 ai_turn_counter
+        assert not re.search(r"\.ai_turn_counter\s*[+\-]=", source), (
+            "禁止 Python 复合赋值修改 ai_turn_counter（会引入 read-modify-write 竞态）"
+        )
+
+        # 必须 import update（确保走 SQLAlchemy update() 而非 ORM attribute set）
+        graph_source = inspect.getsource(graph)
+        assert "from sqlalchemy import update" in graph_source, (
+            "graph.py 必须 import sqlalchemy.update"
+        )
+
+
+# ---------------------------------------------------------------------------
 # enqueue_audit — M6 stub
 # ---------------------------------------------------------------------------
 
