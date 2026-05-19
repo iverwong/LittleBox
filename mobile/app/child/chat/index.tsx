@@ -1,18 +1,22 @@
 /**
  * M7 · 子端主对话页 (/child/chat)。
  *
- * Step 1.4 范围：
- *   1. mount 时 loadSessions({ reset: true })，消费顶层 today_session_id 决定首屏
- *   2. today != null → setActiveSession(today) → 渲染消息区域占位 + 输入框占位
- *   3. today == null → 保持 activeSessionId=null → 渲染 WelcomeShell
- *   4. 顶部渲染 SessionList（历史 session）
+ * 当前实现累计范围：
+ *   - Step 1.4：mount loadSessions + today_session_id 决定首屏 + 顶部 SessionList
+ *   - Step 2.3：§3.10 缓存判定矩阵（30s 窗口）+ MessageList 渲染
+ *   - Step 3.2：输入区按 activeSessionId vs todaySessionId 三分支
+ *       · null → WelcomeShell 占满（不显示输入区）
+ *       · === todaySessionId → ChatInput 草稿态
+ *       · !== todaySessionId（历史）→ 「返回继续对话」图标按钮
  *
- * 后续 Step：消息列表（Step 2）、ChatInput（Step 3）、SSE sendMessage（Step 4a）。
+ * 后续 Step：SSE sendMessage（Step 4a）、token buffer（Step 4b）、Resume（Step 8）。
  */
+import { Ionicons } from '@expo/vector-icons'
 import { useEffect, useState } from 'react'
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
+import { ChatInput } from '@/components/chat/ChatInput'
 import { MessageList } from '@/components/chat/MessageList'
 import { SessionList } from '@/components/chat/SessionList'
 import { WelcomeContent } from '@/components/chat/WelcomeContent'
@@ -23,6 +27,7 @@ export default function ChatIndex() {
     const loadSessions = useChatStore((s) => s.loadSessions)
     const setActiveSession = useChatStore((s) => s.setActiveSession)
     const activeSessionId = useChatStore((s) => s.activeSessionId)
+    const todaySessionId = useChatStore((s) => s.todaySessionId)
 
     useEffect(() => {
         let cancelled = false
@@ -53,11 +58,9 @@ export default function ChatIndex() {
     // - 否则 → 整页 loading + 一次 GET
     useEffect(() => {
         if (activeSessionId == null) return
-
         const state = useChatStore.getState()
         const bucket = state.messagesBySession.get(activeSessionId)
         const hasActiveStream = state.activeStreams.has(activeSessionId)
-
         if (hasActiveStream) return
         if (bucket != null && Date.now() - bucket.lastFetchedAt < 30_000) return
 
@@ -78,6 +81,19 @@ export default function ChatIndex() {
         }
     }, [activeSessionId, loadMessages])
 
+    const handleBackToToday = () => {
+        if (todaySessionId != null) {
+            setActiveSession(todaySessionId)
+        } else {
+            // 边界：跨日且今日尚未发消息 → 清空 activeSessionId 触发 WelcomeShell
+            useChatStore.setState({ activeSessionId: null })
+        }
+    }
+
+    // 「可写态」包含 today==active==null（WelcomeShell + 首条消息触发隐式建 session）
+    const isTodayActive = activeSessionId === todaySessionId
+    const isHistoryActive = activeSessionId != null && activeSessionId !== todaySessionId
+
     return (
         <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
             <View style={styles.history}>
@@ -97,9 +113,30 @@ export default function ChatIndex() {
                 )}
             </View>
 
-            <View style={styles.inputPlaceholder}>
-                <Text style={styles.placeholderText}>输入框占位（Step 3 接 ChatInput）</Text>
-            </View>
+            {isTodayActive && (
+                <ChatInput
+                    onSend={(content) => {
+                        // Step 4a 接 chatStore.sendMessage(activeSessionId, content)
+                        console.log('[ChatIndex] send (stub)', { sid: activeSessionId, content })
+                    }}
+                />
+            )}
+            {isHistoryActive && (
+                <View style={styles.backToTodayBar}>
+                    <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="返回继续对话"
+                        onPress={handleBackToToday}
+                        hitSlop={8}
+                        style={({ pressed }) => [
+                            styles.backToTodayBtn,
+                            pressed && styles.backToTodayBtnPressed,
+                        ]}
+                    >
+                        <Ionicons name="return-down-back" size={20} color="#FFFFFF" />
+                    </Pressable>
+                </View>
+            )}
         </SafeAreaView>
     )
 }
@@ -122,11 +159,24 @@ const styles = StyleSheet.create({
     },
     main: { flex: 1 },
     loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-    placeholderText: { color: '#998260' },
-    inputPlaceholder: {
-        padding: 16,
+    backToTodayBar: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingVertical: 12,
         borderTopWidth: 1,
         borderTopColor: '#E5DBC9',
+        backgroundColor: '#F2EADF',
+    },
+    backToTodayBtn: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: '#998260',
         alignItems: 'center',
+        justifyContent: 'center',
+    },
+    backToTodayBtnPressed: {
+        opacity: 0.7,
     },
 })
