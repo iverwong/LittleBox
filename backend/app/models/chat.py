@@ -42,6 +42,12 @@ class Session(BaseMixin, Base):
         nullable=False,
         comment="阈值命中 → True，下一轮 user 到达时阻塞压缩",
     )
+    ai_turn_counter: Mapped[int] = mapped_column(
+        default=0,
+        server_default="0",
+        nullable=False,
+        comment="LLM AI 回复累积轮次；persist_ai_turn 同事务 +1",
+    )
 
     # relationships
     messages: Mapped[list["Message"]] = relationship(

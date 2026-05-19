@@ -118,6 +118,48 @@ async def test_persist_ai_turn_accepts_intervention_type(db_session, child_user)
 
 
 # ---------------------------------------------------------------------------
+# ai_turn_counter increment (M8 Step 8)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ai_turn_counter_increments_after_each_turn(db_session, child_user):
+    """连续 3 轮后 counter == 3。"""
+    sid = uuid.uuid4()
+    session = Session(id=sid, child_user_id=child_user.id, title="test")
+    db_session.add(session)
+    await db_session.flush()
+
+    for i in range(3):
+        await persist_ai_turn(db_session, sid=sid, finish_reason="stop", content=f"reply{i}")
+        await db_session.flush()
+
+    row = await db_session.execute(
+        select(Session.ai_turn_counter).where(Session.id == sid)
+    )
+    assert row.scalar_one() == 3
+
+
+@pytest.mark.asyncio
+async def test_ai_turn_counter_starts_at_zero(db_session, child_user):
+    """新建 session 的 ai_turn_counter 默认值为 0。"""
+    sid = uuid.uuid4()
+    session = Session(id=sid, child_user_id=child_user.id, title="test")
+    db_session.add(session)
+    await db_session.flush()
+
+    row = await db_session.execute(
+        select(Session.ai_turn_counter).where(Session.id == sid)
+    )
+    assert row.scalar_one() == 0
+
+
+# 并发行锁测试在此文件省略：PG 行锁是数据库保证，
+# _session_maker() 违反测试隔离纪律（conftest 黑名单）。
+# 顺序调用 3 轮 counter==3 已覆盖增量语义。并发安全由 PG 行锁保障。
+
+
+# ---------------------------------------------------------------------------
 # enqueue_audit — M6 stub
 # ---------------------------------------------------------------------------
 
