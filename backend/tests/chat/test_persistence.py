@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chat.graph import enqueue_audit, persist_ai_turn
 from app.models.chat import Message, Session
@@ -182,6 +183,74 @@ class TestSqlExpressionGuard:
         assert "from sqlalchemy import update" in graph_source, (
             "graph.py 必须 import sqlalchemy.update"
         )
+
+
+class TestConcurrentRowLock:
+    """M8-hotfix-2 偏差闭环：真并发验证 PG 行锁 + SQL 列表达式原子性。"""
+
+    @pytest.mark.asyncio
+    async def test_persist_ai_turn_concurrent_row_lock(
+        self, concurrent_db_sessions, engine,
+    ) -> None:
+        """5 协程并发调用 persist_ai_turn 同一 session_id，
+        最终 ai_turn_counter 必须等于并发数（PG 行锁 + SQL 列表达式原子性）。"""
+        import asyncio
+
+        from app.models.accounts import Family, FamilyMember, User
+        from app.models.enums import UserRole
+
+        sessions = await concurrent_db_sessions(
+            count=6,  # 1 setup + 5 concurrent
+            tables=["messages", "sessions", "users", "family_members", "families"],
+        )
+        setup_db, *worker_dbs = sessions
+
+        # setup: family + user + session row
+        fam = Family()
+        setup_db.add(fam)
+        await setup_db.flush()
+        child = User(
+            family_id=fam.id, role=UserRole.child,
+            phone="conc-13800", is_active=True,
+        )
+        setup_db.add(child)
+        await setup_db.flush()
+        setup_db.add(FamilyMember(
+            family_id=fam.id, user_id=child.id, role=UserRole.child,
+        ))
+        await setup_db.flush()
+        session_row = Session(id=uuid.uuid4(), child_user_id=child.id, title="test")
+        setup_db.add(session_row)
+        await setup_db.commit()
+        sid = session_row.id
+
+        # 并发执行：5 个独立 connection 同时 persist_ai_turn
+        async def _one_turn(db):
+            await persist_ai_turn(
+                db, sid, finish_reason="stop", content="concurrent test turn",
+            )
+            await db.commit()
+
+        await asyncio.gather(*[_one_turn(db) for db in worker_dbs])
+
+        # 验证 counter 严格等于并发数
+        from app.db import dispose_engine
+
+        async with AsyncSession(engine) as check:
+            result = await check.execute(
+                select(Session.ai_turn_counter).where(Session.id == sid)
+            )
+            counter = result.scalar_one()
+            assert counter == 5, (
+                f"PG 行锁失败：5 并发后 counter={counter}（应为 5）"
+            )
+            # 同时验证 messages 表写入了 5 条 AI message
+            msg_count = await check.execute(
+                select(Message).where(
+                    Message.session_id == sid, Message.role == MessageRole.ai,
+                )
+            )
+            assert len(msg_count.scalars().all()) == 5
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,8 @@
 测试隔离铁律（M6-patch 后强制纪律）：
 所有涉及 DB / Redis 的测试**必须**通过本文件的 fixture 进入:
 - DB: db_session (savepoint rollback, 作用域 function)
+      concurrent_db_sessions (N 独立 AsyncSession, 真 commit + TRUNCATE 清空，
+      用于真并发验证场景。与 db_session 互斥使用。)
 - HTTP: api_client (ASGI in-process)
 - Redis: redis_client (fakeredis, 作用域 function)
 
@@ -20,6 +22,7 @@
 - redis.Redis(...) 显式连真实 host
 - from app.config import settings 后用 settings.database_url 自建 engine
 - flushdb() / flushall()
+- db_session 与 concurrent_db_sessions 混用（savepoint 语义不兼容）
 
 双层运行时防御:
 - 模块级 _test_url() 断言（本文件顶部）
@@ -196,6 +199,71 @@ async def db_session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
                 "pending redis ops not flushed — use commit_with_redis() "
                 "instead of bare db.commit()"
             )
+
+
+# ---------- function scope：真并发验证（独立 connection + TRUNCATE） ----------
+
+
+@pytest_asyncio.fixture
+async def concurrent_db_sessions(
+    request: pytest.FixtureRequest,
+    engine: AsyncEngine,
+) -> AsyncGenerator:
+    """提供 N 个独立 connection 的 AsyncSession，用于真并发场景验证。
+
+    与 db_session fixture 互斥使用：db_session 走 savepoint + outer rollback
+    （逻辑清空），本 fixture 走真 commit + TRUNCATE（物理清空）。混用会语义错乱。
+
+    使用示例:
+        sessions = await concurrent_db_sessions(
+            count=5,
+            tables=["sessions", "messages", "users", "families"],
+        )
+        async def worker(db): ...
+        await asyncio.gather(*[worker(s) for s in sessions])
+    """
+    if "db_session" in request.fixturenames:
+        pytest.fail(
+            "concurrent_db_sessions 与 db_session 互斥使用 — "
+            "前者真 commit + TRUNCATE，后者 savepoint + rollback"
+        )
+
+    db_name = str(engine.url.database or "")
+    assert "_test" in db_name, (
+        f"concurrent_db_sessions 仅可用于测试库（库名须含 '_test'），"
+        f"实际连到 {db_name}"
+    )
+
+    created_sessions: list[AsyncSession] = []
+    dirtied_tables: list[str] = []
+
+    async def _make(count: int, tables: list[str]) -> list[AsyncSession]:
+        nonlocal dirtied_tables
+        if dirtied_tables:
+            raise RuntimeError("concurrent_db_sessions 不支持同一测试内多次调用 _make")
+        if not tables:
+            raise ValueError("tables 不可为空")
+        dirtied_tables = list(tables)
+        for _ in range(count):
+            session = AsyncSession(engine, expire_on_commit=False)
+            created_sessions.append(session)
+        return created_sessions
+
+    try:
+        yield _make
+    finally:
+        for s in created_sessions:
+            try:
+                await s.close()
+            except Exception:
+                pass
+        if dirtied_tables:
+            tables_sql = ", ".join(f'"{t}"' for t in dirtied_tables)
+            async with engine.connect() as conn:
+                await conn.execute(
+                    text(f"TRUNCATE TABLE {tables_sql} RESTART IDENTITY CASCADE")
+                )
+                await conn.commit()
 
 
 # ---------- function scope：fakeredis ----------
