@@ -28,6 +28,7 @@ export default function ChatIndex() {
     const setActiveSession = useChatStore((s) => s.setActiveSession)
     const activeSessionId = useChatStore((s) => s.activeSessionId)
     const todaySessionId = useChatStore((s) => s.todaySessionId)
+    const sendMessage = useChatStore((s) => s.sendMessage)
 
     useEffect(() => {
         let cancelled = false
@@ -116,8 +117,7 @@ export default function ChatIndex() {
             {isTodayActive && (
                 <ChatInput
                     onSend={(content) => {
-                        // Step 4a 接 chatStore.sendMessage(activeSessionId, content)
-                        console.log('[ChatIndex] send (stub)', { sid: activeSessionId, content })
+                        void sendMessage(activeSessionId, content)
                     }}
                 />
             )}

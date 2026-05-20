@@ -1,22 +1,17 @@
 /**
- * M7 · SSE 协议解析器 + 流式握手。
+ * M7 · SSE 协议解析器 + 流式握手（RN 平台版，react-native-sse）。
  *
- * 消费 M6 + M6-patch3 已锁的 7+1 事件协议：
- *   session_meta → [compression_progress] → [thinking_start → thinking_end] → delta×N → end | stopped | error
+ * 历史背景：原版基于 fetch + response.body ReadableStream，但 RN Hermes 默认
+ * 不开启流式 fetch（response.body 始终为 null），导致客户端读不到任何 event。
+ * 详见偏差记录：见 M7 偏差记录页。
  *
- * 职责：transport 层 + 协议解码 + 首帧握手超时。
- * 非职责：Resume、错误反馈映射、buffer 节流、状态机（由 store / hook 接管）。
- *
- * 关键纪律：
- *   - thinking_start / thinking_end payload 是空对象 {}，仅匹配 event.type
- *   - stopped.aid 可缺（StopNoAi 快路径），解构必须可选
- *   - error.code 两枚举：CompressionError / InternalError；M7 内 store 统一进 A4
- *   - 首帧（session_meta）超时默认 5s → onClose('firstFrameTimeout')，由 store.resumeOnTimeout 接管
- *   - body 自然关闭未见终止帧 → onClose('error')，视为协议异常断流
+ * 本版改用 react-native-sse（库内部用 XHR + 自行解析 SSE 协议），协议事件 /
+ * 状态机 / 首帧超时 / abort / close reason 等上层契约不变。
  */
 
+import EventSource from 'react-native-sse';
 import { useAuthStore } from '@/stores/auth';
-import { BASE_URL, ensureDeviceId } from '@/services/api/client';
+import { BASE_URL, handle401 } from '@/services/api/client';
 
 export type SseEvent =
   | { type: 'session_meta'; session_id: string; hid: string }
@@ -28,18 +23,6 @@ export type SseEvent =
   | { type: 'stopped'; finish_reason: 'user_stopped'; aid?: string }
   | { type: 'error'; message: string; code?: string };
 
-/**
- * onClose 回调原因：
- *   - end / stopped / error: 服务端 emit 对应终止帧
- *   - abort: 调用方主动 handle.abort()（用户点停止 / 退出页面）
- *   - firstFrameTimeout: 首帧 session_meta 在 firstFrameTimeoutMs 内未到达
- *
- * Store sendMessage 闭包应当：
- *   - 'firstFrameTimeout' → 调 resumeOnTimeout(sid)（Step 8 实现）
- *   - 'error' 且已见 server error 帧 → 进 A4 失败态（按 SseEvent.error.code 区分文案，M7 内不做）
- *   - 'error' 且未见任何 event → 网络层失败，进 A4 失败态
- *   - 'abort' → 不变更 UI（用户语义）
- */
 export type ChatStreamCloseReason =
   | 'end'
   | 'stopped'
@@ -52,19 +35,34 @@ export type ChatStreamHandle = {
 };
 
 export type OpenChatStreamArgs = {
-  /** null = 触发后端隐式建 session（首条消息或日切重判后） */
   sid: string | null;
-  /** 用户消息内容；regenerate 路径下应为空字符串 */
   content: string;
-  /** 仅 regenerate 路径携带，需等于最后一个 active human msg id */
   regenerateFor?: string | null;
   onEvent: (e: SseEvent) => void;
   onClose: (reason: ChatStreamCloseReason) => void;
-  /** 首帧（session_meta）握手超时，默认 5000ms；传 0 表示禁用 */
   firstFrameTimeoutMs?: number;
 };
 
 const CHAT_STREAM_PATH = '/me/chat/stream';
+
+type CustomEventName =
+  | 'session_meta'
+  | 'compression_progress'
+  | 'thinking_start'
+  | 'thinking_end'
+  | 'delta'
+  | 'end'
+  | 'stopped'
+  | 'error';
+
+function safeParseData(raw: unknown): Record<string, unknown> {
+  if (typeof raw !== 'string' || !raw) return {};
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
 
 export function openChatStream(args: OpenChatStreamArgs): ChatStreamHandle {
   const {
@@ -76,10 +74,10 @@ export function openChatStream(args: OpenChatStreamArgs): ChatStreamHandle {
     firstFrameTimeoutMs = 5000,
   } = args;
 
-  const controller = new AbortController();
   let closed = false;
   let firstFrameSeen = false;
   let firstFrameTimer: ReturnType<typeof setTimeout> | null = null;
+  let es: EventSource<CustomEventName> | null = null;
 
   const close = (reason: ChatStreamCloseReason) => {
     if (closed) return;
@@ -89,7 +87,7 @@ export function openChatStream(args: OpenChatStreamArgs): ChatStreamHandle {
       firstFrameTimer = null;
     }
     try {
-      controller.abort();
+      es?.close();
     } catch {
       // ignore
     }
@@ -103,180 +101,143 @@ export function openChatStream(args: OpenChatStreamArgs): ChatStreamHandle {
     }, firstFrameTimeoutMs);
   }
 
-  (async () => {
-    try {
-      const token = useAuthStore.getState().token;
-      const deviceId = await ensureDeviceId();
+  const { token, deviceId } = useAuthStore.getState();
 
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        Accept: 'text/event-stream',
-        'X-Device-Id': deviceId,
-      };
-      if (token) headers.Authorization = `Bearer ${token}`;
+  if (!deviceId) {
+    console.warn('[chatStream] missing deviceId, aborting');
+    // 必须延后 close 到下一 tick,避免在 return handle 之前就触发 onClose
+    setTimeout(() => close('error'), 0);
+    return { abort: () => close('abort') };
+  }
 
-      const body = JSON.stringify({
-        content,
-        session_id: sid,
-        regenerate_for: regenerateFor,
-      });
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Accept: 'text/event-stream',
+    'X-Device-Id': deviceId,
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
 
-      const response = await fetch(`${BASE_URL}${CHAT_STREAM_PATH}`, {
-        method: 'POST',
-        headers,
-        body,
-        signal: controller.signal,
-      });
+  const body = JSON.stringify({
+    content,
+    session_id: sid,
+    regenerate_for: regenerateFor,
+  });
 
-      if (!response.ok || !response.body) {
-        // 4xx / 5xx：由 store 通过 onClose('error') 后据上下文派生反馈
-        // （Step 7 useChatErrorHandler 接 401/429/403/404/409 等）
-        // 这里不解析 response body 为 SseEvent，避免与协议 error 帧混淆
-        console.warn('[chatStream] non-2xx response', response.status);
-        close('error');
-        return;
-      }
+  es = new EventSource<CustomEventName>(`${BASE_URL}${CHAT_STREAM_PATH}`, {
+    method: 'POST',
+    headers,
+    body,
+    pollingInterval: 0, // 关闭自动重连;Resume 由 store 层 Step 8 控制
+  });
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let buffer = '';
-
-      while (true) {
-        if (closed) {
-          try {
-            await reader.cancel();
-          } catch {
-            // ignore
-          }
-          break;
-        }
-
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-
-        let sepIdx: number;
-        while ((sepIdx = buffer.indexOf('\n\n')) >= 0) {
-          const block = buffer.slice(0, sepIdx);
-          buffer = buffer.slice(sepIdx + 2);
-
-          const parsed = parseEventBlock(block);
-          if (!parsed) continue;
-
-          if (!firstFrameSeen) {
-            firstFrameSeen = true;
-            if (firstFrameTimer) {
-              clearTimeout(firstFrameTimer);
-              firstFrameTimer = null;
-            }
-          }
-
-          onEvent(parsed);
-
-          if (parsed.type === 'end') {
-            close('end');
-            return;
-          }
-          if (parsed.type === 'stopped') {
-            close('stopped');
-            return;
-          }
-          if (parsed.type === 'error') {
-            close('error');
-            return;
-          }
-        }
-      }
-
-      // body 自然关闭未见终止帧 → 视为协议异常断流
-      if (!closed) close('error');
-    } catch (err) {
-      if (closed) return;
-      if (controller.signal.aborted) {
-        close('abort');
-      } else {
-        console.warn('[chatStream] network error', err);
-        close('error');
-      }
+  const markFirstFrame = () => {
+    if (firstFrameSeen) return;
+    firstFrameSeen = true;
+    if (firstFrameTimer) {
+      clearTimeout(firstFrameTimer);
+      firstFrameTimer = null;
     }
-  })();
+  };
+
+  es.addEventListener('session_meta', (event) => {
+    if (closed) return;
+    markFirstFrame();
+    const payload = safeParseData((event as { data?: unknown }).data);
+    onEvent({
+      type: 'session_meta',
+      session_id: String(payload.session_id ?? ''),
+      hid: String(payload.hid ?? ''),
+    });
+  });
+
+  es.addEventListener('compression_progress', (event) => {
+    if (closed) return;
+    const payload = safeParseData((event as { data?: unknown }).data);
+    onEvent({
+      type: 'compression_progress',
+      stage: 'compressing',
+      message: typeof payload.message === 'string' ? payload.message : '',
+    });
+  });
+
+  es.addEventListener('thinking_start', () => {
+    if (closed) return;
+    onEvent({ type: 'thinking_start' });
+  });
+
+  es.addEventListener('thinking_end', () => {
+    if (closed) return;
+    onEvent({ type: 'thinking_end' });
+  });
+
+  es.addEventListener('delta', (event) => {
+    if (closed) return;
+    const payload = safeParseData((event as { data?: unknown }).data);
+    onEvent({
+      type: 'delta',
+      content: typeof payload.content === 'string' ? payload.content : '',
+    });
+  });
+
+  es.addEventListener('end', (event) => {
+    if (closed) return;
+    const payload = safeParseData((event as { data?: unknown }).data);
+    onEvent({
+      type: 'end',
+      finish_reason: String(payload.finish_reason ?? ''),
+      aid: String(payload.aid ?? ''),
+    });
+    close('end');
+  });
+
+  es.addEventListener('stopped', (event) => {
+    if (closed) return;
+    const payload = safeParseData((event as { data?: unknown }).data);
+    onEvent({
+      type: 'stopped',
+      finish_reason: 'user_stopped',
+      aid: typeof payload.aid === 'string' ? payload.aid : undefined,
+    });
+    close('stopped');
+  });
+
+  // 'error' 两类来源:
+  // 1) 业务 error 帧(后端 emit event: error,带 data JSON,含 code: CompressionError/InternalError)
+  // 2) transport 层错误(HTTP 4xx/5xx / 网络断开 / 解析失败,data 为 null,带 xhrStatus / message)
+  es.addEventListener('error', (event) => {
+    if (closed) return;
+    const ev = event as {
+      data?: unknown;
+      xhrStatus?: number;
+      message?: string;
+      type?: string;
+    };
+
+    if (typeof ev.data === 'string' && ev.data) {
+      // 业务 error 帧
+      const payload = safeParseData(ev.data);
+      onEvent({
+        type: 'error',
+        message: typeof payload.message === 'string' ? payload.message : '',
+        code: typeof payload.code === 'string' ? payload.code : undefined,
+      });
+      close('error');
+      return;
+    }
+
+    // transport 错误
+    console.warn('[chatStream] transport error', {
+      xhrStatus: ev.xhrStatus,
+      message: ev.message,
+      type: ev.type,
+    });
+    if (ev.xhrStatus === 401) {
+      void handle401();
+    }
+    close('error');
+  });
 
   return {
     abort: () => close('abort'),
   };
-}
-
-function parseEventBlock(block: string): SseEvent | null {
-  let eventName: string | null = null;
-  const dataLines: string[] = [];
-
-  for (const rawLine of block.split('\n')) {
-    const line = rawLine.replace(/\r$/, ''); // CRLF 兼容
-    if (!line || line.startsWith(':')) continue; // 空行 / 注释
-    const colonIdx = line.indexOf(':');
-    if (colonIdx < 0) continue;
-    const field = line.slice(0, colonIdx);
-    let val = line.slice(colonIdx + 1);
-    if (val.startsWith(' ')) val = val.slice(1); // SSE 规范：值首字符空格去掉
-    if (field === 'event') eventName = val;
-    else if (field === 'data') dataLines.push(val);
-  }
-
-  if (!eventName) return null;
-
-  const dataStr = dataLines.join('\n');
-  let payload: Record<string, unknown> = {};
-  if (dataStr) {
-    try {
-      payload = JSON.parse(dataStr) as Record<string, unknown>;
-    } catch {
-      return null;
-    }
-  }
-
-  switch (eventName) {
-    case 'session_meta':
-      return {
-        type: 'session_meta',
-        session_id: String(payload.session_id ?? ''),
-        hid: String(payload.hid ?? ''),
-      };
-    case 'compression_progress':
-      return {
-        type: 'compression_progress',
-        stage: 'compressing',
-        message: typeof payload.message === 'string' ? payload.message : '',
-      };
-    case 'thinking_start':
-      return { type: 'thinking_start' };
-    case 'thinking_end':
-      return { type: 'thinking_end' };
-    case 'delta':
-      return {
-        type: 'delta',
-        content: typeof payload.content === 'string' ? payload.content : '',
-      };
-    case 'end':
-      return {
-        type: 'end',
-        finish_reason: String(payload.finish_reason ?? ''),
-        aid: String(payload.aid ?? ''),
-      };
-    case 'stopped':
-      return {
-        type: 'stopped',
-        finish_reason: 'user_stopped',
-        aid: typeof payload.aid === 'string' ? payload.aid : undefined,
-      };
-    case 'error':
-      return {
-        type: 'error',
-        message: typeof payload.message === 'string' ? payload.message : '',
-        code: typeof payload.code === 'string' ? payload.code : undefined,
-      };
-    default:
-      // 未知事件类型安全忽略（协议扩展兼容）
-      return null;
-  }
 }

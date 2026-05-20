@@ -43,13 +43,23 @@ export function setOnUnauthorizedRedirect(cb: () => void) {
   onUnauthorizedRedirect = cb;
 }
 
+/**
+ * 统一的 401 失效处理入口，供 chatStream 等不走 request() 通道的请求复用。
+ * 顺序与 request() 内部一致：先 clearSession（清 token/role/userId），
+ * 再 onUnauthorizedRedirect（跳 landing）。
+ */
+export async function handle401(): Promise<void> {
+  if (on401Handler) await on401Handler();
+  if (onUnauthorizedRedirect) onUnauthorizedRedirect();
+}
+
 // ---------------------------------------------------------------------------
 // SecureStore hydration
 // ---------------------------------------------------------------------------
 
 /**
  * 并发从 SecureStore 取 4 个 auth keys。
- * deviceId 缺失时调用 ensureDeviceId 生成并写入。
+ * deviceId 缺失时调用 getOrCreateDeviceId 生成并写入。
  */
 async function hydrateFromSecureStore(): Promise<{
   token: string | null;
@@ -64,16 +74,19 @@ async function hydrateFromSecureStore(): Promise<{
     SecureStore.getItemAsync('auth.deviceId'),
   ]);
 
-  let finalDeviceId: string = deviceId ?? (await ensureDeviceId());
+  let finalDeviceId: string = deviceId ?? (await getOrCreateDeviceId());
 
   return { token, role, userId, deviceId: finalDeviceId };
 }
 
 /**
- * SecureStore 缺失 deviceId 时生成 UUID 并写入。
+ * 读取 SecureStore 中的 deviceId；不存在时生成 UUID 写入。
+ * 幂等：多次调用返回同一 ID（除非中间走 resetDeviceId 显式 rotate）。
  * 使用 expo-crypto 而非全局 crypto.randomUUID（Hermes 无此 API）。
  */
-export async function ensureDeviceId(): Promise<string> {
+export async function getOrCreateDeviceId(): Promise<string> {
+  const existing = await SecureStore.getItemAsync('auth.deviceId');
+  if (existing) return existing;
   const id = Crypto.randomUUID();
   await SecureStore.setItemAsync('auth.deviceId', id);
   return id;
@@ -136,7 +149,7 @@ async function request<T>(
     'Content-Type': 'application/json',
     // token 为 null/undefined/falsy 时不注入 Authorization，避免 "Bearer undefined"
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    // deviceId 始终注入（ensureDeviceId 在 hydrate 时已保证有值）
+    // deviceId getOrCreateDeviceId 在 hydrate 时已保证有值）
     ...(deviceId ? { 'X-Device-Id': deviceId } : {}),
   };
 

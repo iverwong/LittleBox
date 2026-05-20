@@ -1,20 +1,18 @@
 /**
  * M7 · 聊天 store。
  *
- * Step 1.3 骨架范围：
- *   - loadSessions：消费 GET /me/sessions 顶层 today_session_id + sessions[]
- *   - setActiveSession：切换 activeSessionId
- *   - _cleanupStream：从 activeStreams 删 + inProgress=false + streamPhase='idle'
- *   - _onSseEvent：空骨架仅 console.log（Step 4a 接入完整事件处理）
+ * Step 4a.1 范围（在 Step 1.3 骨架 + Step 2 loadMessages 基础上叠加）：
+ * - sendMessage：乐观插入 user + AI 占位 → openChatStream → handle 写入 activeStreams
+ * - _onSseEvent：完整 7+1 事件处理（含 session_meta sid migrate + delta 累加 + phase 切换）
+ * - _cleanupStream：扩展为 message status 收束（end/stopped/error/abort/firstFrameTimeout）
  *
- * 其余 actions（loadMessages/sendMessage/regenerate/stopStream/resumeOnEnter/
- * resumeOnTimeout/deleteSession/loadMoreMessages）留 stub，保 typecheck 通过，
- * 由 Step 2-8 增量实现。
- *
- * 关键纪律（不可在 1.3 偏离）：
- *   - Map 必须不可变更新（new Map(prev).set(...)）以触发 React re-render
- *   - inProgress 仅 UI hint；权威态以 GET messages 顶层 in_progress + 末行 role 为准
- *   - token buffer 不进 store（组件级 ref，详见 Step 4b useStreamBuffer）
+ * 关键纪律：
+ * - Map 必须不可变更新（new Map(prev).set(...)）以触发 React re-render
+ * - inProgress 仅 UI hint；权威态以 GET messages 顶层 in_progress + 末行 role 为准
+ * - token buffer 不进 store（Step 4b 在组件级 ref 实现）
+ * - PENDING_SESSION_KEY 为 sid=null 路径的临时桶 key；session_meta 必 migrate 到真 sid
+ * - Stream lifecycle：sendMessage 闭包用 ctx.storeKey 持有「当前 store key」，
+ *   session_meta migrate 时 _onSseEvent 返回新 key，由 onEvent 闭包更新 ctx
  */
 
 import { create } from 'zustand';
@@ -24,10 +22,11 @@ import {
   type MessageListItem,
   type SessionId,
 } from '@/services/api/chat';
-import type {
-  SseEvent,
-  ChatStreamHandle,
-  ChatStreamCloseReason,
+import {
+  openChatStream,
+  type SseEvent,
+  type ChatStreamHandle,
+  type ChatStreamCloseReason,
 } from '@/lib/chatStream';
 
 export type MessageId = string;
@@ -45,7 +44,8 @@ export type StreamPhase =
   | 'interrupted';
 
 export type Message = {
-  id: MessageId;
+  id: MessageId; // React key；流式期间为 temp_*，loadMessages 拉回为真实 id
+  serverId?: string; // 后端持久化 id（user→session_meta.hid，ai→end.aid / stopped.aid）
   sid: SessionId;
   role: MessageRole;
   content: string;
@@ -57,8 +57,8 @@ export type Message = {
 
 export type SessionMeta = {
   id: SessionId;
-  title: string | null; // backend schema: str | None，标题为空时由 UI 兜底显示
-  lastActiveAt: string; // ISO datetime
+  title: string | null;
+  lastActiveAt: string;
 };
 
 export type SessionMessageState = {
@@ -74,6 +74,8 @@ export type ActiveStream = {
   sid: SessionId;
   handle: ChatStreamHandle;
   startedAt: number;
+  tempUserId: MessageId;
+  tempAiId: MessageId;
 };
 
 export type ResumeBranch =
@@ -83,21 +85,19 @@ export type ResumeBranch =
   | { type: 'A4Late' };
 
 export type ChatStore = {
-  sessions: SessionMeta[]; // 仅历史，永不含今日（后端 sessions[] 已过滤）
+  sessions: SessionMeta[];
   sessionsCursor: string | null;
   sessionsHasMore: boolean;
 
-  todaySessionId: SessionId | null; // 来自 GET /me/sessions 顶层
+  todaySessionId: SessionId | null;
   activeSessionId: SessionId | null;
 
   messagesBySession: Map<SessionId, SessionMessageState>;
   activeStreams: Map<SessionId, ActiveStream>;
 
-  // Step 1.3 实现
   loadSessions: (opts?: { reset?: boolean }) => Promise<void>;
   setActiveSession: (sid: SessionId | null) => void;
 
-  // 后续 Step 增量实现，1.3 留 stub
   loadMessages: (sid: SessionId) => Promise<void>;
   loadMoreMessages: (sid: SessionId) => Promise<void>;
   sendMessage: (sid: SessionId | null, content: string) => Promise<void>;
@@ -107,16 +107,37 @@ export type ChatStore = {
   resumeOnTimeout: (sid: SessionId) => Promise<ResumeBranch>;
   deleteSession: (sid: SessionId) => Promise<void>;
 
-  // SSE 内部
-  _onSseEvent: (sid: SessionId, event: SseEvent) => void;
-  _cleanupStream: (sid: SessionId, reason: ChatStreamCloseReason) => void;
+  /**
+   * SSE event handler.
+   * 返回值：session_meta migrate 时返回新 storeKey；其他事件返回 void。
+   * 由 sendMessage 闭包通过 ctx.storeKey 持有最新 key，避免 onEvent 闭包失效。
+   */
+  _onSseEvent: (storeKey: SessionId, event: SseEvent) => SessionId | void;
+  _cleanupStream: (storeKey: SessionId, reason: ChatStreamCloseReason) => void;
 };
 
+// sid=null 路径的临时桶 key；session_meta 到来时必 migrate 到真实 sid
+export const PENDING_SESSION_KEY: SessionId = '__pending__';
+
+function genTempId(prefix: 'human' | 'ai'): MessageId {
+  return `temp_${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function emptyBucket(): SessionMessageState {
+  return {
+    messages: [],
+    hasMore: false,
+    cursor: null,
+    lastFetchedAt: Date.now(),
+    inProgress: false,
+    streamPhase: 'idle',
+  };
+}
+
 function mapApiMessageToStore(item: MessageListItem, sid: SessionId): Message {
-  // 后端 messages.items 已过滤 discarded，全部按已固化态映射；
-  // finishReason 透传，便于 Step 5 stoppedTag 判定与 Step 6 A4 失败态识别。
   return {
     id: item.id,
+    serverId: item.id,
     sid,
     role: item.role,
     content: item.content,
@@ -149,8 +170,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const result = await listSessions({ cursor, limit: 15 });
 
     if (!result.ok) {
-      // 401/5xx 由 API client 层全局兜底（M5 sinks）；4xx 业务码在 Step 7 映射 UI 反馈
-      // 1.3 阶段先 throw，便于调用方（Step 1.4 chat/index.tsx）感知失败
       throw new Error(`[chatStore] loadSessions failed: HTTP ${result.status}`);
     }
 
@@ -177,6 +196,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   setActiveSession: (sid) => {
     set({ activeSessionId: sid });
   },
+
   loadMessages: async (sid) => {
     const result = await getMessages(sid, { limit: 50 });
     if (!result.ok) {
@@ -187,14 +207,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set((state) => {
       const nextMessages = new Map(state.messagesBySession);
       nextMessages.set(sid, {
-        // 后端按 created_at desc 返回；前端配合 inverted FlatList，
-        // 数组首位 = newest，无需 reverse。
         messages: data.items.map((item) => mapApiMessageToStore(item, sid)),
         hasMore: data.next_cursor != null,
         cursor: data.next_cursor,
         lastFetchedAt: Date.now(),
-        // in_progress 顶层来自 Redis chat:lock:{sid}（权威态）；
-        // Step 2 仅写入，不接 Resume（Step 8 补 resumeOnEnter）。
         inProgress: data.in_progress,
         streamPhase: 'idle',
       });
@@ -224,23 +240,95 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const nextMessages = new Map(state.messagesBySession);
       nextMessages.set(sid, {
         ...prev,
-        // inverted FlatList 模式，更老一批 append 到数组末尾。
         messages: [
           ...prev.messages,
           ...data.items.map((item) => mapApiMessageToStore(item, sid)),
         ],
         hasMore: data.next_cursor != null,
         cursor: data.next_cursor,
-        // lastFetchedAt 故意不更新：避免上滚加载更多变相延长 30s 缓存窗口。
       });
       return { messagesBySession: nextMessages };
     });
   },
-  sendMessage: (sid, content) => {
-    void sid;
-    void content;
-    return notImplemented('sendMessage');
+
+  sendMessage: async (sid, content) => {
+    const trimmed = content.trim();
+    if (!trimmed) return;
+
+    const initialKey: SessionId = sid ?? PENDING_SESSION_KEY;
+
+    // 同一 storeKey 已有 active stream → 静默 ignore；Step 7 接 409 兜底
+    if (get().activeStreams.has(initialKey)) {
+      console.warn(
+        '[chatStore] sendMessage: stream already active on',
+        initialKey,
+      );
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const tempUserId = genTempId('human');
+    const tempAiId = genTempId('ai');
+
+    const userMsg: Message = {
+      id: tempUserId,
+      sid: initialKey,
+      role: 'human',
+      content: trimmed,
+      status: 'committed',
+      createdAt: now,
+    };
+    const aiPlaceholder: Message = {
+      id: tempAiId,
+      sid: initialKey,
+      role: 'ai',
+      content: '',
+      status: 'streaming',
+      createdAt: now,
+    };
+
+    // 乐观插入（inverted FlatList：messages[0] = newest）
+    set((prev) => {
+      const next = new Map(prev.messagesBySession);
+      const bucket = next.get(initialKey) ?? emptyBucket();
+      next.set(initialKey, {
+        ...bucket,
+        messages: [aiPlaceholder, userMsg, ...bucket.messages],
+        inProgress: true,
+        streamPhase: 'thinking',
+        lastFetchedAt: Date.now(),
+      });
+      return { messagesBySession: next };
+    });
+
+    // 闭包内可变 ctx，承载 session_meta migrate 后的新 storeKey
+    const ctx: { storeKey: SessionId } = { storeKey: initialKey };
+
+    const handle = openChatStream({
+      sid,
+      content: trimmed,
+      onEvent: (event) => {
+        const newKey = get()._onSseEvent(ctx.storeKey, event);
+        if (newKey) ctx.storeKey = newKey;
+      },
+      onClose: (reason) => {
+        get()._cleanupStream(ctx.storeKey, reason);
+      },
+    });
+
+    set((prev) => {
+      const next = new Map(prev.activeStreams);
+      next.set(initialKey, {
+        sid: initialKey,
+        handle,
+        startedAt: Date.now(),
+        tempUserId,
+        tempAiId,
+      });
+      return { activeStreams: next };
+    });
   },
+
   stopStream: (sid) => {
     void sid;
     return notImplemented('stopStream');
@@ -263,21 +351,251 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     return notImplemented('deleteSession');
   },
 
-  _onSseEvent: (sid, event) => {
-    // 1.3 骨架：仅 console.log；Step 4a 接入完整事件处理
-    console.log('[chatStore] _onSseEvent', { sid, event });
+  _onSseEvent: (storeKey, event) => {
+    let migratedTo: SessionId | undefined;
+
+    set((state) => {
+      const stream = state.activeStreams.get(storeKey);
+      if (!stream) {
+        // 流已 cleanup 但事件 race 到达，安全忽略
+        return {};
+      }
+
+      switch (event.type) {
+        case 'session_meta': {
+          const newKey = event.session_id;
+          const hid = event.hid;
+
+          // 同 sid：仅回填 user msg serverId
+          if (newKey === storeKey) {
+            const bucket = state.messagesBySession.get(storeKey);
+            if (!bucket) return {};
+            const nextMessages = new Map(state.messagesBySession);
+            nextMessages.set(storeKey, {
+              ...bucket,
+              streamPhase: 'thinking',
+              messages: bucket.messages.map((m) =>
+                m.id === stream.tempUserId ? { ...m, serverId: hid } : m,
+              ),
+            });
+            return { messagesBySession: nextMessages };
+          }
+
+          // sid migrate：把 temp user + AI 占位从旧桶搬到新桶
+          const oldBucket = state.messagesBySession.get(storeKey);
+          if (!oldBucket) return {};
+
+          const newBucket =
+            state.messagesBySession.get(newKey) ?? emptyBucket();
+
+          const migrated: Message[] = [];
+          const remaining: Message[] = [];
+          for (const m of oldBucket.messages) {
+            if (m.id === stream.tempUserId) {
+              migrated.push({ ...m, sid: newKey, serverId: hid });
+            } else if (m.id === stream.tempAiId) {
+              migrated.push({ ...m, sid: newKey });
+            } else {
+              remaining.push(m);
+            }
+          }
+
+          const nextMessages = new Map(state.messagesBySession);
+
+          // 旧桶处理：PENDING 临时桶直接删；真实旧 sid 桶保留剩余历史 + 收束态
+          if (storeKey === PENDING_SESSION_KEY) {
+            nextMessages.delete(storeKey);
+          } else {
+            nextMessages.set(storeKey, {
+              ...oldBucket,
+              messages: remaining,
+              inProgress: false,
+              streamPhase: 'idle',
+            });
+          }
+
+          // 新桶：prepend migrated（inverted FlatList newest at 0）
+          nextMessages.set(newKey, {
+            ...newBucket,
+            messages: [...migrated, ...newBucket.messages],
+            inProgress: true,
+            streamPhase: 'thinking',
+            lastFetchedAt: Date.now(),
+          });
+
+          // activeStreams 搬迁
+          const nextStreams = new Map(state.activeStreams);
+          nextStreams.delete(storeKey);
+          nextStreams.set(newKey, { ...stream, sid: newKey });
+
+          // activeSessionId 透明切换（若用户当前看的就是旧 storeKey）
+          const nextActiveSessionId =
+            state.activeSessionId === storeKey ? newKey : state.activeSessionId;
+
+          migratedTo = newKey;
+
+          return {
+            messagesBySession: nextMessages,
+            activeStreams: nextStreams,
+            activeSessionId: nextActiveSessionId,
+          };
+        }
+
+        case 'compression_progress': {
+          const bucket = state.messagesBySession.get(storeKey);
+          if (!bucket) return {};
+          const nextMessages = new Map(state.messagesBySession);
+          nextMessages.set(storeKey, {
+            ...bucket,
+            streamPhase: 'compressing',
+          });
+          return { messagesBySession: nextMessages };
+        }
+
+        case 'thinking_start': {
+          const bucket = state.messagesBySession.get(storeKey);
+          if (!bucket) return {};
+          const nextMessages = new Map(state.messagesBySession);
+          nextMessages.set(storeKey, {
+            ...bucket,
+            streamPhase: 'thinking',
+          });
+          return { messagesBySession: nextMessages };
+        }
+
+        case 'thinking_end': {
+          const bucket = state.messagesBySession.get(storeKey);
+          if (!bucket) return {};
+          const nextMessages = new Map(state.messagesBySession);
+          nextMessages.set(storeKey, {
+            ...bucket,
+            streamPhase: 'delta',
+          });
+          return { messagesBySession: nextMessages };
+        }
+
+        case 'delta': {
+          const bucket = state.messagesBySession.get(storeKey);
+          if (!bucket) return {};
+          const nextMessages = new Map(state.messagesBySession);
+          nextMessages.set(storeKey, {
+            ...bucket,
+            streamPhase: 'delta',
+            messages: bucket.messages.map((m) =>
+              m.id === stream.tempAiId
+                ? { ...m, content: m.content + event.content }
+                : m,
+            ),
+          });
+          return { messagesBySession: nextMessages };
+        }
+
+        case 'end': {
+          // 回填 AI msg serverId + finishReason；status 收束由 _cleanupStream('end') 兜底
+          const bucket = state.messagesBySession.get(storeKey);
+          if (!bucket) return {};
+          const nextMessages = new Map(state.messagesBySession);
+          nextMessages.set(storeKey, {
+            ...bucket,
+            messages: bucket.messages.map((m) =>
+              m.id === stream.tempAiId
+                ? {
+                    ...m,
+                    serverId: event.aid,
+                    finishReason: event.finish_reason,
+                  }
+                : m,
+            ),
+          });
+          return { messagesBySession: nextMessages };
+        }
+
+        case 'stopped': {
+          // Step 5 完善两态（StopWithAi/StopNoAi）；本 Step 简化按 content 判别
+          const bucket = state.messagesBySession.get(storeKey);
+          if (!bucket) return {};
+          const nextMessages = new Map(state.messagesBySession);
+          nextMessages.set(storeKey, {
+            ...bucket,
+            messages: bucket.messages.map((m) =>
+              m.id === stream.tempAiId
+                ? {
+                    ...m,
+                    serverId: event.aid ?? m.serverId,
+                    finishReason: event.finish_reason,
+                  }
+                : m,
+            ),
+          });
+          return { messagesBySession: nextMessages };
+        }
+
+        case 'error': {
+          // 终止帧；_cleanupStream('error') 处理 failed 收束
+          console.warn('[chatStore] sse error frame', {
+            storeKey,
+            code: event.code,
+            message: event.message,
+          });
+          return {};
+        }
+
+        default:
+          return {};
+      }
+    });
+
+    return migratedTo;
   },
 
-  _cleanupStream: (sid, reason) => {
+  _cleanupStream: (storeKey, reason) => {
     set((state) => {
+      const stream = state.activeStreams.get(storeKey);
+
       const nextStreams = new Map(state.activeStreams);
-      nextStreams.delete(sid);
+      nextStreams.delete(storeKey);
 
       const nextMessages = new Map(state.messagesBySession);
-      const prevSessionState = nextMessages.get(sid);
-      if (prevSessionState) {
-        nextMessages.set(sid, {
-          ...prevSessionState,
+      const bucket = nextMessages.get(storeKey);
+
+      if (bucket && stream) {
+        const updatedMessages = bucket.messages.map((m) => {
+          if (m.id !== stream.tempAiId) return m;
+          let nextStatus: MessageStatus = 'committed';
+          let stoppedTag: boolean | undefined = m.stoppedTag;
+          switch (reason) {
+            case 'end':
+              nextStatus = 'committed';
+              break;
+            case 'stopped':
+              // Step 5 完整两态：本 Step 简化按 content 判别
+              if (m.content.length > 0) {
+                nextStatus = 'committed';
+                stoppedTag = true;
+              } else {
+                nextStatus = 'failed';
+              }
+              break;
+            case 'error':
+            case 'firstFrameTimeout':
+              nextStatus = 'failed';
+              break;
+            case 'abort':
+              // 用户语义级中断：内容保留固化，无 stoppedTag
+              nextStatus = m.content.length > 0 ? 'committed' : 'failed';
+              break;
+          }
+          return { ...m, status: nextStatus, stoppedTag };
+        });
+        nextMessages.set(storeKey, {
+          ...bucket,
+          messages: updatedMessages,
+          inProgress: false,
+          streamPhase: 'idle',
+        });
+      } else if (bucket) {
+        nextMessages.set(storeKey, {
+          ...bucket,
           inProgress: false,
           streamPhase: 'idle',
         });
@@ -289,6 +607,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       };
     });
 
-    console.log('[chatStore] _cleanupStream', { sid, reason });
+    console.log('[chatStore] _cleanupStream', { storeKey, reason });
   },
 }));
