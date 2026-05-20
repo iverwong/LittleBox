@@ -168,17 +168,12 @@ class TestSqlExpressionGuard:
 
         source = inspect.getsource(graph.persist_ai_turn)
 
-        # 必须包含 SQL 列表达式自增：Session.ai_turn_counter + 1
         assert re.search(r"Session\.ai_turn_counter\s*\+\s*1", source), (
             "persist_ai_turn 必须用 SQL 列表达式自增 ai_turn_counter"
         )
-
-        # 禁止 Python 端复合赋值（+=、-=）作用于 ai_turn_counter
         assert not re.search(r"\.ai_turn_counter\s*[+\-]=", source), (
             "禁止 Python 复合赋值修改 ai_turn_counter（会引入 read-modify-write 竞态）"
         )
-
-        # 必须 import update（确保走 SQLAlchemy update() 而非 ORM attribute set）
         graph_source = inspect.getsource(graph)
         assert "from sqlalchemy import update" in graph_source, (
             "graph.py 必须 import sqlalchemy.update"
@@ -192,20 +187,16 @@ class TestConcurrentRowLock:
     async def test_persist_ai_turn_concurrent_row_lock(
         self, concurrent_db_sessions, engine,
     ) -> None:
-        """5 协程并发调用 persist_ai_turn 同一 session_id，
-        最终 ai_turn_counter 必须等于并发数（PG 行锁 + SQL 列表达式原子性）。"""
         import asyncio
-
         from app.models.accounts import Family, FamilyMember, User
         from app.models.enums import UserRole
 
         sessions = await concurrent_db_sessions(
-            count=6,  # 1 setup + 5 concurrent
+            count=6,
             tables=["messages", "sessions", "users", "family_members", "families"],
         )
         setup_db, *worker_dbs = sessions
 
-        # setup: family + user + session row
         fam = Family()
         setup_db.add(fam)
         await setup_db.flush()
@@ -224,7 +215,6 @@ class TestConcurrentRowLock:
         await setup_db.commit()
         sid = session_row.id
 
-        # 并发执行：5 个独立 connection 同时 persist_ai_turn
         async def _one_turn(db):
             await persist_ai_turn(
                 db, sid, finish_reason="stop", content="concurrent test turn",
@@ -233,18 +223,12 @@ class TestConcurrentRowLock:
 
         await asyncio.gather(*[_one_turn(db) for db in worker_dbs])
 
-        # 验证 counter 严格等于并发数
-        from app.db import dispose_engine
-
         async with AsyncSession(engine) as check:
             result = await check.execute(
                 select(Session.ai_turn_counter).where(Session.id == sid)
             )
             counter = result.scalar_one()
-            assert counter == 5, (
-                f"PG 行锁失败：5 并发后 counter={counter}（应为 5）"
-            )
-            # 同时验证 messages 表写入了 5 条 AI message
+            assert counter == 5, f"PG 行锁失败：5 并发后 counter={counter}"
             msg_count = await check.execute(
                 select(Message).where(
                     Message.session_id == sid, Message.role == MessageRole.ai,
