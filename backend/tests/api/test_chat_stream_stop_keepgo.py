@@ -13,11 +13,20 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import anyio
 import pytest
 pytestmark = pytest.mark.asyncio(loop_scope="function")
+
+
+@pytest.fixture(autouse=True)
+def _mock_enqueue_audit():
+    """mock enqueue_audit 避免 Redis lifespan 依赖。"""
+    with patch("app.api.me.enqueue_audit", AsyncMock()):
+        yield
+
+
 from fakeredis.aioredis import FakeRedis
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select

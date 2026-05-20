@@ -28,6 +28,15 @@ from uuid import uuid4
 
 import pytest
 pytestmark = pytest.mark.asyncio(loop_scope="function")
+
+
+@pytest.fixture(autouse=True)
+def _mock_enqueue_audit():
+    """所有控制平面测试共用：enqueue_audit mock 避免 Redis lifespan 依赖。"""
+    with patch("app.api.me.enqueue_audit", AsyncMock()):
+        yield
+
+
 from fakeredis.aioredis import FakeRedis
 from httpx import AsyncClient
 from sqlalchemy import select

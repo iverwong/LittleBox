@@ -39,8 +39,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.chat.extractors import extract_finish_reason, extract_reasoning_content, extract_usage
 from app.chat.factory import get_chat_llm
 from app.chat.state import MainDialogueState
+from app.config import settings
 from app.models.chat import Message, Session
 from app.models.enums import InterventionType, MessageRole, MessageStatus
+from app.state.audit_signals import AuditSignalsManager
 
 logger = logging.getLogger(__name__)
 
@@ -92,13 +94,41 @@ async def persist_ai_turn(
     return msg.id
 
 
-async def enqueue_audit(sid: uuid.UUID, db: AsyncSession) -> None:
-    """Enqueue a session for async audit (M6 stub — no-op, logs warning).
+async def enqueue_audit(sid: uuid.UUID, db: AsyncSession, turn_number: int) -> None:
+    """SET Redis pending + ARQ enqueue 触发异步审查。
 
-    # TODO(M8): write to Redis audit-queue so M8 review worker picks it up.
-    This is a placeholder; M6 has no review worker.
+    D4 决议：先 SET pending 再 enqueue 再返回。~~5-10ms 延迟换确定性。
+    资源管理：每次调用建立独立 ArqRedis 连接，用后关闭（M14 优化为单例）。
     """
-    logger.warning("M6 stub: enqueue_audit called — no-op (M8 review worker pending)")
+    from arq import create_pool
+    from arq.connections import RedisSettings
+
+    from app.auth.redis_client import get_audit_redis
+
+    # 1) SET Redis pending
+    redis = await get_audit_redis()
+    manager = AuditSignalsManager(redis, ttl=settings.audit_redis_ttl_seconds)
+    await manager.set_pending(str(sid), turn_number)
+
+    # 2) ARQ enqueue
+    arq_pool = await create_pool(
+        RedisSettings(
+            host=str(redis.connection_pool.connection_kwargs.get("host", "localhost")),
+            port=int(redis.connection_pool.connection_kwargs.get("port", 6379)),
+            password=redis.connection_pool.connection_kwargs.get("password"),
+            database=settings.arq_redis_db,
+        ),
+    )
+    try:
+        await arq_pool.enqueue_job(
+            "run_audit", str(sid), turn_number,
+            _job_id=f"audit:{sid}:{turn_number}",
+        )
+    finally:
+        await arq_pool.close()
+        await arq_pool.connection_pool.disconnect()
+
+    logger.info("audit.enqueued sid=%s turn=%s", sid, turn_number)
 
 
 # ---------------------------------------------------------------------------
@@ -107,21 +137,72 @@ async def enqueue_audit(sid: uuid.UUID, db: AsyncSession) -> None:
 
 
 async def load_audit_state(state: MainDialogueState) -> dict:
-    """Load audit signals from Redis and/or PG rolling_summaries.
+    """加载审查信号（Redis poll_wait 协议 + 首轮快速通道）。
 
-    M6 stub: returns all-False audit state.
-    M8: reads Redis audit:{sid} for this-turn signals AND
-        queries rolling_summaries.crisis_locked for the sticky flag.
+    首轮（turn_number == 1）：直接返回 all-False，不进等待。
+    非首轮：poll_wait(sid, expected_turn=turn_number-1)。6 分支：
+      ready  → 注入信号
+      failed → 全 False + 日志
+      miss   → 全 False + 日志
+      turn_mismatch → 全 False + 日志
+      timeout → 全 False + 日志
+    （pending 在 poll_wait 内循环等待直到 ready 或超时，不作为一个分支返回）
 
-    # TODO(M8): replace body with Redis GET audit:{sid} + PG SELECT.
+    crisis_locked 的 PG 查询留 M9（本 M8 期不读）。
     """
+    turn = state.get("turn_number", 1)
+    sid = state["session_id"]
+
+    if turn == 1:
+        # 首轮：不进等待
+        return _all_false_audit_state()
+
+    from app.auth.redis_client import get_audit_redis
+
+    redis = await get_audit_redis()
+    manager = AuditSignalsManager(
+        redis, ttl=settings.audit_redis_ttl_seconds,
+    )
+    result = await manager.poll_wait(
+        sid, expected_turn=turn - 1,
+        timeout=settings.audit_wait_timeout_seconds,
+    )
+
+    if result.kind == "ready" and result.signals is not None:
+        logger.info("audit.load.ready sid=%s turn=%s", sid, turn)
+        return {
+            "audit_state": {
+                "crisis_locked": False,
+                "crisis_detected": result.signals.crisis_detected,
+                "redline_triggered": result.signals.redline_triggered,
+                "guidance": result.signals.guidance,
+            },
+        }
+
+    if result.kind == "failed":
+        logger.warning("audit.load.failed sid=%s turn=%s error=%s", sid, turn, result.error)
+    elif result.kind == "miss":
+        logger.warning("audit.load.miss sid=%s turn=%s", sid, turn)
+    elif result.kind == "turn_mismatch":
+        logger.warning(
+            "audit.load.turn_mismatch sid=%s turn=%s actual=%s",
+            sid, turn, result.actual_turn,
+        )
+    else:  # timeout
+        logger.warning("audit.load.timeout sid=%s turn=%s", sid, turn)
+
+    return _all_false_audit_state()
+
+
+def _all_false_audit_state() -> dict:
+    """降级用的 all-False audit_state。"""
     return {
         "audit_state": {
             "crisis_locked": False,
             "crisis_detected": False,
             "redline_triggered": False,
             "guidance": None,
-        }
+        },
     }
 
 
@@ -148,18 +229,15 @@ def route_by_risk(state: MainDialogueState) -> str:
 
 
 async def inject_guidance(state: MainDialogueState) -> dict:
-    """Stage guidance text into pending_guidance field (M6 stub).
+    """Stage guidance text into pending_guidance（M8 stub，保留透传形态）。
 
-    M6: always writes None (no guidance in M6).
-    M8: reads audit_state["guidance"] (non-None) and stages it.
-         The actual injection into the LLM prompt is done in call_main_llm
-         so that pending_guidance stays in-graph and NEVER touches
-         the messages table (T5 single-write-point discipline).
+    M8 期 guidance 字段已在 load_audit_state 中注入 audit_state，
+    call_main_llm 的 _assemble_llm_messages 会消费 pending_guidance。
+    本节点保持 stub 形态，后续 M9 接危机/红线干预时增加逻辑。
 
-    # TODO(M8): read guidance from audit_state and populate pending_guidance.
+    # TODO(M9): inject guidance into system prompt or user message
     """
-    # M6: guidance always None — nothing to stage
-    return {"pending_guidance": None}
+    return {"pending_guidance": state.get("audit_state", {}).get("guidance")}
 
 
 def _assemble_llm_messages(state: MainDialogueState) -> list[BaseMessage]:

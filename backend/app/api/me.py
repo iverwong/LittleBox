@@ -610,17 +610,21 @@ async def chat_stream(
             from app.chat.state import MainDialogueState
             from app.config import settings as _app_settings
 
+            # M8: ai_turn_counter → turn_number（下一轮号）
+            _turn_number = (session.ai_turn_counter or 0) + 1
+
             initial_state: MainDialogueState = {
                 "session_id": str(sid),
                 "child_user_id": str(current.id),
                 "child_profile": None,  # M6: not read by nodes
                 "provider": _app_settings.main_provider,
                 "messages": [system_prompt, *history],
-                "audit_state": {},  # M6: all-False stub
+                "audit_state": {},  # load_audit_state 节点填充
                 "pending_guidance": None,
                 "generated_token_count": 0,
                 "client_alive": True,
                 "user_stop_requested": False,
+                "turn_number": _turn_number,
             }
 
             try:
@@ -752,7 +756,7 @@ async def chat_stream(
                                 session.needs_compression = True
                         await db.commit()
 
-                        asyncio.create_task(enqueue_audit(sid, db))
+                        await enqueue_audit(sid, db, _turn_number)
 
                         if client_alive:
                             yield _frame_sse_event(
@@ -786,7 +790,7 @@ async def chat_stream(
                             session.needs_compression = True
                     await db.commit()
 
-                    asyncio.create_task(enqueue_audit(sid, db))
+                    await enqueue_audit(sid, db, _turn_number)
 
                     if client_alive:
                         yield _frame_sse_event(

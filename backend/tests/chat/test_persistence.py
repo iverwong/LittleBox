@@ -238,23 +238,54 @@ class TestConcurrentRowLock:
 
 
 # ---------------------------------------------------------------------------
-# enqueue_audit — M6 stub
+# enqueue_audit (M8 Step 9: Redis SET pending + ARQ enqueue)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_enqueue_audit_m6_stub_is_noop(db_session, child_user, caplog):
-    """M6: enqueue_audit does nothing; logs a warning."""
+async def test_enqueue_audit_sets_pending_and_enqueues(db_session, child_user):
+    """enqueue_audit 完成 Redis SET pending + ARQ enqueue_job。"""
+    from unittest.mock import AsyncMock, patch
+
+    from app.audit.worker import run_audit
+
     sid = uuid.uuid4()
     session = Session(id=sid, child_user_id=child_user.id, title="test")
     db_session.add(session)
     await db_session.flush()
 
-    with caplog.at_level(logging.WARNING):
-        await enqueue_audit(sid, db_session)
+    mock_arq_pool = AsyncMock()
+    mock_arq_pool.enqueue_job = AsyncMock()
+    mock_arq_pool.close = AsyncMock()
+    mock_arq_pool.connection_pool.disconnect = AsyncMock()
 
-    # Must have logged the M6 stub warning
-    assert any(
-        "M6 stub" in msg and "enqueue_audit" in msg
-        for msg in caplog.messages
-    ), f"Expected M6 stub warning, got: {caplog.messages}"
+    mock_manager = AsyncMock()
+    mock_manager.set_pending = AsyncMock()
+
+    from unittest.mock import MagicMock
+    mock_redis = AsyncMock()
+    mock_redis.connection_pool = MagicMock()
+    mock_redis.connection_pool.connection_kwargs = {
+        "host": "localhost", "port": 6379, "password": None,
+    }
+
+    with (
+        patch(
+            "app.auth.redis_client.get_audit_redis",
+            return_value=mock_redis,
+        ),
+        patch(
+            "app.chat.graph.AuditSignalsManager",
+            return_value=mock_manager,
+        ),
+        patch(
+            "arq.create_pool",
+            return_value=mock_arq_pool,
+        ),
+    ):
+        await enqueue_audit(sid, db_session, turn_number=1)
+
+        mock_manager.set_pending.assert_awaited_once_with(
+            str(sid), 1,
+        )
+        mock_arq_pool.enqueue_job.assert_awaited_once()

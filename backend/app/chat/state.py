@@ -42,3 +42,4 @@ class MainDialogueState(TypedDict):
     generated_token_count: int
     client_alive: bool
     user_stop_requested: bool
+    turn_number: int  # M8: 当前对话轮次，由 me.py 从 sessions.ai_turn_counter+1 填入
