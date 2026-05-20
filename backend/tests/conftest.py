@@ -421,8 +421,19 @@ async def rate_limit_parent(db_session: AsyncSession) -> tuple:
 # ---------- session scope：真库行数兜底（M6-patch T4 防御） ----------
 
 _GUARD_TABLES = [
-    "users", "families", "family_members",
-    "data_deletion_requests", "notifications",
+    "families",
+    "users",
+    "child_profiles",
+    "auth_tokens",
+    "device_tokens",
+    "family_members",
+    "sessions",
+    "messages",
+    "audit_records",
+    "rolling_summaries",
+    "daily_reports",
+    "notifications",
+    "data_deletion_requests",
 ]
 
 
