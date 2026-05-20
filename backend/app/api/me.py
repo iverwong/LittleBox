@@ -256,7 +256,8 @@ async def get_messages(
         )
         .where(
             Message.session_id == sid,
-            Message.status == MessageStatus.active,
+            Message.role.in_([MessageRole.human, MessageRole.ai]),
+            Message.status != MessageStatus.discarded,
         )
         .order_by(Message.created_at.desc(), Message.id.desc())
         .limit(limit + 1)
