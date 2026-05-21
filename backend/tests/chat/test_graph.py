@@ -39,6 +39,14 @@ from app.chat.state import MainDialogueState
 # ---------------------------------------------------------------------------
 
 
+_ALL_FALSE_AUDIT = {
+    "crisis_locked": False,
+    "crisis_detected": False,
+    "redline_triggered": False,
+    "guidance": None,
+}
+
+
 def _make_state(
     *,
     messages: list[BaseMessage] | None = None,
@@ -53,7 +61,7 @@ def _make_state(
         "child_profile": None,  # not read in M6 nodes
         "provider": provider,
         "messages": messages or [],
-        "audit_state": audit_state or {},
+        "audit_state": audit_state or _ALL_FALSE_AUDIT,
         "pending_guidance": pending_guidance,
         "generated_token_count": 0,
         "client_alive": True,
@@ -171,8 +179,8 @@ def test_route_by_risk_m6_always_main():
 
 
 def test_route_by_risk_empty_audit_state():
-    """Missing audit_state keys fallback to falsy → 'main'."""
-    state = _make_state(audit_state={})
+    """AuditState 默认全 False → 路由到 'main'。"""
+    state = _make_state()
     assert route_by_risk(state) == "main"
 
 

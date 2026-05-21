@@ -17,7 +17,10 @@ from app.schemas.audit import (
     AuditOutputSchema,
 )
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [
+    pytest.mark.audit,
+    pytest.mark.asyncio,
+]
 
 
 _BASE_OUTPUT = AuditOutputSchema(

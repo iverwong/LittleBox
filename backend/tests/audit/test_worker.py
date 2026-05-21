@@ -15,6 +15,7 @@ import pytest
 from app.audit.worker import MAX_TRIES, run_audit
 from app.schemas.audit import AuditDimensionScores, AuditOutputSchema
 
+pytestmark = pytest.mark.audit
 
 _AUDIT_OUTPUT = AuditOutputSchema(
     dimension_scores=AuditDimensionScores(),

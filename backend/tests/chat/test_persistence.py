@@ -242,6 +242,7 @@ class TestConcurrentRowLock:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.audit
 @pytest.mark.asyncio
 async def test_enqueue_audit_sets_pending_and_enqueues(db_session, child_user):
     """enqueue_audit 完成 Redis SET pending + ARQ enqueue_job。"""
@@ -285,7 +286,8 @@ async def test_enqueue_audit_sets_pending_and_enqueues(db_session, child_user):
     ):
         await enqueue_audit(sid, db_session, turn_number=1)
 
-        mock_manager.set_pending.assert_awaited_once_with(
-            str(sid), 1,
-        )
+        mock_manager.set_pending.assert_awaited_once()
+        args, kwargs = mock_manager.set_pending.await_args
+        assert args[:2] == (str(sid), 1)
+        assert "started_at" in kwargs
         mock_arq_pool.enqueue_job.assert_awaited_once()

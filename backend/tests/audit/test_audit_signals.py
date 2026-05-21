@@ -9,6 +9,8 @@ from fakeredis.aioredis import FakeRedis
 from app.schemas.audit import AuditDimensionScores, AuditOutputSchema
 from app.state.audit_signals import AuditSignalsManager
 
+pytestmark = pytest.mark.audit
+
 ISO_NOW = "2026-05-17T10:00:00+00:00"
 _AUDIT_OUT = AuditOutputSchema(
     dimension_scores=AuditDimensionScores(),

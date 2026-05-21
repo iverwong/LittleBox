@@ -19,6 +19,10 @@ from app.chat.state import MainDialogueState
 from app.schemas.audit import AuditDimensionScores, AuditOutputSchema
 from app.state.audit_signals import AuditWaitResult
 
+pytestmark = [
+    pytest.mark.audit,
+    pytest.mark.asyncio,
+]
 
 def _make_state(turn_number: int = 2, sid: str = "test-sid") -> MainDialogueState:
     return MainDialogueState(

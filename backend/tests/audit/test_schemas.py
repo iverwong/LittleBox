@@ -13,6 +13,8 @@ from app.schemas.audit import (
     TurnSummaryEntry,
 )
 
+pytestmark = pytest.mark.audit
+
 
 class TestAuditDimensionScores:
     """7 维度 × Field(ge=0, le=9) 范围校验。"""

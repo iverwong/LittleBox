@@ -14,7 +14,10 @@ from app.audit.graph import (
     build_audit_graph,
 )
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [
+    pytest.mark.audit,
+    pytest.mark.asyncio,
+]
 
 
 # ---------------------------------------------------------------------------

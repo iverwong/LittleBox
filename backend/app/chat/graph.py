@@ -23,6 +23,7 @@ Graph topology (baseline §7.1):
 
 import logging
 import uuid
+from datetime import UTC, datetime
 
 from langchain_core.messages import (
     AIMessage,
@@ -38,7 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chat.extractors import extract_finish_reason, extract_reasoning_content, extract_usage
 from app.chat.factory import get_chat_llm
-from app.chat.state import MainDialogueState
+from app.chat.state import AuditState, MainDialogueState
 from app.config import settings
 from app.models.chat import Message, Session
 from app.models.enums import InterventionType, MessageRole, MessageStatus
@@ -108,7 +109,7 @@ async def enqueue_audit(sid: uuid.UUID, db: AsyncSession, turn_number: int) -> N
     # 1) SET Redis pending
     redis = await get_audit_redis()
     manager = AuditSignalsManager(redis, ttl=settings.audit_redis_ttl_seconds)
-    await manager.set_pending(str(sid), turn_number)
+    await manager.set_pending(str(sid), turn_number, started_at=datetime.now(UTC).isoformat())
 
     # 2) ARQ enqueue
     arq_pool = await create_pool(
@@ -213,17 +214,17 @@ def route_by_risk(state: MainDialogueState) -> str:
               redline_triggered (③) > guidance (④) > else (⑤ main)
 
     Args:
-        state["audit_state"]: dict with keys crisis_locked / crisis_detected /
+        state["audit_state"]: AuditState with keys crisis_locked / crisis_detected /
                               redline_triggered / guidance
     Returns:
         "crisis" | "redline" | "guidance" | "main"
     """
-    audit = state.get("audit_state", {})
-    if audit.get("crisis_locked") or audit.get("crisis_detected"):
+    audit: AuditState = state["audit_state"]
+    if audit["crisis_locked"] or audit["crisis_detected"]:
         return "crisis"
-    if audit.get("redline_triggered"):
+    if audit["redline_triggered"]:
         return "redline"
-    if audit.get("guidance") is not None:
+    if audit["guidance"] is not None:
         return "guidance"
     return "main"
 
@@ -237,7 +238,7 @@ async def inject_guidance(state: MainDialogueState) -> dict:
 
     # TODO(M9): inject guidance into system prompt or user message
     """
-    return {"pending_guidance": state.get("audit_state", {}).get("guidance")}
+    return {"pending_guidance": state["audit_state"]["guidance"]}
 
 
 def _assemble_llm_messages(state: MainDialogueState) -> list[BaseMessage]:
