@@ -16,7 +16,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 pytestmark = pytest.mark.asyncio(loop_scope="function")
 
 
@@ -1107,3 +1107,173 @@ async def test_compression_noop_empty_filter(
         )
     ).scalar_one()
     assert session_row.needs_compression is False
+
+
+# ---------------------------------------------------------------------------
+# G8: Compression messages order + secondary compression
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_compression_messages_order_assertion(
+    api_client_with_eval, auth_headers_child, db_session, compression_session, monkeypatch,
+):
+    """方案 a 核心契约：压缩后 initial_state["messages"] 顺序为 [system_prompt, summary, protected_human]."""
+    from unittest.mock import patch as _patch
+
+    headers, child = auth_headers_child
+    sid, _, msg1_id, msg2_id = compression_session
+
+    captured: list = []
+    summary_content = "测试摘要XYZ"
+
+    async def spy_astream(initial_state, stream_mode="custom"):
+        captured.append(initial_state)
+        yield {"delta": "回复"}
+        yield {"finish_reason": "stop"}
+
+    fake_c_llm = AsyncMock()
+    fake_c_llm.ainvoke = AsyncMock(return_value=AIMessage(content=summary_content))
+
+    monkeypatch.setattr("app.api.me.main_graph", AsyncMock())
+    monkeypatch.setattr("app.api.me.main_graph.astream", spy_astream)
+
+    with _patch("app.chat.factory.get_chat_llm", return_value=fake_c_llm):
+        body = make_payload(content="继续聊聊", session_id=str(sid))
+        resp = await api_client_with_eval.post(
+            "/api/v1/me/chat/stream", json=body, headers=headers,
+        )
+        assert resp.status_code == 200
+        await resp.aclose()
+
+    # spy 必须被调用
+    assert len(captured) == 1, f"expected 1 astream call, got {len(captured)}"
+
+    msgs = captured[0]["messages"]
+    # [main_system, summary, protected_human]
+    assert len(msgs) == 3, f"expected 3 messages, got {len(msgs)}: {[type(m).__name__ for m in msgs]}"
+
+    assert isinstance(msgs[0], SystemMessage), f"msgs[0] should be SystemMessage, got {type(msgs[0]).__name__}"
+    assert msgs[0].content, "system prompt content should be non-empty"
+
+    assert isinstance(msgs[1], SystemMessage), f"msgs[1] should be SystemMessage (summary), got {type(msgs[1]).__name__}"
+    assert summary_content in msgs[1].content, (
+        f"summary content {summary_content!r} not in msgs[1]: {msgs[1].content!r}"
+    )
+
+    assert isinstance(msgs[2], HumanMessage), f"msgs[2] should be HumanMessage (protected), got {type(msgs[2]).__name__}"
+    assert msgs[2].content == "继续聊聊", (
+        f"protected_human content mismatch: {msgs[2].content!r}"
+    )
+
+    assert [type(m).__name__ for m in msgs] == ["SystemMessage", "SystemMessage", "HumanMessage"], (
+        f"type sequence mismatch: {[type(m).__name__ for m in msgs]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_compression_with_existing_summary(
+    api_client_with_eval, auth_headers_child, db_session, child_user, monkeypatch,
+):
+    """二次压缩：已有旧 summary 行的 session 中，旧 summary 被纳入压缩集并标 compressed。"""
+    from datetime import UTC, datetime as _dt
+    from uuid import uuid4 as _uuid4
+    from unittest.mock import patch as _patch
+
+    from app.chat.prompts import SUMMARY_PREFIX
+
+    headers, child = auth_headers_child
+    sid = _uuid4()
+
+    session = SessionModel(id=sid, child_user_id=child.id, title="test")
+    db_session.add(session)
+    await db_session.flush()
+
+    # 5 行：human → AI → old_summary → human → AI
+    base_ts = _dt.now(UTC)
+    rows_data = [
+        (MessageRole.human, "第一轮"),
+        (MessageRole.ai, "第一轮回复"),
+        (MessageRole.summary, "上轮旧摘要"),
+        (MessageRole.human, "第二轮"),
+        (MessageRole.ai, "第二轮回复"),
+    ]
+    msg_ids = []
+    for i, (role, content) in enumerate(rows_data):
+        m = Message(
+            session_id=sid, role=role,
+            content=content if role != MessageRole.summary else SUMMARY_PREFIX + content,
+            status=MessageStatus.active,
+        )
+        m.created_at = base_ts.replace(microsecond=base_ts.microsecond + i)
+        db_session.add(m)
+        await db_session.flush()
+        msg_ids.append(m.id)
+
+    session.needs_compression = True
+    session.context_size_tokens = 600000
+    await db_session.commit()
+
+    captured: list = []
+
+    async def spy_astream(initial_state, stream_mode="custom"):
+        captured.append(initial_state)
+        yield {"delta": "回复"}
+        yield {"finish_reason": "stop"}
+
+    fake_c_llm = AsyncMock()
+    fake_c_llm.ainvoke = AsyncMock(return_value=AIMessage(content="新合并摘要"))
+
+    monkeypatch.setattr("app.api.me.main_graph", AsyncMock())
+    monkeypatch.setattr("app.api.me.main_graph.astream", spy_astream)
+
+    with _patch("app.chat.factory.get_chat_llm", return_value=fake_c_llm):
+        body = make_payload(content="第三轮", session_id=str(sid))
+        resp = await api_client_with_eval.post(
+            "/api/v1/me/chat/stream", json=body, headers=headers,
+        )
+        assert resp.status_code == 200
+        await resp.aclose()
+
+    # 1) 5 行旧消息全部转 compressed（含旧 summary 行）
+    for mid in msg_ids:
+        row = await db_session.get(Message, mid)
+        assert row is not None, f"msg {mid} not found"
+        assert row.status == MessageStatus.compressed, (
+            f"msg {mid} (role={row.role}) status={row.status} — expected compressed"
+        )
+
+    # 2) 新 summary 行
+    new_summaries = (
+        await db_session.execute(
+            select(Message).where(
+                Message.session_id == sid,
+                Message.role == MessageRole.summary,
+                Message.status == MessageStatus.active,
+            )
+        )
+    ).scalars().all()
+    assert len(new_summaries) == 1, f"expected 1 new summary, got {len(new_summaries)}"
+    assert "新合并摘要" in new_summaries[0].content, (
+        f"summary content mismatch: {new_summaries[0].content!r}"
+    )
+    # 旧 summary 内容应被新摘要合并（不在 active summary 中单独出现）
+    assert "上轮旧摘要" not in new_summaries[0].content, (
+        "old summary text should be superseded, not appear verbatim in new summary"
+    )
+
+    # 3) session.needs_compression == False
+    session_row = await db_session.get(SessionModel, sid)
+    assert session_row.needs_compression is False
+
+    # 4) messages 顺序断言：[main_system, new_summary, protected_human]
+    assert len(captured) == 1
+    msgs = captured[0]["messages"]
+    assert len(msgs) == 3
+    assert isinstance(msgs[0], SystemMessage)
+    assert msgs[0].content  # non-empty system prompt
+    assert isinstance(msgs[1], SystemMessage)
+    assert "新合并摘要" in msgs[1].content
+    assert isinstance(msgs[2], HumanMessage)
+    assert msgs[2].content == "第三轮"
+    assert [type(m).__name__ for m in msgs] == ["SystemMessage", "SystemMessage", "HumanMessage"]
