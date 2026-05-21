@@ -90,6 +90,14 @@ async def auth_headers_child(db_session, redis_client, child_with_profile):
 
 
 @pytest.fixture(autouse=True)
+def _mock_enqueue_audit():
+    """mock enqueue_audit 避免 audit Redis 依赖。"""
+    from unittest.mock import AsyncMock, patch
+    with patch("app.api.me.enqueue_audit", AsyncMock()):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _patch_locks(monkeypatch: pytest.MonkeyPatch):
     """绕过 throttle + session lock（避免依赖 FakeRedis eval patch 跨测试泄漏）。"""
     from app.chat.locks import acquire_session_lock, acquire_throttle_lock
@@ -261,12 +269,23 @@ async def test_context_size_tokens_snapshot_not_accumulate(api_client, auth_head
 
 @pytest.mark.asyncio
 async def test_compression_progress_fired_when_flag_true(api_client, auth_headers_child, db_session):
-    """needs_compression=True 时 user 到达后先发 compression_progress 帧。（Group 9）"""
+    """needs_compression=True 时 user 到达后先发 compression_start + compression_end 帧。（Group 9）"""
     headers, child = auth_headers_child
     sid = uuid.uuid4()
-    db_session.add(SessionModel(
+    session = SessionModel(
         id=sid, child_user_id=child.id, title="压缩测试",
         status="active", needs_compression=True,
+    )
+    db_session.add(session)
+    await db_session.flush()
+    # R+: 添加预存 human + AI 消息使 actives_orm 有数据可压缩（Row 3 保留旧行）
+    db_session.add(Message(
+        session_id=sid, role=MessageRole.human,
+        content="上一轮消息", status=MessageStatus.active,
+    ))
+    db_session.add(Message(
+        session_id=sid, role=MessageRole.ai,
+        content="上一轮回复", status=MessageStatus.active,
     ))
     await db_session.commit()
 
@@ -288,8 +307,11 @@ async def test_compression_progress_fired_when_flag_true(api_client, auth_header
         await resp.aclose()
 
     frames = _parse_sse_frames(resp.text)
-    assert any(f["type"] == "compression_progress" for f in frames), (
-        "compression_progress should be emitted"
+    assert any(f["type"] == "compression_start" for f in frames), (
+        "compression_start should be emitted"
+    )
+    assert any(f["type"] == "compression_end" for f in frames), (
+        "compression_end should be emitted"
     )
     # 验证 active → compressed + new summary
     msgs = (await db_session.execute(
@@ -302,12 +324,23 @@ async def test_compression_progress_fired_when_flag_true(api_client, auth_header
 
 @pytest.mark.asyncio
 async def test_compression_failure_keeps_flag(api_client, auth_headers_child, db_session):
-    """压缩失败 → SSE error 帧 + needs_compression 保持 True。（Group 9）"""
+    """压缩 LLM 抛错 → SSE error 帧 + needs_compression 保持 True。（Group 9）"""
     headers, child = auth_headers_child
     sid = uuid.uuid4()
-    db_session.add(SessionModel(
+    session = SessionModel(
         id=sid, child_user_id=child.id, title="压缩失败测试",
         status="active", needs_compression=True,
+    )
+    db_session.add(session)
+    await db_session.flush()
+    # R+: 添加预存 human + AI 消息使 actives_orm 有数据可压缩（Row 3 保留旧行）
+    db_session.add(Message(
+        session_id=sid, role=MessageRole.human,
+        content="上一轮消息", status=MessageStatus.active,
+    ))
+    db_session.add(Message(
+        session_id=sid, role=MessageRole.ai,
+        content="上一轮回复", status=MessageStatus.active,
     ))
     await db_session.commit()
 
@@ -330,6 +363,10 @@ async def test_compression_failure_keeps_flag(api_client, auth_headers_child, db
 
     frames = _parse_sse_frames(resp.text)
     assert any(f["type"] == "error" for f in frames), "error frame should be emitted on compression failure"
+    error_frame = next(f for f in frames if f["type"] == "error")
+    assert error_frame["data"].get("code") == "CompressionError", (
+        f"Expected CompressionError, got {error_frame}"
+    )
     session = await db_session.get(SessionModel, sid)
     assert session.needs_compression is True, "flag should stay True after failure"
 
@@ -349,6 +386,6 @@ async def test_compression_skipped_when_flag_false(api_client, auth_headers_chil
         assert resp.status_code == 200
         await resp.aclose()
 
-    assert b"compression_progress" not in resp.content, (
-        "should NOT emit compression_progress when flag is False"
+    assert b"compression_start" not in resp.content, (
+        "should NOT emit compression_start when flag is False"
     )

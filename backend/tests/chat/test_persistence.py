@@ -290,4 +290,8 @@ async def test_enqueue_audit_sets_pending_and_enqueues(db_session, child_user):
         args, kwargs = mock_manager.set_pending.await_args
         assert args[:2] == (str(sid), 1)
         assert "started_at" in kwargs
+        started_at = kwargs["started_at"]
+        assert started_at.endswith("+00:00") or started_at.endswith("Z"), (
+            f"started_at must be UTC, got {started_at!r}"
+        )
         mock_arq_pool.enqueue_job.assert_awaited_once()

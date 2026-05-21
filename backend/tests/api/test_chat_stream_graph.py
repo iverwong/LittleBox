@@ -16,6 +16,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from langchain_core.messages import AIMessage
 pytestmark = pytest.mark.asyncio(loop_scope="function")
 
 
@@ -36,6 +37,7 @@ from app.chat.graph import main_graph
 from app.db import get_db
 from app.models.accounts import Family, FamilyMember, User
 from app.models.chat import Message
+from app.models.chat import Session as SessionModel
 from app.models.enums import MessageRole, MessageStatus, UserRole
 
 # ---------------------------------------------------------------------------
@@ -776,3 +778,332 @@ async def test_thinking_only_no_content_no_emit_end(
         assert "thinking_end" not in frame_types, (
             f"thinking_end should NOT be emitted without delta; got {frame_types}"
         )
+
+
+# ---------------------------------------------------------------------------
+# G7: Compression path — session_meta → compression_start → compression_end → delta → end
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def compression_session(db_session, child_user):
+    """Create a session with 2 active messages + needs_compression=True."""
+    from datetime import UTC, datetime as _dt
+    from uuid import uuid4 as _uuid4
+
+    base_ts = _dt.now(UTC)
+    sid = _uuid4()
+    session = SessionModel(id=sid, child_user_id=child_user.id, title="test")
+    db_session.add(session)
+    await db_session.flush()
+
+    msg1 = Message(
+        session_id=sid, role=MessageRole.human,
+        content="你好", status=MessageStatus.active,
+    )
+    msg1.created_at = base_ts
+    db_session.add(msg1)
+    await db_session.flush()
+
+    msg2 = Message(
+        session_id=sid, role=MessageRole.ai,
+        content="今天天气不错", status=MessageStatus.active,
+    )
+    msg2.created_at = base_ts.replace(microsecond=base_ts.microsecond + 1)
+    db_session.add(msg2)
+    await db_session.flush()
+
+    session.needs_compression = True
+    session.context_size_tokens = 600000
+    await db_session.commit()
+    return sid, child_user, msg1.id, msg2.id
+
+
+@pytest.mark.asyncio
+async def test_compression_normal_path(
+    api_client_with_eval, auth_headers_child, db_session, compression_session, monkeypatch,
+):
+    """Compression normal path: session_meta → compression_start → compression_end → delta → end."""
+
+    headers, child = auth_headers_child
+    sid, _, msg1_id, msg2_id = compression_session
+
+    fake_payloads = [
+        {"delta": "回复"},
+        {"finish_reason": "stop"},
+    ]
+
+    async def fake_astream(initial_state, stream_mode="custom"):
+        for p in fake_payloads:
+            yield p
+
+    fake_c_llm = AsyncMock()
+    fake_c_llm.ainvoke = AsyncMock(return_value=AIMessage(content="用户打招呼，AI 回应天气"))
+
+    monkeypatch.setattr("app.api.me.main_graph", AsyncMock())
+    monkeypatch.setattr("app.api.me.main_graph.astream", fake_astream)
+
+    with patch("app.chat.factory.get_chat_llm", return_value=fake_c_llm):
+        body = make_payload(content="继续聊聊", session_id=str(sid))
+        resp = await api_client_with_eval.post(
+            "/api/v1/me/chat/stream", json=body, headers=headers,
+        )
+        assert resp.status_code == 200
+        await resp.aclose()
+
+    frames = _parse_sse_frames(resp.text)
+    frame_types = [f["type"] for f in frames]
+
+    # Event sequence: session_meta → compression_start → compression_end → delta → end
+    assert frame_types[0] == "session_meta"
+    assert frame_types[1] == "compression_start"
+    assert frame_types[2] == "compression_end"
+    assert frame_types[3] == "delta"
+    assert frame_types[4] == "end"
+
+    # Verify compression wrote a summary row
+    summary = (
+        await db_session.execute(
+            select(Message).where(
+                Message.session_id == sid, Message.role == MessageRole.summary,
+            )
+        )
+    ).scalar_one_or_none()
+    assert summary is not None
+    assert summary.status == MessageStatus.active
+    assert "用户打招呼" in summary.content
+
+    # Old messages are compressed（按 ID 查询避免 order-dependent 干扰）
+    for mid in (msg1_id, msg2_id):
+        row = await db_session.get(Message, mid)
+        assert row is not None, f"Message {mid} not found"
+        assert row.status == MessageStatus.compressed, f"msg {mid} status={row.status}"
+
+
+@pytest.mark.asyncio
+async def test_compression_with_reasoning_path(
+    api_client_with_eval, auth_headers_child, db_session, compression_session, monkeypatch,
+):
+    """Compression + reasoning: session_meta → compression_start → compression_end → thinking_start → thinking_end → delta → end."""
+    headers, child = auth_headers_child
+    sid, _, msg1_id, msg2_id = compression_session
+
+    fake_payloads = [
+        {"reasoning": True},
+        {"reasoning": True},
+        {"delta": "思考后回复"},
+        {"finish_reason": "stop"},
+    ]
+
+    async def fake_astream(initial_state, stream_mode="custom"):
+        for p in fake_payloads:
+            yield p
+
+    fake_c_llm = AsyncMock()
+    fake_c_llm.ainvoke = AsyncMock(return_value=AIMessage(content="摘要"))
+
+    monkeypatch.setattr("app.api.me.main_graph", AsyncMock())
+    monkeypatch.setattr("app.api.me.main_graph.astream", fake_astream)
+
+    with patch("app.chat.factory.get_chat_llm", return_value=fake_c_llm):
+        body = make_payload(content="继续", session_id=str(sid))
+        resp = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body, headers=headers,
+    )
+    assert resp.status_code == 200
+    await resp.aclose()
+
+    frames = _parse_sse_frames(resp.text)
+    frame_types = [f["type"] for f in frames]
+
+    assert frame_types[0] == "session_meta"
+    assert frame_types[1] == "compression_start"
+    assert frame_types[2] == "compression_end"
+    assert frame_types[3] == "thinking_start"
+    assert frame_types[4] == "thinking_end"
+    assert frame_types[5] == "delta"
+    assert frame_types[6] == "end"
+
+
+@pytest.mark.asyncio
+async def test_compression_failure_path(
+    api_client_with_eval, auth_headers_child, db_session, compression_session, monkeypatch,
+):
+    """Compression LLM raises → compression_start without compression_end + error(CompressionError)."""
+    headers, child = auth_headers_child
+    sid, _, msg1_id, msg2_id = compression_session
+
+    fake_c_llm = AsyncMock()
+    fake_c_llm.ainvoke = AsyncMock(side_effect=RuntimeError("LLM compression failed"))
+
+    monkeypatch.setattr("app.chat.factory.get_chat_llm", lambda: fake_c_llm)
+    async def _fake_astream_fail(initial_state, stream_mode="custom"):
+        yield {"finish_reason": "stop"}
+    monkeypatch.setattr("app.api.me.main_graph", AsyncMock())
+    monkeypatch.setattr("app.api.me.main_graph.astream", _fake_astream_fail)
+
+    body = make_payload(content="继续", session_id=str(sid))
+    resp = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body, headers=headers,
+    )
+    # The error is caught inside generator, so HTTP status is still 200
+    assert resp.status_code == 200
+    await resp.aclose()
+
+    frames = _parse_sse_frames(resp.text)
+    frame_types = [f["type"] for f in frames]
+
+    # compression_start present, compression_end absent, error present
+    assert frame_types[0] == "session_meta"
+    assert "compression_start" in frame_types
+    assert "compression_end" not in frame_types, (
+        f"compression_end should NOT appear on failure; got {frame_types}"
+    )
+    assert "error" in frame_types
+    error_frame = next(f for f in frames if f["type"] == "error")
+    assert error_frame["data"]["code"] == "CompressionError"
+
+    # No NEW AI row created by the generator（压缩失败 → commit② 未执行）
+    ai_rows = (
+        await db_session.execute(
+            select(Message).where(
+                Message.session_id == sid,
+                Message.role == MessageRole.ai,
+                Message.status == MessageStatus.active,
+            )
+        )
+    ).scalars().all()
+    # 夹具已有 1 条 AI 消息（msg2），压缩失败后不应新增
+    assert len(ai_rows) == 1, (
+        f"Expected 1 pre-existing AI row, got {len(ai_rows)}"
+    )
+
+    # session.needs_compression should still be True (compression didn't complete)
+    session_row = (
+        await db_session.execute(
+            select(SessionModel).where(SessionModel.id == sid)
+        )
+    ).scalar_one()
+    assert session_row.needs_compression is True
+
+
+@pytest.mark.asyncio
+async def test_compression_row84_regression(
+    api_client_with_eval, auth_headers_child, db_session, compression_session, monkeypatch,
+):
+    """Row 84 回归断言：端到端压缩链路生成的 summary 不含对话式起首。
+
+    Mock LLM 返回客观摘要「用户说你好，AI 回应今天天气不错」。
+    断言存储的 summary 首 30 字符不含「好的」「嗯」「明白」「我准备」「小主人」。
+    """
+    headers, child = auth_headers_child
+    sid, _, msg1_id, msg2_id = compression_session
+
+    fake_c_llm = AsyncMock()
+    # Mock LLM returning a proper objective summary (NOT conversational greeting)
+    fake_c_llm.ainvoke = AsyncMock(
+        return_value=AIMessage(content="用户说你好，AI 回应今天天气不错"),
+    )
+
+    monkeypatch.setattr("app.chat.factory.get_chat_llm", lambda: fake_c_llm)
+    monkeypatch.setattr("app.api.me.main_graph", AsyncMock())
+    async def _fake_astream_84(initial_state, stream_mode="custom"):
+        yield {"delta": "r"}
+        yield {"finish_reason": "stop"}
+    monkeypatch.setattr("app.api.me.main_graph.astream", _fake_astream_84)
+
+    body = make_payload(content="继续聊聊", session_id=str(sid))
+    resp = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body, headers=headers,
+    )
+    assert resp.status_code == 200
+    await resp.aclose()
+
+    # Verify summary content
+    summary = (
+        await db_session.execute(
+            select(Message).where(
+                Message.session_id == sid, Message.role == MessageRole.summary,
+            )
+        )
+    ).scalar_one_or_none()
+    assert summary is not None, "Summary should exist"
+
+    # Check first 30 chars for anti-pattern keywords
+    first_30 = summary.content[:30]
+    anti_keywords = ["好的", "嗯", "明白", "我准备", "小主人"]
+    for kw in anti_keywords:
+        assert kw not in first_30, (
+            f"Summary contains conversational greeting '{kw}': first_30={first_30!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_compression_noop_empty_filter(
+    api_client_with_eval, auth_headers_child, db_session, child_user, monkeypatch,
+):
+    """Only one active human message + needs_compression=True → actives empty after filter → noop (no summary, no compression markers)."""
+    from uuid import uuid4 as _uuid4
+
+    headers, child = auth_headers_child
+    sid = _uuid4()
+
+    # Create session with only one human message
+    session = SessionModel(id=sid, child_user_id=child.id, title="test")
+    db_session.add(session)
+    await db_session.flush()
+
+    msg = Message(
+        session_id=sid, role=MessageRole.human,
+        content="你好", status=MessageStatus.active,
+    )
+    db_session.add(msg)
+    await db_session.flush()
+
+    session.needs_compression = True
+    session.context_size_tokens = 600000
+    await db_session.commit()
+
+    fake_payloads = [
+        {"delta": "回复你"},
+        {"finish_reason": "stop"},
+    ]
+
+    async def fake_astream(initial_state, stream_mode="custom"):
+        for p in fake_payloads:
+            yield p
+
+    monkeypatch.setattr("app.api.me.main_graph", AsyncMock())
+    monkeypatch.setattr("app.api.me.main_graph.astream", fake_astream)
+
+    body = make_payload(content="新的消息", session_id=str(sid))
+    resp = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body, headers=headers,
+    )
+    assert resp.status_code == 200
+    await resp.aclose()
+
+    frames = _parse_sse_frames(resp.text)
+    frame_types = [f["type"] for f in frames]
+
+    # compression events should still appear (attempted, nothing to compress)
+    assert "compression_start" in frame_types
+    assert "compression_end" in frame_types
+
+    # No summary row should be written
+    summaries = (
+        await db_session.execute(
+            select(Message).where(
+                Message.session_id == sid, Message.role == MessageRole.summary,
+            )
+        )
+    ).scalars().all()
+    assert len(summaries) == 0, "No summary should exist in noop path"
+
+    # session.needs_compression should be False (reset by noop path)
+    session_row = (
+        await db_session.execute(
+            select(SessionModel).where(SessionModel.id == sid)
+        )
+    ).scalar_one()
+    assert session_row.needs_compression is False

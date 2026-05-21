@@ -638,24 +638,35 @@ async def chat_stream(
                 # ---- 阻塞压缩检查（scheme R）：needs_compression=True → 同步压缩 ----
                 if session.needs_compression:
                     try:
-                        yield _frame_sse_event("compression_progress", {
-                            "stage": "compressing",
-                            "message": "正在为对话腾出更多空间",
-                        })
+                        yield _frame_sse_event("compression_start", {})
+
                         from app.chat.compression import build_compression_prompt
+                        from app.chat.context import _to_lc_message
                         from app.chat.factory import get_chat_llm as _get_compression_llm
+
+                        # R+: 计算受保护行（本轮新 human / 复用 orphan）
+                        protected_id = user_msg.id if user_msg is not None else last_msg.id
+
+                        # R+: 查询待压缩集，排除受保护行
                         actives_orm = (
                             await db.execute(
                                 select(Message)
-                                .where(Message.session_id == sid, Message.status == "active")
+                                .where(
+                                    Message.session_id == sid,
+                                    Message.status == "active",
+                                    Message.id != protected_id,
+                                )
                                 .order_by(Message.created_at.asc())
                             )
                         ).scalars().all()
+
                         if actives_orm:
-                            # 用 build_context 获取 LC 格式的 messages 供 LLM 输入
-                            ctx = await build_context(sid, db)
+                            # R+: 自组装 summarizer 输入，不调 build_context（避免新 human 和排序问题）
+                            c_input = build_compression_prompt(
+                                [_to_lc_message(mo) for mo in actives_orm]
+                            )
                             c_llm = _get_compression_llm()
-                            c_result = await c_llm.ainvoke(build_compression_prompt(ctx))
+                            c_result = await c_llm.ainvoke(c_input)
                             for mo in actives_orm:
                                 mo.status = "compressed"
                             db.add(Message(
@@ -663,12 +674,45 @@ async def chat_stream(
                                 status=MessageStatus.active,
                                 content=c_result.content if hasattr(c_result, "content") else str(c_result),
                             ))
-                            session.needs_compression = False
-                            await db.commit()
-                            # 重建上下文供 LLM 使用（压缩后 history 仅含 summary）
-                            _hist = await build_context(sid, db)
-                            _sp = build_system_prompt(_age, _gender)
-                            initial_state["messages"] = [_sp, *_hist]
+                        else:
+                            logger.info("compression noop for session %s: no messages to compress", sid)
+
+                        session.needs_compression = False
+                        await db.commit()
+
+                        # R+: 手动构造 initial_state["messages"]（方案 a）
+                        # 顺序：[main_system, (turn_summ?), summary, protected_human]
+                        # 不调 build_context（ASC 排序会将 protected_human 置于 summary 前）
+                        _sp = build_system_prompt(_age, _gender)
+                        _new_hist = []
+
+                        # 若有新摘要行，注入（位于 protected_human 之前）
+                        if actives_orm:
+                            _summary_msg = (
+                                await db.execute(
+                                    select(Message)
+                                    .where(
+                                        Message.session_id == sid,
+                                        Message.role == MessageRole.summary,
+                                        Message.status == MessageStatus.active,
+                                    )
+                                    .order_by(Message.created_at.desc())
+                                    .limit(1)
+                                )
+                            ).scalar_one()
+                            _new_hist.append(_to_lc_message(_summary_msg))
+
+                        # 受保护 human 行放在最后
+                        _protected_msg = (
+                            await db.execute(
+                                select(Message).where(Message.id == protected_id)
+                            )
+                        ).scalar_one()
+                        _new_hist.append(_to_lc_message(_protected_msg))
+
+                        initial_state["messages"] = [_sp, *_new_hist]
+
+                        yield _frame_sse_event("compression_end", {})
                     except Exception:
                         logger.exception("compression failed for session %s", sid)
                         yield _frame_sse_event("error", {

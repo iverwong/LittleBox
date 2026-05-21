@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import pytest
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessageChunk, HumanMessage, AIMessage, SystemMessage
 
 from app.chat.compression import (
     COMPRESSION_PROMPT_STUB,
@@ -10,6 +10,7 @@ from app.chat.compression import (
     build_compression_prompt,
 )
 from app.chat.extractors import extract_usage
+from app.chat.prompts import SUMMARY_PREFIX
 
 
 def _make_chunk(usage: dict | None = None) -> AIMessageChunk:
@@ -57,3 +58,34 @@ class TestCompressionPrompt:
 class TestThresholdConstant:
     def test_threshold(self):
         assert CONTEXT_COMPRESS_THRESHOLD_TOKENS == 500_000
+
+
+class TestSecondaryCompression:
+    """二次压缩：旧的 summary 行应包含在压缩集中。"""
+
+    def test_old_summary_included_in_prompt(self):
+        """build_compression_prompt 传入含 summary 的 actives → summary 作为 SystemMessage 保留在输入中。"""
+        lc_msgs = [
+            HumanMessage(content="你好"),
+            AIMessage(content="今天过得怎么样？"),
+            SystemMessage(content=SUMMARY_PREFIX + "上次讨论：数学作业"),
+        ]
+        result = build_compression_prompt(lc_msgs)
+        assert len(result) == 4
+        assert result[3].content == SUMMARY_PREFIX + "上次讨论：数学作业"
+
+    def test_old_summary_middle_position(self):
+        """summary 行在中间时，build_compression_prompt 保持原始顺序。"""
+        lc_msgs = [
+            HumanMessage(content="第一轮"),
+            AIMessage(content="回复"),
+            SystemMessage(content=SUMMARY_PREFIX + "旧摘要"),
+            HumanMessage(content="第二轮"),
+            AIMessage(content="第二轮回复"),
+        ]
+        result = build_compression_prompt(lc_msgs)
+        assert len(result) == 6
+        # 原始顺序：[stub, human, ai, summary, human, ai]
+        assert isinstance(result[1], HumanMessage)
+        assert isinstance(result[3], SystemMessage)
+        assert result[3].content == SUMMARY_PREFIX + "旧摘要"
