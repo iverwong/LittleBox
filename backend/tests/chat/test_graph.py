@@ -39,6 +39,14 @@ from app.chat.state import MainDialogueState
 # ---------------------------------------------------------------------------
 
 
+_ALL_FALSE_AUDIT = {
+    "crisis_locked": False,
+    "crisis_detected": False,
+    "redline_triggered": False,
+    "guidance": None,
+}
+
+
 def _make_state(
     *,
     messages: list[BaseMessage] | None = None,
@@ -53,7 +61,7 @@ def _make_state(
         "child_profile": None,  # not read in M6 nodes
         "provider": provider,
         "messages": messages or [],
-        "audit_state": audit_state or {},
+        "audit_state": audit_state or _ALL_FALSE_AUDIT,
         "pending_guidance": pending_guidance,
         "generated_token_count": 0,
         "client_alive": True,
@@ -171,8 +179,8 @@ def test_route_by_risk_m6_always_main():
 
 
 def test_route_by_risk_empty_audit_state():
-    """Missing audit_state keys fallback to falsy → 'main'."""
-    state = _make_state(audit_state={})
+    """AuditState 默认全 False → 路由到 'main'。"""
+    state = _make_state()
     assert route_by_risk(state) == "main"
 
 
@@ -357,14 +365,14 @@ class _FakeLLM:
 
 @pytest.mark.asyncio
 async def test_call_main_llm_finish_reason_passthrough_stop(monkeypatch):
-    """additional_kwargs finish_reason='stop' → writer receives finish_reason stop."""
+    """finish_reason='stop' → writer receives finish_reason stop."""
 
     def _fake_get_llm():
         return _FakeLLM(
             [
                 AIMessageChunk(
                     content="hi",
-                    additional_kwargs={"response_metadata": {"finish_reason": "stop"}},
+                    response_metadata={"finish_reason": "stop"},
                 ),
             ]
         )
@@ -389,14 +397,14 @@ async def test_call_main_llm_finish_reason_passthrough_stop(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_call_main_llm_finish_reason_passthrough_length(monkeypatch):
-    """additional_kwargs finish_reason='length' → writer receives finish_reason length."""
+    """finish_reason='length' → writer receives finish_reason length."""
 
     def _fake_get_llm():
         return _FakeLLM(
             [
                 AIMessageChunk(
                     content="long",
-                    additional_kwargs={"response_metadata": {"finish_reason": "length"}},
+                    response_metadata={"finish_reason": "length"},
                 ),
             ]
         )
@@ -421,14 +429,14 @@ async def test_call_main_llm_finish_reason_passthrough_length(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_call_main_llm_finish_reason_passthrough_content_filter(monkeypatch):
-    """additional_kwargs finish_reason='content_filter' → writer receives content_filter."""
+    """finish_reason='content_filter' → writer receives content_filter."""
 
     def _fake_get_llm():
         return _FakeLLM(
             [
                 AIMessageChunk(
                     content="filtered",
-                    additional_kwargs={"response_metadata": {"finish_reason": "content_filter"}},
+                    response_metadata={"finish_reason": "content_filter"},
                 ),
             ]
         )
@@ -460,7 +468,7 @@ async def test_call_main_llm_finish_reason_non_whitelist_filtered(monkeypatch):
             [
                 AIMessageChunk(
                     content="tool call",
-                    additional_kwargs={"response_metadata": {"finish_reason": "tool_calls"}},
+                    response_metadata={"finish_reason": "tool_calls"},
                 ),
             ]
         )

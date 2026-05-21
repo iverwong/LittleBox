@@ -10,16 +10,44 @@ services:
     ports:
       - "50060:8000"
     env_file: .env
+    environment:
+      - LB_ARQ_REDIS_DB=1
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
       timeout: 5s
       retries: 3
+
+  audit_worker:
+    build:
+      context: ./backend
+      args:
+        INSTALL_DEV: "true"
+    command: arq app.audit.worker.WORKER_SETTINGS
+    volumes:
+      - ./backend:/app
+    env_file: .env
+    environment:
+      - LB_ARQ_REDIS_DB=1
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "arq", "app.audit.worker.WORKER_SETTINGS", "--check"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    stop_grace_period: 30s
 
   db:
     image: postgres:18

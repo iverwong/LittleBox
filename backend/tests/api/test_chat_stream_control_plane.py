@@ -28,6 +28,15 @@ from uuid import uuid4
 
 import pytest
 pytestmark = pytest.mark.asyncio(loop_scope="function")
+
+
+@pytest.fixture(autouse=True)
+def _mock_enqueue_audit():
+    """所有控制平面测试共用：enqueue_audit mock 避免 Redis lifespan 依赖。"""
+    with patch("app.api.me.enqueue_audit", AsyncMock()):
+        yield
+
+
 from fakeredis.aioredis import FakeRedis
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -400,9 +409,13 @@ async def test_decision_row5_orphan_regen_null(
     assert len(discarded) == 1, f"Expected 1 discarded, got {[(m.id, m.status) for m in msgs]}"
     assert discarded[0].id == orphan_id
     assert len(active) == 2, f"Expected 2 active (human + ai), got {len(active)}"
-    assert active[0].role == MessageRole.human
-    assert active[0].content == "New content"
-    assert active[1].role == MessageRole.ai
+    # 注意：不能依赖 ORDER BY created_at, id 的排序确定性——UUID v4 非单调，
+    # 同事务内 created_at 全相同，排序退化为 id 字典序，AI 可能出现在 human 前。
+    # 按 role 查找而非靠位置索引。
+    active_human = next(m for m in active if m.role == MessageRole.human)
+    assert active_human.content == "New content"
+    active_ai = next(m for m in active if m.role == MessageRole.ai)
+    assert active_ai.content == "[fake]"
 
 
 # ---------------------------------------------------------------------------

@@ -1,19 +1,19 @@
 """Provider-aware extractors for finish_reason and reasoning_content.
 
-M6 patch 2 (Step 11.2): replaces inline field-path parsing in graph.py
-call_main_llm with dispatch-by-provider helpers. Each provider maps to
-its canonical field path for finish_reason and reasoning_content.
+M8-hotfix (Step 1): finish_reason 取值路径修正。
+修正依据见 LLM Provider 探针 F1 实证：
+  - `chunk.additional_kwargs` 在末 chunk 恒为 {}，取值恒 None
+  - 真路径为 `chunk.response_metadata["finish_reason"]`（LangChain 标准属性）
 
-Provider field path reference (verified from source 2026-05-09):
+Provider field path reference (verified from probe 2026-05-19):
   deepseek / openai:
-    finish_reason → chunk.additional_kwargs.response_metadata.finish_reason
-    (identical to ChatOpenAI; ChatDeepSeek inherits BaseChatOpenAI)
+    finish_reason → chunk.response_metadata["finish_reason"]
+    (直接属性，非 additional_kwargs 内嵌)
   deepseek:
     reasoning_content → chunk.additional_kwargs.reasoning_content
-    (ChatDeepSeek extracts it in _convert_chunk_to_generation_chunk,
-     langchain_deepseek/chat_models.py:309-314)
+    (ChatDeepSeek 在 _convert_chunk_to_generation_chunk 中提取)
   openai:
-    reasoning_content → None  (ChatOpenAI drops third-party reasoning fields)
+    reasoning_content → None  (ChatOpenAI 丢弃第三方 reasoning 字段)
 """
 
 from langchain_core.messages import AIMessageChunk
@@ -28,7 +28,11 @@ _FINISH_REASON_PATH: dict[str, str] = {
 
 
 def extract_finish_reason(chunk: AIMessageChunk, provider: str) -> str | None:
-    """Extract finish_reason by provider. None if absent or not in whitelist.
+    """从 chunk.response_metadata 提取 finish_reason。
+
+    M8-hotfix 修正：真路径是 chunk.response_metadata["finish_reason"] 直接属性，
+    而非 additional_kwargs["response_metadata"]["finish_reason"]。
+    探针实证末 5 chunk 中 additional_kwargs 恒为 {}。
 
     白名单（ALLOWED_FINISH_REASONS）：
       stop / length / content_filter — 透传
@@ -36,13 +40,12 @@ def extract_finish_reason(chunk: AIMessageChunk, provider: str) -> str | None:
 
     Args:
         chunk: LLM 输出 chunk
-        provider: provider 名（deepseek / openai）；未注册的 provider 走 deepseek 路径
+        provider: provider 名（仅用于签名兼容，两 provider 路径已一致）
 
     Returns:
         白名单内的 finish_reason 值，或 None
     """
-    ak = chunk.additional_kwargs or {}
-    metadata = ak.get("response_metadata") or {}
+    metadata = chunk.response_metadata or {}
     fr = metadata.get("finish_reason")
     return fr if fr in ALLOWED_FINISH_REASONS else None
 

@@ -2,6 +2,7 @@
 
 M6 patch 2 (Step 11.1): replaces ChatOpenAI + with_fallbacks tests with
 registry dispatch + ChatDeepSeek primary + fallback chain coverage.
+M8-hotfix: adds audit_bailian registry key and audit LLM retry/fallback tests.
 """
 
 from typing import Any
@@ -43,6 +44,10 @@ class _FakeSettings:
         )
         self.bailian_model = kwargs.get("bailian_model", "deepseek-v4-flash")
         self.llm_request_timeout_seconds = 60.0
+        # M8 audit pipeline settings
+        self.audit_model = kwargs.get("audit_model", "deepseek-v4-flash")
+        self.audit_reasoning_effort = kwargs.get("audit_reasoning_effort", "max")
+        self.audit_thinking_enabled = kwargs.get("audit_thinking_enabled", True)
         for k, v in kwargs.items():
             if hasattr(self, k):
                 setattr(self, k, v)
@@ -52,13 +57,19 @@ class _FakeSettings:
 
 
 class TestRegistryKeys:
-    """_PROVIDER_REGISTRY contains exactly deepseek and openai."""
+    """_PROVIDER_REGISTRY contains all 5 provider keys."""
 
     def test_registry_has_deepseek(self) -> None:
         assert "deepseek" in _PROVIDER_REGISTRY
 
     def test_registry_has_openai(self) -> None:
         assert "openai" in _PROVIDER_REGISTRY
+
+    def test_registry_has_audit_deepseek(self) -> None:
+        assert "audit_deepseek" in _PROVIDER_REGISTRY
+
+    def test_registry_has_audit_bailian(self) -> None:
+        assert "audit_bailian" in _PROVIDER_REGISTRY
 
     def test_registry_keys_are_callable(self) -> None:
         settings = _FakeSettings()
@@ -67,6 +78,9 @@ class TestRegistryKeys:
 
         oa_llm = _PROVIDER_REGISTRY["openai"](settings)
         assert isinstance(oa_llm, ChatOpenAI)
+
+        audit_bl = _PROVIDER_REGISTRY["audit_bailian"](settings)
+        assert isinstance(audit_bl, ChatDeepSeek)
 
 
 # ---- T1: build_provider_llm dispatch ----
@@ -181,6 +195,24 @@ class TestChatDeepSeekConstruction:
         assert llm.openai_api_base.startswith("https://dashscope.aliyuncs.com")
         assert llm.model == "deepseek-v4-flash"
 
+    def test_audit_deepseek_construction_params(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Mock ChatDeepSeek.__init__ to verify audit_deepseek uses audit_* settings."""
+        captured: dict[str, Any] = {}
+
+        def mock_init(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        monkeypatch.setattr(ChatDeepSeek, "__init__", mock_init)
+
+        settings = _FakeSettings()
+        _PROVIDER_REGISTRY["audit_deepseek"](settings)
+
+        assert captured.get("model") == "deepseek-v4-flash"
+        assert captured.get("extra_body") == {
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": "max",
+        }
+
 
 # ---- T5b: ChatDeepSeek thinking params (Step 11.3) ----
 # Source: langchain_deepseek/chat_models.py — no top-level thinking/reasoning_effort
@@ -254,3 +286,82 @@ class TestGetChatLlmCompat:
         first = get_chat_llm()
         second = get_chat_llm()
         assert first is second
+
+
+# ---- T7: audit LLM retry + fallback fault injection ----
+# 验证 build_audit_llm 的 with_retry / with_fallbacks 在 HTTP 层正确工作。
+# 通过 respx mock HTTP 层，注入瞬态错误确认重试机制生效。
+
+
+class TestAuditLlmRetry:
+    """审查 LLM with_retry / with_fallbacks 故障注入测试。"""
+
+    async def test_primary_retry_on_connect_error_then_success(self) -> None:
+        """主端首次 ConnectError → with_retry 重试 → 第二次成功。"""
+        import httpx
+        import respx
+        from app.config import settings
+
+        url = f"{settings.deepseek_base_url}/chat/completions"
+
+        async with respx.mock(assert_all_mocked=False) as respx_mock:
+            route = respx_mock.post(url)
+            # side_effect 数组：第一次 ConnectError，第二次 200
+            route.mock(
+                side_effect=[
+                    httpx.ConnectError("mock connection refused"),
+                    httpx.Response(
+                        status_code=200,
+                        json={
+                            "choices": [{
+                                "index": 0,
+                                "message": {"role": "assistant", "content": "测试回复"},
+                                "finish_reason": "stop",
+                            }],
+                        },
+                    ),
+                ],
+            )
+
+            from app.audit.llm import build_audit_llm
+            llm = build_audit_llm(settings)
+            from langchain_core.messages import HumanMessage
+            result = await llm.ainvoke([HumanMessage(content="你好")])
+            assert result.content is not None
+            # 第 1 次失败 + 第 2 次成功 = 2 次 HTTP 调用
+            assert len(respx_mock.calls) == 2
+
+    async def test_primary_all_fail_uses_fallback(self) -> None:
+        """主端持续 ConnectError → with_retry 耗尽 → fallback 百炼返回成功。"""
+        import httpx
+        import respx
+        from app.config import settings
+
+        primary_url = f"{settings.deepseek_base_url}/chat/completions"
+        fallback_url = f"{settings.bailian_base_url}/chat/completions"
+
+        async with respx.mock(assert_all_mocked=False) as respx_mock:
+            primary_route = respx_mock.post(primary_url)
+            # 主端 3 次全部 ConnectError
+            primary_route.mock(
+                side_effect=[
+                    httpx.ConnectError("mock connection refused") for _ in range(3)
+                ],
+            )
+            # 备用端成功
+            respx_mock.post(fallback_url).respond(
+                status_code=200,
+                json={
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "备端回复"},
+                        "finish_reason": "stop",
+                    }],
+                },
+            )
+
+            from app.audit.llm import build_audit_llm
+            llm = build_audit_llm(settings)
+            from langchain_core.messages import HumanMessage
+            result = await llm.ainvoke([HumanMessage(content="你好")])
+            assert result.content is not None

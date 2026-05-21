@@ -17,6 +17,7 @@ dependencies = [
     "openai>=1.30.0",
     "argon2-cffi>=23.1.0",
     "regex",
+    "arq>=0.26",
 ]
 
 [project.optional-dependencies]
@@ -34,7 +35,10 @@ dev = [
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
-markers = ["live: needs real LLM API"]
+markers = [
+    "live: needs real LLM API",
+    "audit: audit pipeline tests",
+]
 
 [tool.ruff]
 line-length = 100

@@ -45,10 +45,11 @@ class TestSessionORM:
         assert col.server_default is not None
 
     def test_session_field_count(self):
-        """Session 字段数从 7 增至 8（+needs_compression）。
+        """Session 字段数从 8 增至 9（+ai_turn_counter）。
 
         当前字段：id, created_at(BaseMixin), child_user_id, title,
-        status, last_active_at, context_size_tokens, needs_compression
+        status, last_active_at, context_size_tokens, needs_compression,
+        ai_turn_counter
         """
         cols = [c.name for c in inspect(Session).columns]
-        assert len(cols) == 8
+        assert len(cols) == 9
