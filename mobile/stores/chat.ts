@@ -6,6 +6,13 @@
  * - _onSseEvent：完整 7+1 事件处理（含 session_meta sid migrate + delta 累加 + phase 切换）
  * - _cleanupStream：扩展为 message status 收束（end/stopped/error/abort/firstFrameTimeout）
  *
+ * M7-patch · M8-patch 9 事件契约对齐（2026-05）：
+ * - SSE union 升级为 9 事件：compression_progress 单事件 → compression_start / compression_end 双事件
+ * - compression_start → streamPhase 'compressing'，占位文案 B 案锁定（AIMessage 实现）
+ * - compression_end 不切 streamPhase，保持 'compressing'，等 thinking_start 接管切 'thinking'
+ * - error.code 分支：CompressionError → toast（4a-patch.4 接入）；InternalError / 未知 → A4
+ * - 移除 SessionMessageState.compressionMessage 字段（新契约 payload 为空 {}）
+ *
  * 关键纪律：
  * - Map 必须不可变更新（new Map(prev).set(...)）以触发 React re-render
  * - inProgress 仅 UI hint；权威态以 GET messages 顶层 in_progress + 末行 role 为准
@@ -68,7 +75,6 @@ export type SessionMessageState = {
   lastFetchedAt: number;
   inProgress: boolean;
   streamPhase: StreamPhase;
-  compressionMessage?: string;
 };
 
 export type ActiveStream = {
@@ -367,7 +373,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           const newKey = event.session_id;
           const hid = event.hid;
 
-          // 同 sid：仅回填 user msg serverId（streamPhase 保持当前值，等 thinking_start 切换）
+          // 同 sid：仅回填 user msg serverId（streamPhase 保持当前值，等 compression_start 或 thinking_start 切换）
           if (newKey === storeKey) {
             const bucket = state.messagesBySession.get(storeKey);
             if (!bucket) return {};
@@ -441,14 +447,31 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           };
         }
 
-        case 'compression_progress': {
+        case 'compression_start': {
+          // M7-patch: 上下文压缩开始（M8-patch 9 事件契约）。
+          // streamPhase 切 'compressing'，占位文案 B 案由 AIMessage 锁定（4a-patch.3）。
+          // payload 当前为空 {}，forward-compat 时再消费字段。
           const bucket = state.messagesBySession.get(storeKey);
           if (!bucket) return {};
           const nextMessages = new Map(state.messagesBySession);
           nextMessages.set(storeKey, {
             ...bucket,
             streamPhase: 'compressing',
-            compressionMessage: event.message,
+          });
+          return { messagesBySession: nextMessages };
+        }
+
+        case 'compression_end': {
+          // M7-patch: 压缩成功结束。streamPhase 切回 'feeling' 作为过渡态，
+          // 让用户感知到「压缩完成、AI 在重新启动思考」；后续 thinking_start 接管切 'thinking'。
+          // 4 段过渡节奏：feeling → compressing → feeling → thinking。
+          // 契约保证 compression_start/end 之间不插 delta，无需清理 content。
+          const bucket = state.messagesBySession.get(storeKey);
+          if (!bucket) return {};
+          const nextMessages = new Map(state.messagesBySession);
+          nextMessages.set(storeKey, {
+            ...bucket,
+            streamPhase: 'feeling',
           });
           return { messagesBySession: nextMessages };
         }
@@ -532,7 +555,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }
 
         case 'error': {
-          // 终止帧；_cleanupStream('error') 处理 failed 收束
+          // 终止帧；AI message status='failed' 收束由 _cleanupStream('error') 处理
+          //（chatStream.ts onClose 回调统一调用，streamPhase 在 _cleanupStream 内切回 'idle'）。
+          // M7-patch: code 枚举 = CompressionError / InternalError（未知按 InternalError 处理）。
+          // 按 M7 §5.3：M7 范围内统一进 A4 失败态，不按 code 区分 UI 文案；
+          // 失败态视觉 + 重新生成归 Step 6（A4），错误反馈映射归 Step 7（useChatErrorHandler）。
           console.warn('[chatStore] sse error frame', {
             storeKey,
             code: event.code,

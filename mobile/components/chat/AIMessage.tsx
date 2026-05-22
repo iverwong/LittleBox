@@ -7,6 +7,11 @@
  * Step 5：根据 stoppedTag 渲染「已停止」角标
  * Step 6：根据 status='failed' 渲染 A4 失败占位
  *
+ * M7-patch · M8-patch 9 事件契约对齐（2026-05）：
+ * - 'compressing' 占位文案锁定 B 案：「正在为对话腾出更多空间」（不带「…」，由 dots 动态提供）
+ * - 移除 compressionMessage 订阅（store 已删字段；新契约 compression_start/end payload 为空 {}）
+ * - phase 转换：compression_start → 'compressing' / compression_end 不切（保持） / thinking_start → 'thinking'
+ *
  * 设计约束：
  * - streamPhase 是 bucket(SessionMessageState)级状态，不是 Message 字段
  * - 仅当 AI 气泡 status='streaming' && content='' 时消费 phase；首 delta 到达即覆盖占位
@@ -22,16 +27,13 @@ type Props = {
     message: Message
 }
 
-function placeholderForPhase(
-    phase: StreamPhase,
-    compressionMessage: string | undefined,
-): string | null {
+function placeholderForPhase(phase: StreamPhase): string | null {
     switch (phase) {
         case 'feeling':
             return '感受中'
         case 'compressing':
-            // 后端 compression_progress 帧带的 message（中文文案），无则前端 fallback
-            return compressionMessage ?? '正在为对话腾出更多空间'
+            // M7-patch: B 案锁定文案（不带「…」，dots 动态追加）
+            return '正在为对话腾出更多空间'
         case 'thinking':
             return '思考中'
         default:
@@ -67,17 +69,14 @@ function PlaceholderBubble({ text }: { text: string }) {
 }
 
 export function AIMessage({ message }: Props) {
-    // 订阅所属 bucket 的 phase + compressionMessage；Step 4b 接 React.memo 后再做 selector 优化
+    // 订阅所属 bucket 的 phase；Step 4b 接 React.memo 后再做 selector 优化
     const bucketPhase = useChatStore(
         (s) => s.messagesBySession.get(message.sid)?.streamPhase ?? 'idle'
-    )
-    const compressionMessage = useChatStore(
-        (s) => s.messagesBySession.get(message.sid)?.compressionMessage
     )
     const isAwaitingFirstToken =
         message.status === 'streaming' && message.content.length === 0
     const placeholder = isAwaitingFirstToken
-        ? placeholderForPhase(bucketPhase, compressionMessage)
+        ? placeholderForPhase(bucketPhase)
         : null
 
     if (placeholder != null) {

@@ -7,6 +7,13 @@
  *
  * 本版改用 react-native-sse（库内部用 XHR + 自行解析 SSE 协议），协议事件 /
  * 状态机 / 首帧超时 / abort / close reason 等上层契约不变。
+ *
+ * M7-patch · M8-patch 9 事件契约对齐（2026-05）：
+ * - `compression_progress` 单事件 → `compression_start` / `compression_end` 双事件
+ * - 两个新事件 payload 当前为空 `{}`，类型保持窄定义；未来扩展直接扩 union
+ * - 正常时序：session_meta → [compression_start → compression_end → ] thinking_start → ... → end
+ * - 失败压缩：session_meta → compression_start → error{code:"CompressionError"}
+ * - error.code 枚举：CompressionError / InternalError（解析层不收紧，由 store 做分支）
  */
 
 import EventSource from 'react-native-sse';
@@ -15,7 +22,8 @@ import { BASE_URL, handle401 } from '@/services/api/client';
 
 export type SseEvent =
   | { type: 'session_meta'; session_id: string; hid: string }
-  | { type: 'compression_progress'; stage: 'compressing'; message: string }
+  | { type: 'compression_start' }
+  | { type: 'compression_end' }
   | { type: 'thinking_start' }
   | { type: 'thinking_end' }
   | { type: 'delta'; content: string }
@@ -47,7 +55,8 @@ const CHAT_STREAM_PATH = '/me/chat/stream';
 
 type CustomEventName =
   | 'session_meta'
-  | 'compression_progress'
+  | 'compression_start'
+  | 'compression_end'
   | 'thinking_start'
   | 'thinking_end'
   | 'delta'
@@ -150,14 +159,16 @@ export function openChatStream(args: OpenChatStreamArgs): ChatStreamHandle {
     });
   });
 
-  es.addEventListener('compression_progress', (event) => {
+  // M7-patch: compression_start / compression_end 双事件（payload 当前为空 {}）
+  // 时序：必在 thinking_start 之前；正常压缩两者成对出现，失败压缩 compression_start 后接 error{CompressionError}
+  es.addEventListener('compression_start', () => {
     if (closed) return;
-    const payload = safeParseData((event as { data?: unknown }).data);
-    onEvent({
-      type: 'compression_progress',
-      stage: 'compressing',
-      message: typeof payload.message === 'string' ? payload.message : '',
-    });
+    onEvent({ type: 'compression_start' });
+  });
+
+  es.addEventListener('compression_end', () => {
+    if (closed) return;
+    onEvent({ type: 'compression_end' });
   });
 
   es.addEventListener('thinking_start', () => {
