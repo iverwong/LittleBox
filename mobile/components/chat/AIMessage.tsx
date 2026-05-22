@@ -7,10 +7,11 @@
  * Step 5：根据 stoppedTag 渲染「已停止」角标
  * Step 6：根据 status='failed' 渲染 A4 失败占位
  *
- * M7-patch · M8-patch 9 事件契约对齐（2026-05）：
- * - 'compressing' 占位文案锁定 B 案：「正在为对话腾出更多空间」（不带「…」，由 dots 动态提供）
- * - 移除 compressionMessage 订阅（store 已删字段；新契约 compression_start/end payload 为空 {}）
- * - phase 转换：compression_start → 'compressing' / compression_end 不切（保持） / thinking_start → 'thinking'
+* M7-patch · M8-patch 9 事件契约对齐（2026-05）：
+* - 'compressing' 占位文案锁定 B 案：「正在为对话腾出更多空间」（不带「…」，由 dots 动态提供）
+* - 移除 compressionMessage 订阅（store 已删字段；新契约 compression_start/end payload 为空 {}）
+* - phase 转换：compression_start → 'compressing' / compression_end → 'feeling' / thinking_start → 'thinking'
+* - 占位文案 4 段过渡节奏：feeling → compressing → feeling → thinking
  *
  * 设计约束：
  * - streamPhase 是 bucket(SessionMessageState)级状态，不是 Message 字段

@@ -9,8 +9,10 @@
  * M7-patch · M8-patch 9 事件契约对齐（2026-05）：
  * - SSE union 升级为 9 事件：compression_progress 单事件 → compression_start / compression_end 双事件
  * - compression_start → streamPhase 'compressing'，占位文案 B 案锁定（AIMessage 实现）
- * - compression_end 不切 streamPhase，保持 'compressing'，等 thinking_start 接管切 'thinking'
- * - error.code 分支：CompressionError → toast（4a-patch.4 接入）；InternalError / 未知 → A4
+ * - compression_end → streamPhase 'feeling'（过渡态），thinking_start 接管切 'thinking'
+ * - 占位文案 4 段过渡节奏：feeling → compressing → feeling → thinking
+ * - error 帧统一进 A4 失败态（按 M7 §5.3 不按 code 区分 UI 文案）；
+ *   失败态视觉 + 重新生成归 Step 6，错误反馈映射归 Step 7
  * - 移除 SessionMessageState.compressionMessage 字段（新契约 payload 为空 {}）
  *
  * 关键纪律：
