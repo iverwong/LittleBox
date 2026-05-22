@@ -1,14 +1,12 @@
 /**
- * M7 · 子端聊天输入框组件（草稿态）。
+ * M7 · 子端聊天输入框组件。
  *
- * Step 3.1 范围：
- * 1. 受控多行 TextInput + 发送图标按钮 + 左侧静态 Mascot
- * 2. trim 后空内容 → 发送按钮置灰 + 不触发 onSend
- * 3. 点击发送 → 调 props.onSend(content) + 清空输入
+ * Step 3.1：草稿态（受控 TextInput + Mascot + send 按钮）
+ * Step 4a.2：流式态 — isStreaming=true 时 send 图标切 stop，点击行为 stub
+ *            （真停止接口 Step 5 接入，触发 stopStream(activeSessionId)）
+ * Step 6：A4 态右侧增「重新生成」按钮（紧邻发送按钮）
  *
- * Step 3.1 本步：onSend 由父组件传 console.log；Step 4a 接入 chatStore.sendMessage。
- * Step 4a 引入流式态：发送按钮 → 停止按钮（icon 切 + 行为切）。
- * Step 6 引入 A4 态：右侧增「重新生成」按钮（紧邻发送按钮）。
+ * 设计约束（M7 §3.10）：流式中输入框仍可继续打字（草稿保留），仅按钮语义切换。
  */
 import { Ionicons } from '@expo/vector-icons'
 import { useState } from 'react'
@@ -18,14 +16,27 @@ import { Mascot } from '@/components/mascot/Mascot'
 
 type ChatInputProps = {
     onSend: (content: string) => void
+    /**
+     * 当前活跃 session 是否处于流式回复中。
+     * - false（默认）：发送按钮显示 arrow-up；trim 后空内容置灰
+     * - true：发送按钮显示 stop；点击行为 Step 4a.2 暂为 stub（Step 5 接真停止）
+     */
+    isStreaming?: boolean
 }
 
-export function ChatInput({ onSend }: ChatInputProps) {
+export function ChatInput({ onSend, isStreaming = false }: ChatInputProps) {
     const [value, setValue] = useState('')
     const trimmed = value.trim()
-    const canSend = trimmed.length > 0
+    const canSend = !isStreaming && trimmed.length > 0
+    // streaming 态下 stop 按钮始终可点；非 streaming 态按 canSend 决定
+    const canPress = isStreaming || canSend
 
     const handlePress = () => {
+        if (isStreaming) {
+            // Step 5 接入真停止：useChatStore.getState().stopStream(activeSessionId)
+            console.log('[ChatInput] stop pressed (stub, Step 5 待接入)')
+            return
+        }
         if (!canSend) return
         onSend(trimmed)
         setValue('')
@@ -40,28 +51,23 @@ export function ChatInput({ onSend }: ChatInputProps) {
                 style={styles.input}
                 value={value}
                 onChangeText={setValue}
-                placeholder="说点什么…"
-                placeholderTextColor="#B8A985"
                 multiline
                 maxLength={2000}
-                textAlignVertical="center"
             />
             <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="发送"
-                accessibilityState={{ disabled: !canSend }}
                 onPress={handlePress}
-                hitSlop={8}
+                accessibilityLabel={isStreaming ? '停止' : '发送'}
+                disabled={!canPress}
                 style={({ pressed }) => [
                     styles.sendBtn,
-                    canSend ? styles.sendBtnActive : styles.sendBtnDisabled,
-                    pressed && canSend && styles.sendBtnPressed,
+                    canPress ? styles.sendBtnActive : styles.sendBtnDisabled,
+                    pressed && canPress && styles.sendBtnPressed,
                 ]}
             >
                 <Ionicons
-                    name="arrow-up"
+                    name={isStreaming ? 'stop' : 'arrow-up'}
                     size={20}
-                    color={canSend ? '#FFFFFF' : '#D7CDB6'}
+                    color={canPress ? '#FFFFFF' : '#998260'}
                 />
             </Pressable>
         </View>

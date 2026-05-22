@@ -68,6 +68,7 @@ export type SessionMessageState = {
   lastFetchedAt: number;
   inProgress: boolean;
   streamPhase: StreamPhase;
+  compressionMessage?: string;
 };
 
 export type ActiveStream = {
@@ -295,7 +296,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         ...bucket,
         messages: [aiPlaceholder, userMsg, ...bucket.messages],
         inProgress: true,
-        streamPhase: 'thinking',
+        streamPhase: 'feeling',
         lastFetchedAt: Date.now(),
       });
       return { messagesBySession: next };
@@ -366,14 +367,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           const newKey = event.session_id;
           const hid = event.hid;
 
-          // 同 sid：仅回填 user msg serverId
+          // 同 sid：仅回填 user msg serverId（streamPhase 保持当前值，等 thinking_start 切换）
           if (newKey === storeKey) {
             const bucket = state.messagesBySession.get(storeKey);
             if (!bucket) return {};
             const nextMessages = new Map(state.messagesBySession);
             nextMessages.set(storeKey, {
               ...bucket,
-              streamPhase: 'thinking',
               messages: bucket.messages.map((m) =>
                 m.id === stream.tempUserId ? { ...m, serverId: hid } : m,
               ),
@@ -419,7 +419,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             ...newBucket,
             messages: [...migrated, ...newBucket.messages],
             inProgress: true,
-            streamPhase: 'thinking',
+            streamPhase: 'feeling',
             lastFetchedAt: Date.now(),
           });
 
@@ -448,6 +448,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           nextMessages.set(storeKey, {
             ...bucket,
             streamPhase: 'compressing',
+            compressionMessage: event.message,
           });
           return { messagesBySession: nextMessages };
         }

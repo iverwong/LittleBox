@@ -94,6 +94,10 @@ export default function ChatIndex() {
     // 「可写态」包含 today==active==null（WelcomeShell + 首条消息触发隐式建 session）
     const isTodayActive = activeSessionId === todaySessionId
     const isHistoryActive = activeSessionId != null && activeSessionId !== todaySessionId
+    // Step 4a.2：当前活跃 session 是否在流式回复中 — 下传 ChatInput 切 stop 按钮
+    const isStreaming = useChatStore((s) =>
+        activeSessionId != null && s.activeStreams.has(activeSessionId)
+    )
 
     return (
         <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -119,6 +123,7 @@ export default function ChatIndex() {
                     onSend={(content) => {
                         void sendMessage(activeSessionId, content)
                     }}
+                    isStreaming={isStreaming}
                 />
             )}
             {isHistoryActive && (
