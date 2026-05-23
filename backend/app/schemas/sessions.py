@@ -31,7 +31,7 @@ class MessageListItem(BaseModel):
     id: uuid.UUID
     role: Literal["human", "ai"]
     content: str
-    status: Literal["active", "discarded"]
+    status: Literal["active", "compressed"]
     finish_reason: str | None
     created_at: datetime
 
