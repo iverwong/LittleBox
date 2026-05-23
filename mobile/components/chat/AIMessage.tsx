@@ -3,24 +3,31 @@
  *
  * Step 2 静态版：仅渲染已固化 content
  * Step 4a.3：流式「首 token 未到」态消费 bucket.streamPhase 渲染占位文案 + 动态省略号
- * Step 4b：叠加 useStreamBuffer，AI 流式态采用「已固化 content + buffer chunk」双源
+ * Step 4b：叠加 useStreamBuffer（组件级 50ms flush）+ React.memo 隔离 re-render
  * Step 5：根据 stoppedTag 渲染「已停止」角标
  * Step 6：根据 status='failed' 渲染 A4 失败占位
  *
-* M7-patch · M8-patch 9 事件契约对齐（2026-05）：
-* - 'compressing' 占位文案锁定 B 案：「正在为对话腾出更多空间」（不带「…」，由 dots 动态提供）
-* - 移除 compressionMessage 订阅（store 已删字段；新契约 compression_start/end payload 为空 {}）
-* - phase 转换：compression_start → 'compressing' / compression_end → 'feeling' / thinking_start → 'thinking'
-* - 占位文案 4 段过渡节奏：feeling → compressing → feeling → thinking
+ * M7-patch · M8-patch 9 事件契约对齐（2026-05）：
+ * - 'compressing' 占位文案锁定 B 案：「正在为对话腾出更多空间」（不带「…」，由 dots 动态提供）
+ * - 移除 compressionMessage 订阅（store 已删字段；新契约 compression_start/end payload 为空 {}）
+ * - phase 转换：compression_start → 'compressing' / compression_end → 'feeling' / thinking_start → 'thinking'
+ * - 占位文案 4 段过渡节奏：feeling → compressing → feeling → thinking
  *
  * 设计约束：
  * - streamPhase 是 bucket(SessionMessageState)级状态，不是 Message 字段
  * - 仅当 AI 气泡 status='streaming' && content='' 时消费 phase；首 delta 到达即覆盖占位
  * - 'feeling' phase 当前 SSE 协议未发，文案映射保留为 forward-compat（Step 6 mascot 接入时启用）
+ *
+ * Step 4b 关键设计：
+ * - phase 订阅下沉到 StreamingPlaceholder 子组件，committed / streaming-with-content
+ *   路径不订阅 bucket.streamPhase，避免同 sid 内无关 AI 气泡的连带 re-render
+ * - useStreamBuffer 始终在 AI 气泡组件挂载期间常驻；仅 status='streaming' 时启用 sink
+ * - 已固化消息走 React.memo 浅比较（message ref 未变 → 跳过 re-render）
  */
-import { useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useState } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
 
+import { useStreamBuffer } from '@/hooks/useStreamBuffer'
 import type { Message, StreamPhase } from '@/stores/chat'
 import { useChatStore } from '@/stores/chat'
 
@@ -38,7 +45,7 @@ function placeholderForPhase(phase: StreamPhase): string | null {
         case 'thinking':
             return '思考中'
         default:
-            // 'idle' / 'delta' / 'interrupted' 不显示文案占位；Step 4b 叠加跳动光标
+            // 'idle' / 'delta' / 'interrupted' 不显示文案占位
             return null
     }
 }
@@ -55,8 +62,18 @@ function useEllipsisDots(intervalMs = 500): string {
     return '.'.repeat(count)
 }
 
-function PlaceholderBubble({ text }: { text: string }) {
+/**
+ * Step 4b · 占位气泡子组件。phase 订阅下沉至此，
+ * 仅在 AI 气泡处于「streaming + content 为空」时挂载。
+ * 这样同 sid 内已固化气泡与正在打字的气泡都不会因为 phase 变化触发 re-render。
+ */
+function StreamingPlaceholder({ sid }: { sid: string }) {
+    const phase = useChatStore(
+        (s) => s.messagesBySession.get(sid)?.streamPhase ?? 'idle',
+    )
+    const text = placeholderForPhase(phase)
     const dots = useEllipsisDots()
+    if (text == null) return null
     return (
         <View style={styles.row}>
             <View style={styles.bubble}>
@@ -69,19 +86,26 @@ function PlaceholderBubble({ text }: { text: string }) {
     )
 }
 
-export function AIMessage({ message }: Props) {
-    // 订阅所属 bucket 的 phase；Step 4b 接 React.memo 后再做 selector 优化
-    const bucketPhase = useChatStore(
-        (s) => s.messagesBySession.get(message.sid)?.streamPhase ?? 'idle'
-    )
-    const isAwaitingFirstToken =
-        message.status === 'streaming' && message.content.length === 0
-    const placeholder = isAwaitingFirstToken
-        ? placeholderForPhase(bucketPhase)
-        : null
+function AIMessageImpl({ message }: Props) {
+    const appendFlushedDelta = useChatStore((s) => s._appendFlushedDelta)
+    const isStreaming = message.status === 'streaming'
 
-    if (placeholder != null) {
-        return <PlaceholderBubble text={placeholder} />
+    const onFlush = useCallback(
+        (chunk: string) => {
+            appendFlushedDelta(message.sid, message.id, chunk)
+        },
+        [appendFlushedDelta, message.sid, message.id],
+    )
+
+    // 始终调用 hook 保证 hook 顺序稳定；enabled 控制 sink/timer 是否启用
+    useStreamBuffer({
+        sid: message.sid,
+        enabled: isStreaming,
+        onFlush,
+    })
+
+    if (isStreaming && message.content.length === 0) {
+        return <StreamingPlaceholder sid={message.sid} />
     }
 
     return (
@@ -92,6 +116,12 @@ export function AIMessage({ message }: Props) {
         </View>
     )
 }
+
+/**
+ * React.memo 隔离：未变更的已固化消息不会因为同列表的流式消息 re-render
+ * 而连带刷新。store 对每条变更消息都会产出新 ref，shallow 比较即可生效。
+ */
+export const AIMessage = memo(AIMessageImpl)
 
 const styles = StyleSheet.create({
     row: {

@@ -37,6 +37,11 @@ import {
   type ChatStreamHandle,
   type ChatStreamCloseReason,
 } from '@/lib/chatStream';
+import {
+  dispatchBufferAppend,
+  dispatchBufferClear,
+  dispatchBufferFlushFinal,
+} from '@/lib/streamBuffer';
 
 export type MessageId = string;
 
@@ -123,6 +128,15 @@ export type ChatStore = {
    */
   _onSseEvent: (storeKey: SessionId, event: SseEvent) => SessionId | void;
   _cleanupStream: (storeKey: SessionId, reason: ChatStreamCloseReason) => void;
+  /**
+   * Step 4b · 组件级 50ms flush tick 回写 store.content 的内部 action。
+   * 调用方：useStreamBuffer hook 的 onFlush 回调。
+   */
+  _appendFlushedDelta: (
+    storeKey: SessionId,
+    aiId: MessageId,
+    chunk: string,
+  ) => void;
 };
 
 // sid=null 路径的临时桶 key；session_meta 到来时必 migrate 到真实 sid
@@ -361,6 +375,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   _onSseEvent: (storeKey, event) => {
+    // Step 4b · Fast path：delta 帧仅推 buffer，不触发 React setState。
+    // streamPhase 切换 'delta' 与 content 累加由组件级 50ms flush tick 调用
+    // _appendFlushedDelta 统一回写，避免高频 setState 卡顿。
+    if (event.type === 'delta') {
+      if (!get().activeStreams.has(storeKey)) return;
+      dispatchBufferAppend(storeKey, event.content);
+      return;
+    }
+
     let migratedTo: SessionId | undefined;
 
     set((state) => {
@@ -500,21 +523,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           return { messagesBySession: nextMessages };
         }
 
-        case 'delta': {
-          const bucket = state.messagesBySession.get(storeKey);
-          if (!bucket) return {};
-          const nextMessages = new Map(state.messagesBySession);
-          nextMessages.set(storeKey, {
-            ...bucket,
-            streamPhase: 'delta',
-            messages: bucket.messages.map((m) =>
-              m.id === stream.tempAiId
-                ? { ...m, content: m.content + event.content }
-                : m,
-            ),
-          });
-          return { messagesBySession: nextMessages };
-        }
+        // 'delta' 已被 _onSseEvent 顶部 fast path 处理，不再进入此 set 块
 
         case 'end': {
           // 回填 AI msg serverId + finishReason；status 收束由 _cleanupStream('end') 兜底
@@ -579,6 +588,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   _cleanupStream: (storeKey, reason) => {
+    // Step 4b · 先把组件级 bufferRef 处理掉，再做 status 收束。
+    // - error → 丢弃未 flush chunk，保留已 flush 内容（§3.9「保留已渲染部分」）
+    // - 其他（end / stopped / abort / firstFrameTimeout）→ 把残余 chunk 推完
+    // 顺序关键：stopped/abort 两态判定依赖 m.content 长度。
+    if (reason === 'error') {
+      dispatchBufferClear(storeKey);
+    } else {
+      dispatchBufferFlushFinal(storeKey);
+    }
+
     set((state) => {
       const stream = state.activeStreams.get(storeKey);
 
@@ -638,5 +657,23 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     });
 
     console.log('[chatStore] _cleanupStream', { storeKey, reason });
+  },
+
+  _appendFlushedDelta: (storeKey, aiId, chunk) => {
+    if (!chunk) return;
+    set((state) => {
+      const bucket = state.messagesBySession.get(storeKey);
+      if (!bucket) return {};
+      const nextMessages = new Map(state.messagesBySession);
+      nextMessages.set(storeKey, {
+        ...bucket,
+        // 首次 flush 时把 phase 推到 'delta'；幂等覆盖无副作用
+        streamPhase: 'delta',
+        messages: bucket.messages.map((m) =>
+          m.id === aiId ? { ...m, content: m.content + chunk } : m,
+        ),
+      });
+      return { messagesBySession: nextMessages };
+    });
   },
 }));
