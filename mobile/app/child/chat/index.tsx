@@ -29,6 +29,7 @@ export default function ChatIndex() {
     const activeSessionId = useChatStore((s) => s.activeSessionId)
     const todaySessionId = useChatStore((s) => s.todaySessionId)
     const sendMessage = useChatStore((s) => s.sendMessage)
+    const stopStream = useChatStore((s) => s.stopStream)
 
     useEffect(() => {
         let cancelled = false
@@ -124,6 +125,11 @@ export default function ChatIndex() {
                         void sendMessage(activeSessionId, content)
                     }}
                     isStreaming={isStreaming}
+                    onStop={() => {
+                        if (activeSessionId != null) {
+                            void stopStream(activeSessionId)
+                        }
+                    }}
                 />
             )}
             {isHistoryActive && (

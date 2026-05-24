@@ -28,6 +28,7 @@ import { create } from 'zustand';
 import {
   getMessages,
   listSessions,
+  stopSession,
   type MessageListItem,
   type SessionId,
 } from '@/services/api/chat';
@@ -352,9 +353,30 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     });
   },
 
-  stopStream: (sid) => {
-    void sid;
-    return notImplemented('stopStream');
+  stopStream: async (sid) => {
+    // Step 5 · 用户点 stop 按钮触发：
+    // 1. 调 POST /me/sessions/{sid}/stop（best-effort，204 即视为成功）
+    // 2. 成功 → 等服务端 SSE 'stopped' 事件自然到达（generator 下一次 yield 前退出 → emit stopped → close）
+    //    onEvent('stopped') 精确写 status/stoppedTag；onClose('stopped') 触发 _cleanupStream 收尾
+    // 3. 失败（404/403/5xx/网络）→ 服务端无法发 stopped 帧，前端主动 abort handle 触发 onClose('abort') 兜底
+    //
+    // 防御性 race：sid 已无 active stream（已自然 end / 已被另一处 cleanup）→ 静默返回
+    const stream = get().activeStreams.get(sid);
+    if (!stream) {
+      console.warn('[chatStore] stopStream: no active stream on', sid);
+      return;
+    }
+
+    const result = await stopSession(sid);
+    if (!result.ok) {
+      // Step 7 错误码映射会接管 toast；本 Step 仅 log + abort 兜底
+      console.warn('[chatStore] stopStream: stop API failed, aborting handle', {
+        sid,
+        status: result.status,
+      });
+      stream.handle.abort();
+    }
+    // 成功路径不在此处做 cleanup；服务端 stopped 帧到达后由 onEvent + onClose 串行触发
   },
   regenerate: (sid, lastHumanMid) => {
     void sid;
@@ -546,9 +568,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }
 
         case 'stopped': {
-          // Step 5 完善两态（StopWithAi/StopNoAi）；本 Step 简化按 content 判别
+          // Step 5 · 精确按服务端 event.aid 判别两态（不再依赖 content.length 兜底）：
+          // - aid 存在 → StopWithAi（has_emitted_content=true，ai 行已落库）→ committed + stoppedTag
+          // - aid 缺失 → StopNoAi（has_emitted_content=false，ai 行未落库）→ failed（进 A4，Step 6 接 UI）
+          // 这里直接写 status/stoppedTag，_cleanupStream('stopped') 不再覆写（见下方 cleanup 改动）。
           const bucket = state.messagesBySession.get(storeKey);
           if (!bucket) return {};
+          const hasAid = event.aid != null && event.aid !== '';
           const nextMessages = new Map(state.messagesBySession);
           nextMessages.set(storeKey, {
             ...bucket,
@@ -558,6 +584,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                     ...m,
                     serverId: event.aid ?? m.serverId,
                     finishReason: event.finish_reason,
+                    status: hasAid ? 'committed' : 'failed',
+                    stoppedTag: hasAid ? true : m.stoppedTag,
                   }
                 : m,
             ),
@@ -617,12 +645,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               nextStatus = 'committed';
               break;
             case 'stopped':
-              // Step 5 完整两态：本 Step 简化按 content 判别
-              if (m.content.length > 0) {
-                nextStatus = 'committed';
-                stoppedTag = true;
+              // Step 5 · _onSseEvent('stopped') 已按服务端 event.aid 精确写入 status/stoppedTag；
+              // cleanup 仅在 race 兜底（理论不可能：onClose('stopped') 总在 onEvent('stopped') 后触发）：
+              // 若 message 仍为 'streaming'，说明 stopped 事件未到 onEvent 即 close，按 content 长度兜底。
+              if (m.status === 'streaming') {
+                if (m.content.length > 0) {
+                  nextStatus = 'committed';
+                  stoppedTag = true;
+                } else {
+                  nextStatus = 'failed';
+                }
               } else {
-                nextStatus = 'failed';
+                nextStatus = m.status;
+                // stoppedTag 已由 let 初始化从 m.stoppedTag 取，无需再赋值
               }
               break;
             case 'error':

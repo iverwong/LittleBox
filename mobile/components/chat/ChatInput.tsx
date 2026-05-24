@@ -19,12 +19,18 @@ type ChatInputProps = {
     /**
      * 当前活跃 session 是否处于流式回复中。
      * - false（默认）：发送按钮显示 arrow-up；trim 后空内容置灰
-     * - true：发送按钮显示 stop；点击行为 Step 4a.2 暂为 stub（Step 5 接真停止）
+     * - true：发送按钮显示 stop；点击触发 onStop
      */
     isStreaming?: boolean
+    /**
+     * 流式态下点击 stop 按钮的回调。
+     * isStreaming=true 时必须传入；isStreaming=false 时忽略。
+     * 父组件通常传一个闭包，内部调 chatStore.stopStream(activeSessionId)。
+     */
+    onStop?: () => void
 }
 
-export function ChatInput({ onSend, isStreaming = false }: ChatInputProps) {
+export function ChatInput({ onSend, isStreaming = false, onStop }: ChatInputProps) {
     const [value, setValue] = useState('')
     const trimmed = value.trim()
     const canSend = !isStreaming && trimmed.length > 0
@@ -33,8 +39,7 @@ export function ChatInput({ onSend, isStreaming = false }: ChatInputProps) {
 
     const handlePress = () => {
         if (isStreaming) {
-            // Step 5 接入真停止：useChatStore.getState().stopStream(activeSessionId)
-            console.log('[ChatInput] stop pressed (stub, Step 5 待接入)')
+            onStop?.()
             return
         }
         if (!canSend) return

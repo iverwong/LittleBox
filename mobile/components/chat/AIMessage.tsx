@@ -24,6 +24,7 @@
  * - useStreamBuffer 始终在 AI 气泡组件挂载期间常驻；仅 status='streaming' 时启用 sink
  * - 已固化消息走 React.memo 浅比较（message ref 未变 → 跳过 re-render）
  */
+import { Ionicons } from '@expo/vector-icons'
 import { memo, useCallback, useEffect, useState } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
 
@@ -111,7 +112,15 @@ function AIMessageImpl({ message }: Props) {
     return (
         <View style={styles.row}>
             <View style={styles.bubble}>
-                <Text style={styles.text}>{message.content}</Text>
+                <Text style={styles.text}>
+                    {message.content}
+                </Text>
+                {message.stoppedTag && (
+                    <View style={styles.stoppedTag}>
+                        <Ionicons name="stop-circle-outline" size={12} color="#998260" />
+                        <Text style={styles.stoppedText}>已停止</Text>
+                    </View>
+                )}
             </View>
         </View>
     )
@@ -143,6 +152,21 @@ const styles = StyleSheet.create({
         lineHeight: 22,
     },
     placeholder: {
+        color: '#998260',
+        fontStyle: 'italic',
+    },
+    stoppedTag: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: 6,
+        paddingTop: 6,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: '#E5DBC9',
+        gap: 4,
+        alignSelf: 'flex-start',
+    },
+    stoppedText: {
+        fontSize: 12,
         color: '#998260',
         fontStyle: 'italic',
     },
