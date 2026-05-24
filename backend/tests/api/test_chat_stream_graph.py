@@ -2,12 +2,11 @@
 
 Verifies:
 - SSE 3-event sequence: session_meta → delta×N → end (no reasoning_content)
-- T5 single-write: persist_ai_turn writes exactly one ai active row (status='active', role='ai')
+- T5 single-write: inline code writes exactly one ai active row (status='active', role='ai')
   with accumulated content and finish_reason from last graph chunk
 - finish_reason three-state coverage: stop / length / content_filter
 - error path: SSE error frame + human active row retained + no ai row written + lock released
-- persist_ai_turn NOT called on error path (mock spy assertion)
-- T5 commit: db.commit() called after persist_ai_turn (cross-connection persistence)
+- T5 commit: db.commit() called after AI message creation (cross-connection persistence)
 - 8a control plane regression (decision matrix, locks, title)
 """
 
@@ -263,7 +262,7 @@ async def test_sse_sequence_delta_only_no_reasoning(
 async def test_t5_writes_ai_active_with_stop(
     api_client_with_eval, auth_headers_child, db_session, monkeypatch
 ):
-    """persist_ai_turn called on normal path → ai active row + finish_reason='stop'."""
+    """Inline AI write on normal path → ai active row + finish_reason='stop'."""
     headers, child = auth_headers_child
 
     fake_payloads = [
@@ -534,32 +533,6 @@ async def test_error_path_emits_error_frame_and_preserves_human(
 
 
 @pytest.mark.asyncio
-async def test_error_path_persist_not_called(
-    api_client_with_eval, auth_headers_child, db_session, monkeypatch
-):
-    """Error path: persist_ai_turn must NOT be called (mock spy assertion)."""
-    headers, child = auth_headers_child
-
-    async def fake_astream_broken(initial_state, stream_mode="custom"):
-        yield {"delta": "partial"}
-        raise RuntimeError("graph error")
-
-    with patch("app.api.me.main_graph") as mock_graph:
-        mock_graph.astream = fake_astream_broken
-
-        with patch("app.api.me.persist_ai_turn", new_callable=AsyncMock) as mock_persist:
-            body = make_payload(content="Hello")
-            resp = await api_client_with_eval.post(
-                "/api/v1/me/chat/stream", json=body, headers=headers
-            )
-            assert resp.status_code == 200
-            await resp.aclose()
-
-            # (c) persist_ai_turn NOT called on error path
-            mock_persist.assert_not_called()
-
-
-@pytest.mark.asyncio
 async def test_error_path_lock_released(
     api_client_with_eval, auth_headers_child, db_session, redis_client
 ):
@@ -636,7 +609,7 @@ async def test_accumulated_content_concatenates_all_deltas(
 async def test_end_frame_contains_real_aid(
     api_client_with_eval, auth_headers_child, db_session, monkeypatch
 ):
-    """emit_end receives real aid from persist_ai_turn return value."""
+    """emit_end receives real aid from inline AI message id."""
     headers, child = auth_headers_child
 
     fake_payloads = [

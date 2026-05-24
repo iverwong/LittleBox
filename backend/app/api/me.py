@@ -21,19 +21,23 @@ from starlette.responses import StreamingResponse
 
 from app.auth.deps import get_current_account, require_child
 from app.auth.redis_client import get_redis
-from app.chat.graph import enqueue_audit, main_graph, persist_ai_turn
+from app.chat.compression import CONTEXT_COMPRESS_THRESHOLD_TOKENS
+from app.chat.context import build_context
+from app.chat.graph import enqueue_audit, main_graph
 from app.chat.locks import (
     acquire_session_lock,
     acquire_throttle_lock,
     release_session_lock,
     running_streams,
 )
-from app.chat.sse import stream_graph_to_sse
-from app.chat.compression import CONTEXT_COMPRESS_THRESHOLD_TOKENS
-from app.chat.context import build_context
-from app.chat.extractors import extract_usage
 from app.chat.prompts import build_system_prompt
-from app.chat.session_policy import SHANGHAI, logical_day, should_switch_session, today_session_title
+from app.chat.session_policy import (
+    SHANGHAI,
+    logical_day,
+    should_switch_session,
+    today_session_title,
+)
+from app.chat.sse import stream_graph_to_sse
 from app.db import get_db
 from app.models.accounts import ChildProfile, User
 from app.models.chat import Message
@@ -182,9 +186,7 @@ async def list_sessions(
         )
     ).scalar_one_or_none()
     today_sid = (
-        latest.id
-        if latest and logical_day(latest.last_active_at) == logical_day(now)
-        else None
+        latest.id if latest and logical_day(latest.last_active_at) == logical_day(now) else None
     )
 
     stmt = (
@@ -251,8 +253,12 @@ async def get_messages(
 
     stmt = (
         select(
-            Message.id, Message.role, Message.content,
-            Message.status, Message.finish_reason, Message.created_at,
+            Message.id,
+            Message.role,
+            Message.content,
+            Message.status,
+            Message.finish_reason,
+            Message.created_at,
         )
         .where(
             Message.session_id == sid,
@@ -496,6 +502,7 @@ async def chat_stream(
         child_profile = await db.get(ChildProfile, current.id)
         if child_profile is not None:
             from app.chat.prompts import compute_age
+
             _age = compute_age(child_profile.birth_date)
             _gender = child_profile.gender.value if child_profile.gender else None
         else:
@@ -604,7 +611,6 @@ async def chat_stream(
             user_stopped = False
 
             # 为主图谱构建初始状态
-            from langchain_core.messages import HumanMessage
 
             from app.chat.state import MainDialogueState
             from app.config import settings as _app_settings
@@ -649,16 +655,20 @@ async def chat_stream(
 
                         # R+: 查询待压缩集，排除受保护行
                         actives_orm = (
-                            await db.execute(
-                                select(Message)
-                                .where(
-                                    Message.session_id == sid,
-                                    Message.status == "active",
-                                    Message.id != protected_id,
+                            (
+                                await db.execute(
+                                    select(Message)
+                                    .where(
+                                        Message.session_id == sid,
+                                        Message.status == "active",
+                                        Message.id != protected_id,
+                                    )
+                                    .order_by(Message.created_at.asc())
                                 )
-                                .order_by(Message.created_at.asc())
                             )
-                        ).scalars().all()
+                            .scalars()
+                            .all()
+                        )
 
                         if actives_orm:
                             # R+: 自组装 summarizer 输入，不调 build_context（避免新 human 和排序问题）
@@ -669,13 +679,20 @@ async def chat_stream(
                             c_result = await c_llm.ainvoke(c_input)
                             for mo in actives_orm:
                                 mo.status = "compressed"
-                            db.add(Message(
-                                session_id=sid, role=MessageRole.summary,
-                                status=MessageStatus.active,
-                                content=c_result.content if hasattr(c_result, "content") else str(c_result),
-                            ))
+                            db.add(
+                                Message(
+                                    session_id=sid,
+                                    role=MessageRole.summary,
+                                    status=MessageStatus.active,
+                                    content=c_result.content
+                                    if hasattr(c_result, "content")
+                                    else str(c_result),
+                                )
+                            )
                         else:
-                            logger.info("compression noop for session %s: no messages to compress", sid)
+                            logger.info(
+                                "compression noop for session %s: no messages to compress", sid
+                            )
 
                         session.needs_compression = False
                         await db.commit()
@@ -704,9 +721,7 @@ async def chat_stream(
 
                         # 受保护 human 行放在最后
                         _protected_msg = (
-                            await db.execute(
-                                select(Message).where(Message.id == protected_id)
-                            )
+                            await db.execute(select(Message).where(Message.id == protected_id))
                         ).scalar_one()
                         _new_hist.append(_to_lc_message(_protected_msg))
 
@@ -715,12 +730,25 @@ async def chat_stream(
                         yield _frame_sse_event("compression_end", {})
                     except Exception:
                         logger.exception("compression failed for session %s", sid)
-                        yield _frame_sse_event("error", {
-                            "message": "压缩失败，请重试", "code": "CompressionError",
-                        })
+                        yield _frame_sse_event(
+                            "error",
+                            {
+                                "message": "压缩失败，请重试",
+                                "code": "CompressionError",
+                            },
+                        )
                         return
 
                 async for payload in main_graph.astream(initial_state, stream_mode="custom"):
+                    # 关注点1（修订）：stop 检查移至 for 顶部 —— 每个 chunk iter 进来即检查，
+                    # 不论 payload 类型（reasoning / delta / usage_metadata 等）。
+                    # 修复两个旧位置（原 reasoning continue 之后、SSE yield 之前）的 bug：
+                    #   B1. reasoning 分支 `continue` 跳过原检查 → 思考阶段 stop 要等首 content delta（5-30s）才生效
+                    #   B2. 原检查在 accumulated += d 之后但 yield 之前 → StopWithAi persist 了客户端未收到的最后一帧
+                    # 顶部检查保证 has_emitted_content / accumulated 仅反映「已成功 yield 的 chunks」，前后端一致。
+                    if event.is_set():
+                        user_stopped = True
+                        break
                     # usage_metadata 快照（由 call_main_llm 末帧转发）
                     if payload.get("usage_metadata"):
                         usage_meta = payload["usage_metadata"]
@@ -731,8 +759,11 @@ async def chat_stream(
                             thinking_started = True
                             try:
                                 yield _frame_sse_event("thinking_start", {})
-                            except (ConnectionError, anyio.BrokenResourceError,
-                                    asyncio.CancelledError):
+                            except (
+                                ConnectionError,
+                                anyio.BrokenResourceError,
+                                asyncio.CancelledError,
+                            ):
                                 client_alive = False
                         continue  # reasoning 信号 payload 不进 _wrap → stream_graph_to_sse
 
@@ -746,33 +777,32 @@ async def chat_stream(
                         thinking_started = False
                         try:
                             yield _frame_sse_event("thinking_end", {})
-                        except (ConnectionError, anyio.BrokenResourceError,
-                                asyncio.CancelledError):
+                        except ConnectionError, anyio.BrokenResourceError, asyncio.CancelledError:
                             client_alive = False
 
                     fr = payload.get("finish_reason")
                     if fr:
                         last_finish_reason = fr  # stop / length / content_filter
 
-                    # 关注点1：stop 检查——在内容累积之后、SSE yield 之前
-                    if event.is_set():
-                        user_stopped = True
-                        break
+                    # 关注点1 已上移至 for 循环顶部（修订）—— 修复 B1 + B2 见上
 
                     # 关注点4：单帧 yield 级 try/except + stream_graph_to_sse 保护
                     async def _wrap():
                         yield payload
+
                     try:
                         async for frame in stream_graph_to_sse(_wrap()):
                             if not client_alive:
                                 continue
                             try:
                                 yield frame
-                            except (ConnectionError, anyio.BrokenResourceError,
-                                    asyncio.CancelledError):
+                            except (
+                                ConnectionError,
+                                anyio.BrokenResourceError,
+                                asyncio.CancelledError,
+                            ):
                                 client_alive = False
-                    except (ConnectionError, anyio.BrokenResourceError,
-                            asyncio.CancelledError):
+                    except ConnectionError, anyio.BrokenResourceError, asyncio.CancelledError:
                         client_alive = False
 
                 # 关注点3：user_stopped 与自然结束互斥（persist_ai_turn 至多 1 次）
@@ -844,7 +874,8 @@ async def chat_stream(
                 logger.exception("chat_stream generator failed")
                 if client_alive:
                     yield _frame_sse_event(
-                        "error", {"message": str(e), "code": "InternalError"},
+                        "error",
+                        {"message": str(e), "code": "InternalError"},
                     )
                 # human active 行已由上方 db.commit() 持久化，不写 ai 行（不回滚）
             finally:

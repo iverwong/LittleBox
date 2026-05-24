@@ -180,15 +180,6 @@ def _make_fake_graph_astream(fake_payloads: list[dict]):
     return fake_astream
 
 
-def _mock_persist_ai_turn(db, sid, finish_reason, content, intervention_type=None):
-    """No-op persist_ai_turn that returns a fake UUID without writing any rows.
-
-    Used by control-plane tests that only need to verify decision-matrix row creation
-    (human row handling) without T5 AI row interference.
-    """
-    return uuid4()
-
-
 # ---------------------------------------------------------------------------
 # Row 1: last=None + regen=null → INSERT session + INSERT human
 # ---------------------------------------------------------------------------
@@ -205,29 +196,24 @@ async def test_decision_row1_first_turn(api_client_with_eval, auth_headers_child
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
     with patch.object(main_graph, "astream", fake_astream):
-        with patch(
-            "app.api.me.persist_ai_turn",
-            new_callable=AsyncMock,
-            side_effect=_mock_persist_ai_turn,
-        ):
-            resp = await api_client_with_eval.post(
-                "/api/v1/me/chat/stream", json=body, headers=headers
-            )
-            assert resp.status_code == 200
+        resp = await api_client_with_eval.post(
+            "/api/v1/me/chat/stream", json=body, headers=headers
+        )
+        assert resp.status_code == 200
 
-            # SSE frames: session_meta + delta + end
-            frames = _parse_sse_stream(resp.text)
-            assert frames[0]["type"] == "session_meta"
-            sid = frames[0]["data"]["session_id"]
-            assert frames[1]["type"] == "delta"
-            assert frames[2]["type"] == "end"
+        # SSE frames: session_meta + delta + end
+        frames = _parse_sse_stream(resp.text)
+        assert frames[0]["type"] == "session_meta"
+        sid = frames[0]["data"]["session_id"]
+        assert frames[1]["type"] == "delta"
+        assert frames[2]["type"] == "end"
 
-            # DB: session active + human active
-            session_row = await db_session.get(SessionModel, sid)
-            assert session_row is not None
-            assert session_row.status == MessageStatus.active
-            assert session_row.child_user_id == child.id
-            assert "周" in session_row.title and "月" in session_row.title
+        # DB: session active + human active
+        session_row = await db_session.get(SessionModel, sid)
+        assert session_row is not None
+        assert session_row.status == MessageStatus.active
+        assert session_row.child_user_id == child.id
+        assert "周" in session_row.title and "月" in session_row.title
 
     msgs = (
         (
@@ -292,15 +278,10 @@ async def test_decision_row3_ai_continuation(api_client_with_eval, auth_headers_
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
     with patch.object(main_graph, "astream", fake_astream):
-        with patch(
-            "app.api.me.persist_ai_turn",
-            new_callable=AsyncMock,
-            side_effect=_mock_persist_ai_turn,
-        ):
-            resp = await api_client_with_eval.post(
-                "/api/v1/me/chat/stream", json=body, headers=headers
-            )
-            assert resp.status_code == 200
+        resp = await api_client_with_eval.post(
+            "/api/v1/me/chat/stream", json=body, headers=headers
+        )
+        assert resp.status_code == 200
 
     msgs = (
         (
@@ -313,7 +294,7 @@ async def test_decision_row3_ai_continuation(api_client_with_eval, auth_headers_
         .scalars()
         .all()
     )
-    # AI (earlier) + new human (later) + commit② AI = 3 active messages
+    # pre-seeded AI + new human + inline AI = 3 active messages
     assert len(msgs) == 3, (
         f"Expected 3 messages, got {len(msgs)}: {[(m.role, m.content[:20]) for m in msgs]}"
     )
@@ -381,15 +362,10 @@ async def test_decision_row5_orphan_regen_null(
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
     with patch.object(main_graph, "astream", fake_astream):
-        with patch(
-            "app.api.me.persist_ai_turn",
-            new_callable=AsyncMock,
-            side_effect=_mock_persist_ai_turn,
-        ):
-            resp = await api_client_with_eval.post(
-                "/api/v1/me/chat/stream", json=body, headers=headers
-            )
-            assert resp.status_code == 200
+        resp = await api_client_with_eval.post(
+            "/api/v1/me/chat/stream", json=body, headers=headers
+        )
+        assert resp.status_code == 200
 
     msgs = (
         (
@@ -402,7 +378,7 @@ async def test_decision_row5_orphan_regen_null(
         .scalars()
         .all()
     )
-    # Old discarded + new human active + commit② AI = 3 rows total
+    # Old discarded + new human active + inline AI = 3 rows total
     assert len(msgs) == 3
     discarded = [m for m in msgs if m.status == MessageStatus.discarded]
     active = [m for m in msgs if m.status == MessageStatus.active]
@@ -451,15 +427,10 @@ async def test_decision_row6_orphan_reuse(
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
     with patch.object(main_graph, "astream", fake_astream):
-        with patch(
-            "app.api.me.persist_ai_turn",
-            new_callable=AsyncMock,
-            side_effect=_mock_persist_ai_turn,
-        ):
-            resp = await api_client_with_eval.post(
-                "/api/v1/me/chat/stream", json=body, headers=headers
-            )
-            assert resp.status_code == 200
+        resp = await api_client_with_eval.post(
+            "/api/v1/me/chat/stream", json=body, headers=headers
+        )
+        assert resp.status_code == 200
 
     frames = _parse_sse_stream(resp.text)
     hid_in_meta = frames[0]["data"]["hid"]
@@ -468,7 +439,7 @@ async def test_decision_row6_orphan_reuse(
     msgs = (
         (await db_session.execute(select(Message).where(Message.session_id == sid))).scalars().all()
     )
-    # 复用 orphan + commit② AI = 2 rows
+    # 复用 orphan + inline AI = 2 rows
     assert len(msgs) == 2
     assert msgs[0].id == orphan_id
     assert msgs[0].content == "Original question"  # content unchanged
@@ -579,15 +550,10 @@ async def test_decision_row3_with_prior_human(
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
     with patch.object(main_graph, "astream", fake_astream):
-        with patch(
-            "app.api.me.persist_ai_turn",
-            new_callable=AsyncMock,
-            side_effect=_mock_persist_ai_turn,
-        ):
-            resp = await api_client_with_eval.post(
-                "/api/v1/me/chat/stream", json=body, headers=headers
-            )
-            assert resp.status_code == 200
+        resp = await api_client_with_eval.post(
+            "/api/v1/me/chat/stream", json=body, headers=headers
+        )
+        assert resp.status_code == 200
 
     msgs = (
         (
@@ -600,7 +566,7 @@ async def test_decision_row3_with_prior_human(
         .scalars()
         .all()
     )
-    assert len(msgs) == 4  # H1 + AI + H2 + commit② AI
+    assert len(msgs) == 4  # H1 + AI + H2 + inline AI
     human_msgs = [m for m in msgs if m.role == MessageRole.human]
     assert len(human_msgs) == 2
     new_human = next(m for m in human_msgs if m.id != human_id)
@@ -650,15 +616,10 @@ async def test_decision_row5_with_prior_ai(
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
     with patch.object(main_graph, "astream", fake_astream):
-        with patch(
-            "app.api.me.persist_ai_turn",
-            new_callable=AsyncMock,
-            side_effect=_mock_persist_ai_turn,
-        ):
-            resp = await api_client_with_eval.post(
-                "/api/v1/me/chat/stream", json=body, headers=headers
-            )
-            assert resp.status_code == 200
+        resp = await api_client_with_eval.post(
+            "/api/v1/me/chat/stream", json=body, headers=headers
+        )
+        assert resp.status_code == 200
 
     frames = _parse_sse_stream(resp.text)
     hid_in_meta = frames[0]["data"]["hid"]
@@ -667,7 +628,7 @@ async def test_decision_row5_with_prior_ai(
         (await db_session.execute(select(Message).where(Message.session_id == sid)
                                   .order_by(Message.created_at, Message.id))).scalars().all()
     )
-    assert len(msgs) == 5  # H1 + A1 + H2(discarded) + H3 + commit② AI
+    assert len(msgs) == 5  # H1 + A1 + H2(discarded) + H3 + inline AI
     discarded = [m for m in msgs if m.status == MessageStatus.discarded]
     active = [m for m in msgs if m.status == MessageStatus.active]
     assert len(discarded) == 1
@@ -721,15 +682,10 @@ async def test_decision_row6_with_prior_ai_reuse(
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
     with patch.object(main_graph, "astream", fake_astream):
-        with patch(
-            "app.api.me.persist_ai_turn",
-            new_callable=AsyncMock,
-            side_effect=_mock_persist_ai_turn,
-        ):
-            resp = await api_client_with_eval.post(
-                "/api/v1/me/chat/stream", json=body, headers=headers
-            )
-            assert resp.status_code == 200
+        resp = await api_client_with_eval.post(
+            "/api/v1/me/chat/stream", json=body, headers=headers
+        )
+        assert resp.status_code == 200
 
     frames = _parse_sse_stream(resp.text)
     assert frames[0]["data"]["hid"] == str(h2_id)  # hid unchanged
@@ -738,7 +694,7 @@ async def test_decision_row6_with_prior_ai_reuse(
         (await db_session.execute(select(Message).where(Message.session_id == sid)
                                   .order_by(Message.created_at, Message.id))).scalars().all()
     )
-    assert len(msgs) == 4  # H1 + A1 + H2 + commit② AI
+    assert len(msgs) == 4  # H1 + A1 + H2 + inline AI
     h2_row = next(m for m in msgs if m.id == h2_id)
     assert h2_row.content == "H2 original"  # content unchanged
     assert h2_row.status == MessageStatus.active
@@ -758,23 +714,18 @@ async def test_throttle_lock_rejects_second_request(api_client_with_eval, auth_h
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
     with patch.object(main_graph, "astream", fake_astream):
-        with patch(
-            "app.api.me.persist_ai_turn",
-            new_callable=AsyncMock,
-            side_effect=_mock_persist_ai_turn,
-        ):
-            resp1 = await api_client_with_eval.post(
-                "/api/v1/me/chat/stream", json=body, headers=headers
-            )
-            assert resp1.status_code == 200
+        resp1 = await api_client_with_eval.post(
+            "/api/v1/me/chat/stream", json=body, headers=headers
+        )
+        assert resp1.status_code == 200
 
-            # Immediately send second request (within 1.5s TTL)
-            body2 = make_payload(content="second")
-            resp2 = await api_client_with_eval.post(
-                "/api/v1/me/chat/stream", json=body2, headers=headers
-            )
-            assert resp2.status_code == 429
-            assert "RequestThrottled" in resp2.text
+        # Immediately send second request (within 1.5s TTL)
+        body2 = make_payload(content="second")
+        resp2 = await api_client_with_eval.post(
+            "/api/v1/me/chat/stream", json=body2, headers=headers
+        )
+        assert resp2.status_code == 429
+        assert "RequestThrottled" in resp2.text
 
 
 # ---------------------------------------------------------------------------
@@ -871,15 +822,10 @@ async def test_throttle_lock_self_expires(
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
     with patch.object(main_graph, "astream", fake_astream):
-        with patch(
-            "app.api.me.persist_ai_turn",
-            new_callable=AsyncMock,
-            side_effect=_mock_persist_ai_turn,
-        ):
-            resp1 = await api_client_with_eval.post(
-                "/api/v1/me/chat/stream", json=body, headers=headers
-            )
-            assert resp1.status_code == 200
+        resp1 = await api_client_with_eval.post(
+            "/api/v1/me/chat/stream", json=body, headers=headers
+        )
+        assert resp1.status_code == 200
 
     # Key exists with TTL ~1500ms
     throttle_key = f"chat:throttle:{child.id}"
@@ -901,17 +847,12 @@ async def test_title_12_graphemes_ascii(api_client_with_eval, auth_headers_child
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
     with patch.object(main_graph, "astream", fake_astream):
-        with patch(
-            "app.api.me.persist_ai_turn",
-            new_callable=AsyncMock,
-            side_effect=_mock_persist_ai_turn,
-        ):
-            resp = await api_client_with_eval.post(
-                "/api/v1/me/chat/stream", json=body, headers=headers
-            )
-            assert resp.status_code == 200
+        resp = await api_client_with_eval.post(
+            "/api/v1/me/chat/stream", json=body, headers=headers
+        )
+        assert resp.status_code == 200
 
-            sid = _parse_sse_stream(resp.text)[0]["data"]["session_id"]
+        sid = _parse_sse_stream(resp.text)[0]["data"]["session_id"]
     session = await db_session.get(SessionModel, sid)
     # M6-patch3 Step 6: session title = today_session_title() 中文日期格式
     assert session.title is not None
@@ -929,17 +870,12 @@ async def test_title_zwj_emoji_counts_as_one_grapheme(
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
     with patch.object(main_graph, "astream", fake_astream):
-        with patch(
-            "app.api.me.persist_ai_turn",
-            new_callable=AsyncMock,
-            side_effect=_mock_persist_ai_turn,
-        ):
-            resp = await api_client_with_eval.post(
-                "/api/v1/me/chat/stream", json=body, headers=headers
-            )
-            assert resp.status_code == 200
+        resp = await api_client_with_eval.post(
+            "/api/v1/me/chat/stream", json=body, headers=headers
+        )
+        assert resp.status_code == 200
 
-            sid = _parse_sse_stream(resp.text)[0]["data"]["session_id"]
+        sid = _parse_sse_stream(resp.text)[0]["data"]["session_id"]
     session = await db_session.get(SessionModel, sid)
     # M6-patch3 Step 6: session title = today_session_title() 中文日期格式
     assert session.title is not None
@@ -962,16 +898,11 @@ async def test_lock_released_in_generator_finally(
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
     with patch.object(main_graph, "astream", fake_astream):
-        with patch(
-            "app.api.me.persist_ai_turn",
-            new_callable=AsyncMock,
-            side_effect=_mock_persist_ai_turn,
-        ):
-            resp = await api_client_with_eval.post(
-                "/api/v1/me/chat/stream", json=body, headers=headers
-            )
-            assert resp.status_code == 200
-            await resp.aclose()  # ensure response fully consumed
+        resp = await api_client_with_eval.post(
+            "/api/v1/me/chat/stream", json=body, headers=headers
+        )
+        assert resp.status_code == 200
+        await resp.aclose()  # ensure response fully consumed
 
     # After response closes, lock should be gone
     from app.chat.locks import acquire_session_lock
