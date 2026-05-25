@@ -816,7 +816,7 @@ async def test_compression_normal_path(
     monkeypatch.setattr("app.api.me.main_graph", AsyncMock())
     monkeypatch.setattr("app.api.me.main_graph.astream", fake_astream)
 
-    with patch("app.chat.factory.get_chat_llm", return_value=fake_c_llm):
+    with patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
         body = make_payload(content="继续聊聊", session_id=str(sid))
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
@@ -878,7 +878,7 @@ async def test_compression_with_reasoning_path(
     monkeypatch.setattr("app.api.me.main_graph", AsyncMock())
     monkeypatch.setattr("app.api.me.main_graph.astream", fake_astream)
 
-    with patch("app.chat.factory.get_chat_llm", return_value=fake_c_llm):
+    with patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
         body = make_payload(content="继续", session_id=str(sid))
         resp = await api_client_with_eval.post(
         "/api/v1/me/chat/stream", json=body, headers=headers,
@@ -909,7 +909,7 @@ async def test_compression_failure_path(
     fake_c_llm = AsyncMock()
     fake_c_llm.ainvoke = AsyncMock(side_effect=RuntimeError("LLM compression failed"))
 
-    monkeypatch.setattr("app.chat.factory.get_chat_llm", lambda: fake_c_llm)
+    monkeypatch.setattr("app.chat.factory.build_provider_llm", lambda *a, **kw: fake_c_llm)
     async def _fake_astream_fail(initial_state, stream_mode="custom"):
         yield {"finish_reason": "stop"}
     monkeypatch.setattr("app.api.me.main_graph", AsyncMock())
@@ -978,7 +978,7 @@ async def test_compression_row84_regression(
         return_value=AIMessage(content="用户说你好，AI 回应今天天气不错"),
     )
 
-    monkeypatch.setattr("app.chat.factory.get_chat_llm", lambda: fake_c_llm)
+    monkeypatch.setattr("app.chat.factory.build_provider_llm", lambda *a, **kw: fake_c_llm)
     monkeypatch.setattr("app.api.me.main_graph", AsyncMock())
     async def _fake_astream_84(initial_state, stream_mode="custom"):
         yield {"delta": "r"}
@@ -1111,7 +1111,7 @@ async def test_compression_messages_order_assertion(
     monkeypatch.setattr("app.api.me.main_graph", AsyncMock())
     monkeypatch.setattr("app.api.me.main_graph.astream", spy_astream)
 
-    with _patch("app.chat.factory.get_chat_llm", return_value=fake_c_llm):
+    with _patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
         body = make_payload(content="继续聊聊", session_id=str(sid))
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
@@ -1200,7 +1200,7 @@ async def test_compression_with_existing_summary(
     monkeypatch.setattr("app.api.me.main_graph", AsyncMock())
     monkeypatch.setattr("app.api.me.main_graph.astream", spy_astream)
 
-    with _patch("app.chat.factory.get_chat_llm", return_value=fake_c_llm):
+    with _patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
         body = make_payload(content="第三轮", session_id=str(sid))
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,

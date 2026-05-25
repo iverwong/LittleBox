@@ -1,16 +1,16 @@
-"""compression.py 单元测试：extract_usage + 阈值常量 + build_compression_prompt。"""
+"""compression.py 单元测试：阈值常量 + build_compression_prompt + extract_compression_summary。"""
 from __future__ import annotations
 
 import pytest
-from langchain_core.messages import AIMessageChunk, HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 
 from app.chat.compression import (
-    COMPRESSION_PROMPT_STUB,
     CONTEXT_COMPRESS_THRESHOLD_TOKENS,
     build_compression_prompt,
+    extract_compression_summary,
 )
 from app.chat.extractors import extract_usage
-from app.chat.prompts import SUMMARY_PREFIX
+from app.chat.prompts import COMPRESSION_PROMPT_STUB
 
 
 def _make_chunk(usage: dict | None = None) -> AIMessageChunk:
@@ -41,51 +41,92 @@ class TestExtractUsage:
 
 
 class TestCompressionPrompt:
-    """build_compression_prompt 基础契约。"""
+    """build_compression_prompt 新结构契约。"""
 
-    def test_prompt_structure(self):
+    def test_always_two_messages(self):
+        """返回 list 长度恒为 2。"""
         msgs = [AIMessageChunk(content="你好"), AIMessageChunk(content="世界")]
         result = build_compression_prompt(msgs)
-        assert len(result) == 3
-        assert result[0].content == COMPRESSION_PROMPT_STUB
+        assert len(result) == 2
 
     def test_empty_history(self):
+        """空 history 仍返回 2 条消息。"""
         result = build_compression_prompt([])
-        assert len(result) == 1
-        assert result[0].content == COMPRESSION_PROMPT_STUB
+        assert len(result) == 2
+
+    def test_first_is_system(self):
+        result = build_compression_prompt([])
+        assert result[0].type == "system"
+        assert "对话压缩助手" in result[0].content
+
+    def test_second_is_human(self):
+        result = build_compression_prompt([])
+        assert result[1].type == "human"
+
+    def test_human_contains_stub(self):
+        result = build_compression_prompt([])
+        assert COMPRESSION_PROMPT_STUB in result[1].content
+
+    def test_human_contains_history_xml(self):
+        """HumanMessage content 包含 <history> 序列化。"""
+        result = build_compression_prompt([
+            HumanMessage(content="你好"),
+            AIMessage(content="嗨"),
+        ])
+        assert "<history>" in result[1].content
+        assert '<turn idx="1" role="user">你好</turn>' in result[1].content
+        assert '<turn idx="1" role="assistant">嗨</turn>' in result[1].content
+        assert "</history>" in result[1].content
+
+    def test_human_contains_output_contract(self):
+        """HumanMessage content 包含 <summary> 输出契约。"""
+        result = build_compression_prompt([])
+        assert "<summary>" in result[1].content
+
+    def test_last_turn_ai_not_leaked_to_system(self):
+        """末条为 AIMessage 时，它嵌入在 <history> 中而非裸露在 SystemMessage 后。"""
+        history = [
+            HumanMessage(content="问题"),
+            AIMessage(content="回复"),
+        ]
+        result = build_compression_prompt(history)
+        human_content = result[1].content
+        # 末条 AI 回复应出现在 <history> 内
+        assert '<turn idx="1" role="assistant">回复</turn>' in human_content
+        # 不应出现裸露的 AIMessage（非 XML 格式）
+        assert "回复" in human_content
+
+
+class TestExtractCompressionSummary:
+    """extract_compression_summary 各种场景。"""
+
+    def test_normal(self):
+        result = extract_compression_summary("<summary>这是摘要</summary>")
+        assert result == "这是摘要"
+
+    def test_with_surrounding_text(self):
+        """容忍 tag 前后的其他文字。"""
+        result = extract_compression_summary(
+            "好的，以下是摘要：\n<summary>这是摘要内容</summary>\n-- end"
+        )
+        assert result == "这是摘要内容"
+
+    def test_tag_missing_fallback(self):
+        """tag 缺失时兜底返回 raw_output.strip()。"""
+        result = extract_compression_summary("  纯文本回复  ")
+        assert result == "纯文本回复"
+
+    def test_empty_string_fallback(self):
+        result = extract_compression_summary("")
+        assert result == ""
+
+    def test_multiple_tags_takes_first(self):
+        result = extract_compression_summary(
+            "<summary>第一个</summary><summary>第二个</summary>"
+        )
+        assert result == "第一个"
 
 
 class TestThresholdConstant:
     def test_threshold(self):
         assert CONTEXT_COMPRESS_THRESHOLD_TOKENS == 500_000
-
-
-class TestSecondaryCompression:
-    """二次压缩：旧的 summary 行应包含在压缩集中。"""
-
-    def test_old_summary_included_in_prompt(self):
-        """build_compression_prompt 传入含 summary 的 actives → summary 作为 SystemMessage 保留在输入中。"""
-        lc_msgs = [
-            HumanMessage(content="你好"),
-            AIMessage(content="今天过得怎么样？"),
-            SystemMessage(content=SUMMARY_PREFIX + "上次讨论：数学作业"),
-        ]
-        result = build_compression_prompt(lc_msgs)
-        assert len(result) == 4
-        assert result[3].content == SUMMARY_PREFIX + "上次讨论：数学作业"
-
-    def test_old_summary_middle_position(self):
-        """summary 行在中间时，build_compression_prompt 保持原始顺序。"""
-        lc_msgs = [
-            HumanMessage(content="第一轮"),
-            AIMessage(content="回复"),
-            SystemMessage(content=SUMMARY_PREFIX + "旧摘要"),
-            HumanMessage(content="第二轮"),
-            AIMessage(content="第二轮回复"),
-        ]
-        result = build_compression_prompt(lc_msgs)
-        assert len(result) == 6
-        # 原始顺序：[stub, human, ai, summary, human, ai]
-        assert isinstance(result[1], HumanMessage)
-        assert isinstance(result[3], SystemMessage)
-        assert result[3].content == SUMMARY_PREFIX + "旧摘要"

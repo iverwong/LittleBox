@@ -646,9 +646,12 @@ async def chat_stream(
                     try:
                         yield _frame_sse_event("compression_start", {})
 
-                        from app.chat.compression import build_compression_prompt
+                        from app.chat.compression import (
+                            build_compression_prompt,
+                            extract_compression_summary,
+                        )
                         from app.chat.context import _to_lc_message
-                        from app.chat.factory import get_chat_llm as _get_compression_llm
+                        from app.chat.factory import build_provider_llm
 
                         # R+: 计算受保护行（本轮新 human / 复用 orphan）
                         protected_id = user_msg.id if user_msg is not None else last_msg.id
@@ -675,8 +678,17 @@ async def chat_stream(
                             c_input = build_compression_prompt(
                                 [_to_lc_message(mo) for mo in actives_orm]
                             )
-                            c_llm = _get_compression_llm()
+                            c_llm = build_provider_llm(
+                                f"compression_{_app_settings.compression_provider}",
+                                _app_settings,
+                            )
                             c_result = await c_llm.ainvoke(c_input)
+                            raw = (
+                                c_result.content
+                                if hasattr(c_result, "content")
+                                else str(c_result)
+                            )
+                            summary = extract_compression_summary(raw)
                             for mo in actives_orm:
                                 mo.status = "compressed"
                             db.add(
@@ -684,9 +696,7 @@ async def chat_stream(
                                     session_id=sid,
                                     role=MessageRole.summary,
                                     status=MessageStatus.active,
-                                    content=c_result.content
-                                    if hasattr(c_result, "content")
-                                    else str(c_result),
+                                    content=summary,
                                 )
                             )
                         else:

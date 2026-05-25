@@ -298,7 +298,7 @@ async def test_compression_progress_fired_when_flag_true(api_client, auth_header
             yield p
 
     with (
-        patch("app.chat.factory.get_chat_llm", return_value=mock_llm),
+        patch("app.chat.factory.build_provider_llm", return_value=mock_llm),
         patch.object(main_graph, "astream", fake_astream),
     ):
         body = make_payload(content="新消息", session_id=str(sid))
@@ -353,7 +353,7 @@ async def test_compression_failure_keeps_flag(api_client, auth_headers_child, db
             yield p
 
     with (
-        patch("app.chat.factory.get_chat_llm", return_value=mock_llm),
+        patch("app.chat.factory.build_provider_llm", return_value=mock_llm),
         patch.object(main_graph, "astream", fake_astream),
     ):
         body = make_payload(content="新消息", session_id=str(sid))
