@@ -91,6 +91,13 @@ export type ActiveStream = {
   startedAt: number;
   tempUserId: MessageId;
   tempAiId: MessageId;
+  /**
+   * Step 6 · 标记本 stream 为「重新生成」流（regenerate_for ≠ null）。
+   * _cleanupStream 据此分支 loadMessages 兜底逻辑：
+   * - 失败（error / firstFrameTimeout）→ 静默 loadMessages，重建 bucket
+   * - 成功（end）/ 用户 stop（stopped / abort）→ 正常终态，不触发 loadMessages
+   */
+  isRegenerate?: boolean;
 };
 
 export type ResumeBranch =
@@ -117,7 +124,13 @@ export type ChatStore = {
   loadMoreMessages: (sid: SessionId) => Promise<void>;
   sendMessage: (sid: SessionId | null, content: string) => Promise<void>;
   stopStream: (sid: SessionId) => Promise<void>;
-  regenerate: (sid: SessionId, lastHumanMid: MessageId) => Promise<void>;
+  /**
+   * Step 6 · A4 失败态点击重新生成（§3.9 方案 C「loading 占位接管」）。
+   * Store 内部从 bucket 索引取 failed AI 槽 + orphan human serverId（hid），
+   * 调 POST /me/chat/stream 走后端决策矩阵 Row 6（复用孤儿 human）。
+   * 调用方（AIMessage）只需传 sid；orphan_hid 不再透传，避免 UI 层维护额外状态。
+   */
+  regenerate: (sid: SessionId) => Promise<void>;
   resumeOnEnter: (sid: SessionId) => Promise<ResumeBranch>;
   resumeOnTimeout: (sid: SessionId) => Promise<ResumeBranch>;
   deleteSession: (sid: SessionId) => Promise<void>;
@@ -312,6 +325,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     };
 
     // 乐观插入（inverted FlatList：messages[0] = newest）
+    // PENDING 路径（sid==null）需主动切 activeSessionId/todaySessionId 到 PENDING_SESSION_KEY，
+    // 否则 chat/index.tsx 会一直渲染 WelcomeShell（issue 4）。
+    // session_meta migrate 时会把这两个字段一并切到真实 sid。
+    const isPendingPath = sid == null;
     set((prev) => {
       const next = new Map(prev.messagesBySession);
       const bucket = next.get(initialKey) ?? emptyBucket();
@@ -322,7 +339,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         streamPhase: 'feeling',
         lastFetchedAt: Date.now(),
       });
-      return { messagesBySession: next };
+      return {
+        messagesBySession: next,
+        ...(isPendingPath && prev.activeSessionId == null
+          ? { activeSessionId: PENDING_SESSION_KEY }
+          : {}),
+        ...(isPendingPath && prev.todaySessionId == null
+          ? { todaySessionId: PENDING_SESSION_KEY }
+          : {}),
+      };
     });
 
     // 闭包内可变 ctx，承载 session_meta migrate 后的新 storeKey
@@ -378,10 +403,103 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
     // 成功路径不在此处做 cleanup；服务端 stopped 帧到达后由 onEvent + onClose 串行触发
   },
-  regenerate: (sid, lastHumanMid) => {
-    void sid;
-    void lastHumanMid;
-    return notImplemented('regenerate');
+  regenerate: async (sid) => {
+    // Step 6 · §3.9 方案 C「loading 占位接管」：
+    // 1. 从 bucket 取 failed AI 槽（messages[0]）+ orphan human serverId（messages[1].serverId）
+    //    bucket 是 inverted（newest at 0），所以 messages[1] 一定是 failed AI 对应的 human 行
+    // 2. 复用 failed AI 槽（不删不增）：重置 status='streaming' + content='' + 清 stoppedTag
+    //    → StreamingPlaceholder 自动接管渲染「思考中…」
+    // 3. 调 openChatStream 带 regenerateFor=orphan_hid（后端 Row 6 复用孤儿，content 必须 ""）
+    // 4. 注册 ActiveStream 标记 isRegenerate=true，复用现有 tempAiId（SSE 事件命中同一槽）
+    //
+    // 失败处理：_cleanupStream('error'|'firstFrameTimeout') + isRegenerate=true → 静默 loadMessages 兜底
+    // 成功处理：_cleanupStream('end') 正常 committed，serverId 更新为新 aid
+
+    if (get().activeStreams.has(sid)) {
+      console.warn('[chatStore] regenerate: stream already active on', sid);
+      return;
+    }
+
+    const bucket = get().messagesBySession.get(sid);
+    if (!bucket || bucket.messages.length < 2) {
+      console.warn('[chatStore] regenerate: bucket too short', sid);
+      return;
+    }
+    const failedAi = bucket.messages[0];
+    const orphanHuman = bucket.messages[1];
+    if (
+      failedAi.role !== 'ai' ||
+      failedAi.status !== 'failed' ||
+      orphanHuman.role !== 'human' ||
+      !orphanHuman.serverId
+    ) {
+      // 不变式破坏（不应发生）：UI 已显示「重新生成」按钮表示 status='failed' 在 messages[0]
+      console.warn('[chatStore] regenerate: invariant violated', {
+        sid,
+        failedAiRole: failedAi.role,
+        failedAiStatus: failedAi.status,
+        orphanHumanRole: orphanHuman.role,
+        hasOrphanServerId: !!orphanHuman.serverId,
+      });
+      return;
+    }
+
+    const aiTempId = failedAi.id;
+    const orphanHid = orphanHuman.serverId;
+
+    // 复用失败 AI 槽 → 流式占位
+    set((state) => {
+      const cur = state.messagesBySession.get(sid);
+      if (!cur) return {};
+      const next = new Map(state.messagesBySession);
+      next.set(sid, {
+        ...cur,
+        messages: cur.messages.map((m) =>
+          m.id === aiTempId
+            ? {
+                ...m,
+                content: '',
+                status: 'streaming',
+                stoppedTag: undefined,
+                finishReason: undefined,
+              }
+            : m,
+        ),
+        inProgress: true,
+        streamPhase: 'feeling',
+      });
+      return { messagesBySession: next };
+    });
+
+    // session_meta 不会 migrate（regenerate 必有真实 sid + orphan hid 已存在）；
+    // 但保留 ctx 模式与 sendMessage 对称，便于未来扩展。
+    const ctx: { storeKey: SessionId } = { storeKey: sid };
+
+    const handle = openChatStream({
+      sid,
+      content: '',
+      regenerateFor: orphanHid,
+      onEvent: (event) => {
+        const newKey = get()._onSseEvent(ctx.storeKey, event);
+        if (newKey) ctx.storeKey = newKey;
+      },
+      onClose: (reason) => {
+        get()._cleanupStream(ctx.storeKey, reason);
+      },
+    });
+
+    set((prev) => {
+      const next = new Map(prev.activeStreams);
+      next.set(sid, {
+        sid,
+        handle,
+        startedAt: Date.now(),
+        tempUserId: orphanHuman.id, // 复用现有 human id，session_meta hid 回填幂等
+        tempAiId: aiTempId,
+        isRegenerate: true,
+      });
+      return { activeStreams: next };
+    });
   },
   resumeOnEnter: (sid) => {
     void sid;
@@ -481,9 +599,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           nextStreams.delete(storeKey);
           nextStreams.set(newKey, { ...stream, sid: newKey });
 
-          // activeSessionId 透明切换（若用户当前看的就是旧 storeKey）
+          // activeSessionId / todaySessionId 透明切换（若仍指向旧 storeKey，含 PENDING）
           const nextActiveSessionId =
             state.activeSessionId === storeKey ? newKey : state.activeSessionId;
+          const nextTodaySessionId =
+            state.todaySessionId === storeKey ? newKey : state.todaySessionId;
 
           migratedTo = newKey;
 
@@ -491,6 +611,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             messagesBySession: nextMessages,
             activeStreams: nextStreams,
             activeSessionId: nextActiveSessionId,
+            todaySessionId: nextTodaySessionId,
           };
         }
 
@@ -568,10 +689,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }
 
         case 'stopped': {
-          // Step 5 · 精确按服务端 event.aid 判别两态（不再依赖 content.length 兜底）：
-          // - aid 存在 → StopWithAi（has_emitted_content=true，ai 行已落库）→ committed + stoppedTag
-          // - aid 缺失 → StopNoAi（has_emitted_content=false，ai 行未落库）→ failed（进 A4，Step 6 接 UI）
-          // 这里直接写 status/stoppedTag，_cleanupStream('stopped') 不再覆写（见下方 cleanup 改动）。
+          // Step 5 修订 · 仅记录服务端权威元数据（serverId / finishReason / stoppedTag）；
+          // **不改 status**，避免 status='streaming' → 'committed' 切换提早卸载 useStreamBuffer 的 sink，
+          // 导致后续 _cleanupStream('stopped') 触发的 dispatchBufferFlushFinal 没有 sink 接收 → 残余 chars 丢失。
+          // status 切换延后到 _cleanupStream，由 m.stoppedTag 二分判定（aid 有 → committed，aid 无 → failed）。
           const bucket = state.messagesBySession.get(storeKey);
           if (!bucket) return {};
           const hasAid = event.aid != null && event.aid !== '';
@@ -584,7 +705,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                     ...m,
                     serverId: event.aid ?? m.serverId,
                     finishReason: event.finish_reason,
-                    status: hasAid ? 'committed' : 'failed',
                     stoppedTag: hasAid ? true : m.stoppedTag,
                   }
                 : m,
@@ -626,6 +746,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       dispatchBufferFlushFinal(storeKey);
     }
 
+    // Step 6 · 在 set 删除 activeStreams[storeKey] 前快照 isRegenerate，
+    // 用于 set 之后的 loadMessages 兜底判断（setter 内 state 不可逃逸到 async 路径）。
+    const streamSnapshot = get().activeStreams.get(storeKey);
+
     set((state) => {
       const stream = state.activeStreams.get(storeKey);
 
@@ -645,19 +769,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               nextStatus = 'committed';
               break;
             case 'stopped':
-              // Step 5 · _onSseEvent('stopped') 已按服务端 event.aid 精确写入 status/stoppedTag；
-              // cleanup 仅在 race 兜底（理论不可能：onClose('stopped') 总在 onEvent('stopped') 后触发）：
-              // 若 message 仍为 'streaming'，说明 stopped 事件未到 onEvent 即 close，按 content 长度兜底。
-              if (m.status === 'streaming') {
-                if (m.content.length > 0) {
-                  nextStatus = 'committed';
-                  stoppedTag = true;
-                } else {
-                  nextStatus = 'failed';
-                }
+              // Step 5 修订 · _onSseEvent('stopped') 仅记录 stoppedTag（aid 有 → true）；
+              // 此处按 m.stoppedTag 二分判定 status —— buffer 已在本函数顶部 dispatchBufferFlushFinal 完成，
+              // m.content 已反映最终全部内容（含 stopped 帧到达前未 flush 的残余 chars）。
+              // - stoppedTag=true（StopWithAi，aid 存在）→ committed
+              // - stoppedTag=undefined/false（StopNoAi，aid 缺失）/ race 兜底（stopped 事件丢失）→ failed
+              if (m.stoppedTag) {
+                nextStatus = 'committed';
               } else {
-                nextStatus = m.status;
-                // stoppedTag 已由 let 初始化从 m.stoppedTag 取，无需再赋值
+                nextStatus = 'failed';
               }
               break;
             case 'error':
@@ -690,6 +810,23 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         messagesBySession: nextMessages,
       };
     });
+
+    // Step 6 · 重新生成失败兜底：error / firstFrameTimeout 时静默调 loadMessages，
+    // 让 bucket 与服务端一致（Step 8 决策器接管细分；本 Step 不区分 HTTP 400/5xx）。
+    // stopped / abort / end 路径不触发 — _cleanupStream 已写好正确终态。
+    if (
+      streamSnapshot?.isRegenerate &&
+      (reason === 'error' || reason === 'firstFrameTimeout')
+    ) {
+      void get()
+        .loadMessages(storeKey)
+        .catch((e) => {
+          console.warn(
+            '[chatStore] regenerate failure: loadMessages fallback failed',
+            e,
+          );
+        });
+    }
 
     console.log('[chatStore] _cleanupStream', { storeKey, reason });
   },

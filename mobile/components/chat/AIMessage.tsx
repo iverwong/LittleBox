@@ -26,7 +26,7 @@
  */
 import { Ionicons } from '@expo/vector-icons'
 import { memo, useCallback, useEffect, useState } from 'react'
-import { StyleSheet, Text, View } from 'react-native'
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 
 import { useStreamBuffer } from '@/hooks/useStreamBuffer'
 import type { Message, StreamPhase } from '@/stores/chat'
@@ -89,7 +89,21 @@ function StreamingPlaceholder({ sid }: { sid: string }) {
 
 function AIMessageImpl({ message }: Props) {
     const appendFlushedDelta = useChatStore((s) => s._appendFlushedDelta)
+    const regenerate = useChatStore((s) => s.regenerate)
+    const isLastAi = useChatStore((s) => {
+        const bucket = s.messagesBySession.get(message.sid)
+        if (!bucket) return false
+        // inverted FlatList：messages[0] = newest，从前往后找第一条 ai 即末位 AI
+        for (const m of bucket.messages) {
+            if (m.role === 'ai') return m.id === message.id
+        }
+        return false
+    })
     const isStreaming = message.status === 'streaming'
+
+    const handleRegenerate = useCallback(() => {
+        void regenerate(message.sid)
+    }, [regenerate, message.sid])
 
     const onFlush = useCallback(
         (chunk: string) => {
@@ -107,6 +121,36 @@ function AIMessageImpl({ message }: Props) {
 
     if (isStreaming && message.content.length === 0) {
         return <StreamingPlaceholder sid={message.sid} />
+    }
+
+    if (message.status === 'failed') {
+        // Step 6 · A4 失败态：bubble 内显示「⚠ 回复失败」（保留 partial content 如有），
+        // bubble 右侧外挂「重新生成」chip 按钮（同一行）。
+        // 点击 chip → chatStore.regenerate(sid) → 走后端决策矩阵 Row 6（复用孤儿 human）。
+        // 点击瞬间 status='failed' → 'streaming'，本组件下一帧渲染 StreamingPlaceholder 接管。
+        return (
+            <View style={styles.row}>
+                <View style={styles.bubble}>
+                    {message.content.length > 0 && (
+                        <Text style={styles.text}>{message.content}</Text>
+                    )}
+                    <View style={styles.failedTag}>
+                        <Ionicons name="alert-circle-outline" size={12} color="#C26B6B" />
+                        <Text style={styles.failedText}>回复失败</Text>
+                    </View>
+                </View>
+                {isLastAi && (
+                    <TouchableOpacity
+                        style={styles.regenerateChip}
+                        onPress={handleRegenerate}
+                        activeOpacity={0.7}
+                    >
+                        <Ionicons name="refresh" size={14} color="#7A6A4F" />
+                        <Text style={styles.regenerateText}>重新生成</Text>
+                    </TouchableOpacity>
+                )}
+            </View>
+        )
     }
 
     return (
@@ -169,5 +213,35 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: '#998260',
         fontStyle: 'italic',
+    },
+    failedTag: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: 4,
+        gap: 4,
+        alignSelf: 'flex-start',
+    },
+    failedText: {
+        fontSize: 12,
+        color: '#C26B6B',
+        fontStyle: 'italic',
+    },
+    regenerateChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        alignSelf: 'flex-end',
+        marginLeft: 8,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 14,
+        backgroundColor: '#F5EBD7',
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: '#E5DBC9',
+        gap: 4,
+    },
+    regenerateText: {
+        fontSize: 12,
+        color: '#7A6A4F',
+        fontWeight: '500',
     },
 })
