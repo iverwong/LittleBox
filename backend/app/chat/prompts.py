@@ -106,7 +106,7 @@ def build_system_prompt(age: int, gender: str | None) -> SystemMessage:
 
 SUMMARY_PREFIX = "[历史对话摘要]\n"
 
-# ---- M8 上下文压缩 prompt（占位，scheme R 已移至 compression.py） ----
+# ---- M8 上下文压缩 prompt 任务说明（与审查关注点解耦，不含情绪 / 风险 / 安全语境） ----
 
 COMPRESSION_PROMPT_STUB = (
     "用第三人称把下面这段对话压缩为一段简短叙述，"

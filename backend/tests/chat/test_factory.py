@@ -48,6 +48,10 @@ class _FakeSettings:
         self.audit_model = kwargs.get("audit_model", "deepseek-v4-flash")
         self.audit_reasoning_effort = kwargs.get("audit_reasoning_effort", "max")
         self.audit_thinking_enabled = kwargs.get("audit_thinking_enabled", True)
+        # M8 compression pipeline settings
+        self.compression_provider = kwargs.get("compression_provider", "deepseek")
+        self.compression_model = kwargs.get("compression_model", "deepseek-v4-flash")
+        self.compression_thinking_enabled = kwargs.get("compression_thinking_enabled", False)
         for k, v in kwargs.items():
             if hasattr(self, k):
                 setattr(self, k, v)
@@ -70,6 +74,9 @@ class TestRegistryKeys:
 
     def test_registry_has_audit_bailian(self) -> None:
         assert "audit_bailian" in _PROVIDER_REGISTRY
+
+    def test_registry_has_compression_deepseek(self) -> None:
+        assert "compression_deepseek" in _PROVIDER_REGISTRY
 
     def test_registry_keys_are_callable(self) -> None:
         settings = _FakeSettings()
@@ -264,6 +271,40 @@ class TestChatDeepSeekThinkingParams:
             },
         )
         assert llm.extra_body["thinking"] == {"type": "enabled"}  # type: ignore[index]
+
+
+# ---- T5c: compression factory thinking params ----
+
+class TestCompressionFactory:
+    """compression_deepseek 的 thinking 配置由 compression_thinking_enabled 控制（默认关闭）。"""
+
+    def test_thinking_disabled_by_default(self) -> None:
+        settings = _FakeSettings()
+        llm = _PROVIDER_REGISTRY["compression_deepseek"](settings)
+        assert llm.extra_body["thinking"] == {"type": "disabled"}  # type: ignore[index]
+
+    def test_temperature_is_0_3(self) -> None:
+        settings = _FakeSettings()
+        llm = _PROVIDER_REGISTRY["compression_deepseek"](settings)
+        assert llm.temperature == 0.3  # type: ignore[attr-defined]
+
+    def test_thinking_enabled_when_configured(self) -> None:
+        settings = _FakeSettings(compression_thinking_enabled=True)
+        llm = _PROVIDER_REGISTRY["compression_deepseek"](settings)
+        assert llm.extra_body["thinking"] == {"type": "enabled"}  # type: ignore[index]
+
+    def test_uses_compression_model(self) -> None:
+        settings = _FakeSettings(compression_model="deepseek-v3")
+        llm = _PROVIDER_REGISTRY["compression_deepseek"](settings)
+        assert llm.model == "deepseek-v3"  # type: ignore[attr-defined]
+
+    def test_invoked_via_build_provider_llm(self) -> None:
+        settings = _FakeSettings()
+        from app.chat.factory import build_provider_llm
+
+        llm = build_provider_llm("compression_deepseek", settings)
+        assert isinstance(llm, ChatDeepSeek)
+        assert llm.extra_body["thinking"] == {"type": "disabled"}  # type: ignore[index]
 
 
 # ---- T6: get_chat_llm backward compat ----

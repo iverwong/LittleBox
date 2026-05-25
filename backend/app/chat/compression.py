@@ -7,12 +7,14 @@ M6-patch3 scheme R：commit② 写 LLM usage 真值快照，
 阈值命中翻 needs_compression 标志，下一轮 user 到达时阻塞压缩。
 """
 
+import logging
+
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from .history_xml import extract_wrapped_output, serialize_history_to_xml
 from .prompts import COMPRESSION_PROMPT_STUB
 
-logger = __import__("logging").getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 CONTEXT_COMPRESS_THRESHOLD_TOKENS = 500_000  # V4 1M 上下文的 50%
 
@@ -36,14 +38,9 @@ def build_compression_prompt(history: list[BaseMessage]) -> list[BaseMessage]:
 
 
 def extract_compression_summary(raw_output: str) -> str:
-    """从压缩 LLM 输出提取 <summary>…</summary>；失败时兜底使用 raw_output.strip()。
-
-    兜底失败不抛异常，由调用方决定是否记 warning。建议调用方：
-        summary = extract_compression_summary(raw)
-        if extract_wrapped_output(raw, "summary") is None:
-            logger.warning("compression.summary_tag_missing", extra={"raw_len": len(raw)})
-    """
+    """从压缩 LLM 输出提取 <summary>…</summary>；失败时兜底使用 raw_output.strip() 并记 warning。"""
     extracted = extract_wrapped_output(raw_output, "summary")
     if extracted is not None:
         return extracted
+    logger.warning("compression.summary_tag_missing", extra={"raw_len": len(raw_output)})
     return raw_output.strip()
