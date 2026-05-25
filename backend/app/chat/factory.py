@@ -120,6 +120,23 @@ def _build_chat_openai(
     )
 
 
+def _build_compression_deepseek(settings: Any) -> ChatDeepSeek:
+    """压缩调用专用 DeepSeek 实例。thinking 默认关闭（compression_thinking_enabled=False）。"""
+    return ChatDeepSeek(
+        model=settings.compression_model,
+        api_key=settings.deepseek_api_key.get_secret_value(),  # type: ignore[arg-type]
+        api_base=settings.deepseek_base_url,
+        timeout=settings.llm_request_timeout_seconds,
+        max_retries=0,
+        temperature=0.3,
+        extra_body={
+            "thinking": {
+                "type": "enabled" if settings.compression_thinking_enabled else "disabled",
+            },
+        },
+    )
+
+
 _PROVIDER_REGISTRY: dict[str, Callable[..., Runnable]] = {
     "deepseek": lambda settings: _build_chat_deepseek(
         api_key=settings.deepseek_api_key.get_secret_value(),
@@ -150,6 +167,7 @@ _PROVIDER_REGISTRY: dict[str, Callable[..., Runnable]] = {
         reasoning_effort=settings.audit_reasoning_effort,
         thinking_enabled=settings.audit_thinking_enabled,
     ),
+    "compression_deepseek": lambda settings: _build_compression_deepseek(settings),
 }
 
 

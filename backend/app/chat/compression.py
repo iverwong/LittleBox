@@ -1,33 +1,49 @@
-"""上下文压缩辅助：阈值常量 + 压缩 prompt。
+"""M8 上下文压缩 prompt 构建。
+
+设计：固定 2 条消息（System + Human），history 走 XML 序列化嵌入 Human content，
+避免 chat template 进入"续写 assistant"分支。
 
 M6-patch3 scheme R：commit② 写 LLM usage 真值快照，
 阈值命中翻 needs_compression 标志，下一轮 user 到达时阻塞压缩。
 """
 
-import logging
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from langchain_core.messages import BaseMessage, SystemMessage
+from .history_xml import extract_wrapped_output, serialize_history_to_xml
+from .prompts import COMPRESSION_PROMPT_STUB
 
-logger = logging.getLogger(__name__)
+logger = __import__("logging").getLogger(__name__)
 
 CONTEXT_COMPRESS_THRESHOLD_TOKENS = 500_000  # V4 1M 上下文的 50%
 
-# 压缩 prompt 占位文案；TODO(prompts-content): 专人审核后填充正式摘要指令
-COMPRESSION_PROMPT_STUB = (
-    "请将以下对话历史压缩为简洁的客观摘要，"
-    "保留事件、决定、待办与重要细节；"
-    "不带情绪标签、不做风险评估、不做安全判断。"
+_OUTPUT_CONTRACT = (
+    "\n\n请只输出 <summary>…</summary> 包裹的内容，不要其他文字。"
 )
 
 
 def build_compression_prompt(history: list[BaseMessage]) -> list[BaseMessage]:
-    """构建压缩 LLM 的 prompt。
+    """构建压缩调用的 messages。返回 list 长度恒为 2。
 
-    Args:
-        history: 待压缩的 active 消息列表
-
-    Returns:
-        可直接传入 llm.ainvoke() 的消息列表
+    - SystemMessage: 角色定位
+    - HumanMessage: 任务说明 + <history>…</history> 序列化 + 末尾输出契约
     """
-    messages = [SystemMessage(content=COMPRESSION_PROMPT_STUB), *history]
-    return messages
+    history_xml = serialize_history_to_xml(history, include_system=False)
+    human_content = f"{COMPRESSION_PROMPT_STUB}\n\n{history_xml}{_OUTPUT_CONTRACT}"
+    return [
+        SystemMessage(content="你是对话压缩助手。"),
+        HumanMessage(content=human_content),
+    ]
+
+
+def extract_compression_summary(raw_output: str) -> str:
+    """从压缩 LLM 输出提取 <summary>…</summary>；失败时兜底使用 raw_output.strip()。
+
+    兜底失败不抛异常，由调用方决定是否记 warning。建议调用方：
+        summary = extract_compression_summary(raw)
+        if extract_wrapped_output(raw, "summary") is None:
+            logger.warning("compression.summary_tag_missing", extra={"raw_len": len(raw)})
+    """
+    extracted = extract_wrapped_output(raw_output, "summary")
+    if extracted is not None:
+        return extracted
+    return raw_output.strip()

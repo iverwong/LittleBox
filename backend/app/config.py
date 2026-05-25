@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     arq_redis_db: int = 1
     # M8 session_notes tool agentic loop 硬上限
     max_audit_tool_iterations: int = 5
+    # M8 压缩 LLM 供应商标识，与 _PROVIDER_REGISTRY 注册名对齐
+    compression_provider: str = "deepseek"
+    # M8 压缩 LLM 模型名
+    compression_model: str = "deepseek-v4-flash"
+    # M8 压缩启用思考模式（默认关闭，压缩任务不需要 reasoning）
+    compression_thinking_enabled: bool = False
 
     model_config = {"env_prefix": "LB_", "env_file": ".env"}
 

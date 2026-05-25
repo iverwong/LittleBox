@@ -108,5 +108,9 @@ SUMMARY_PREFIX = "[历史对话摘要]\n"
 
 # ---- M8 上下文压缩 prompt（占位，scheme R 已移至 compression.py） ----
 
-COMPRESSION_PROMPT_STUB = "TODO(prompts-content): compression instruction"
+COMPRESSION_PROMPT_STUB = (
+    "用第三人称把下面这段对话压缩为一段简短叙述，"
+    "保留聊过的话题、对方分享过的事和喜好、提到的人或物、约定要一起做的事。"
+    "不复述完整对白。"
+)
 
