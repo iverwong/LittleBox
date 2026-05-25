@@ -37,7 +37,10 @@ import {
   type SseEvent,
   type ChatStreamHandle,
   type ChatStreamCloseReason,
+  type ChatStreamCloseMeta,
 } from '@/lib/chatStream';
+import { ApiError } from '@/services/api/client';
+import { toast } from '@/components/ui';
 import {
   dispatchBufferAppend,
   dispatchBufferClear,
@@ -114,11 +117,20 @@ export type ChatStore = {
   todaySessionId: SessionId | null;
   activeSessionId: SessionId | null;
 
+  /**
+   * Step 7 · A4Late prefill：首帧超时（firstFrameTimeout，session_meta 首帧 5s 未达）后回灌 ChatInput 的用户原文。
+   * - 写入：`_cleanupStream('firstFrameTimeout')` 内从 stream.tempUserId 索引 user msg.content
+   * - 消费：ChatInput useEffect 监听 prefill 变化，一次性写入 textbox 后调 setPendingPrefill(null) 清空
+   * - 语义：null = 无 prefill；非空字符串 = 待消费内容
+   */
+  pendingPrefill: string | null;
+
   messagesBySession: Map<SessionId, SessionMessageState>;
   activeStreams: Map<SessionId, ActiveStream>;
 
   loadSessions: (opts?: { reset?: boolean }) => Promise<void>;
   setActiveSession: (sid: SessionId | null) => void;
+  setPendingPrefill: (value: string | null) => void;
 
   loadMessages: (sid: SessionId) => Promise<void>;
   loadMoreMessages: (sid: SessionId) => Promise<void>;
@@ -141,7 +153,11 @@ export type ChatStore = {
    * 由 sendMessage 闭包通过 ctx.storeKey 持有最新 key，避免 onEvent 闭包失效。
    */
   _onSseEvent: (storeKey: SessionId, event: SseEvent) => SessionId | void;
-  _cleanupStream: (storeKey: SessionId, reason: ChatStreamCloseReason) => void;
+  _cleanupStream: (
+    storeKey: SessionId,
+    reason: ChatStreamCloseReason,
+    meta?: ChatStreamCloseMeta,
+  ) => void;
   /**
    * Step 4b · 组件级 50ms flush tick 回写 store.content 的内部 action。
    * 调用方：useStreamBuffer hook 的 onFlush 回调。
@@ -152,6 +168,39 @@ export type ChatStore = {
     chunk: string,
   ) => void;
 };
+
+/**
+ * Step 7 · 聊天错误透 hook 的上下文载体。
+ *
+ * 两个 store 内部入口共用本类型：
+ * - `_cleanupStream` 触发的 stream transport 错误（onClose meta.transportStatus）
+ *   → `source: 'streamTransport'`，`reason` 区分 'error' / 'firstFrameTimeout'（当前 hook 仅消费 status，reason 透传）
+ * - `stopStream` 失败分支（stopSession 4xx/5xx / 网络断）
+ *   → `source: 'stop'`，无 reason
+ *
+ * status 语义对齐 ApiResult：0=网络层不可达，401/403/404/409/5xx=HTTP 状态码。
+ * 业务 error 帧（CompressionError / InternalError）按 M7 §5.3 不进本通道
+ *（chatStream.ts onClose 不带 meta → _cleanupStream 跳过派发）。
+ */
+export type ChatStreamErrorContext = {
+  sid: SessionId;
+  status: number;
+  source: 'streamTransport' | 'stop';
+  reason?: ChatStreamCloseReason;
+};
+
+/**
+ * Module-level callback handler，与 client.ts 的 setOn401Handler / setOnUnauthorizedRedirect 同模式。
+ * `useChatErrorHandler` hook 在 mount 时注册、unmount 时清空（避免 stale ref）。
+ * 多消费者场景目前不需要（chat 页面唯一 hook 持有者）；将来扩展可改为 listener 数组。
+ */
+let onChatErrorHandler: ((ctx: ChatStreamErrorContext) => void) | null = null;
+
+export function setOnChatErrorHandler(
+  cb: ((ctx: ChatStreamErrorContext) => void) | null,
+): void {
+  onChatErrorHandler = cb;
+}
 
 // sid=null 路径的临时桶 key；session_meta 到来时必 migrate 到真实 sid
 export const PENDING_SESSION_KEY: SessionId = '__pending__';
@@ -197,6 +246,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   sessionsHasMore: false,
   todaySessionId: null,
   activeSessionId: null,
+  pendingPrefill: null,
   messagesBySession: new Map(),
   activeStreams: new Map(),
 
@@ -207,7 +257,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const result = await listSessions({ cursor, limit: 15 });
 
     if (!result.ok) {
-      throw new Error(`[chatStore] loadSessions failed: HTTP ${result.status}`);
+      throw new ApiError(result.status, result.body);
     }
 
     const data = result.data;
@@ -234,10 +284,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set({ activeSessionId: sid });
   },
 
+  setPendingPrefill: (value) => {
+    set({ pendingPrefill: value });
+  },
+
   loadMessages: async (sid) => {
     const result = await getMessages(sid, { limit: 50 });
     if (!result.ok) {
-      throw new Error(`[chatStore] loadMessages failed: HTTP ${result.status}`);
+      throw new ApiError(result.status, result.body);
     }
     const data = result.data;
 
@@ -265,9 +319,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       limit: 50,
     });
     if (!result.ok) {
-      throw new Error(
-        `[chatStore] loadMoreMessages failed: HTTP ${result.status}`,
-      );
+      throw new ApiError(result.status, result.body);
     }
     const data = result.data;
 
@@ -302,6 +354,41 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       );
       return;
     }
+
+    // Step 7 修复 · 清前一条「未达后端」失败对（user.serverId 缺失 = session_meta 未达 = 后端无记录）。
+    //
+    // 场景：firstFrameTimeout / transport 失败时 session_meta 未达 → 后端 0 记录 → user msg.serverId 始终 undefined。
+    // 不清的话 bucket 累积一堆失败 user msg（reload 拉后端时全部消失，前后端 diverge）。
+    //
+    // 设计语义：用户在 prefill 引导下重发即「重试上一条」，前一条乐观插入条与新条二选一保留即可。
+    // 延迟清而非失败立刻清的理由：失败痕迹短期保留让用户感知「上一条没发出去」，立刻清会让 UI 看起来「啥都没发生」。
+    //
+    // 范围限定：仅清「头部 1 对」（messages[0] AI failed + messages[1] human no serverId）。
+    // 历史成功条不动；如果用户连环失败导致头部累积 ≥2 对（不应发生 — 每次 sendMessage 都清），仅清最新 1 对，保守。
+    set((prev) => {
+      const bucket = prev.messagesBySession.get(initialKey);
+      if (!bucket || bucket.messages.length < 2) return {};
+      const aiHead = bucket.messages[0];
+      const humanHead = bucket.messages[1];
+      if (
+        aiHead?.role === 'ai' &&
+        aiHead?.status === 'failed' &&
+        humanHead?.role === 'human' &&
+        !humanHead?.serverId
+      ) {
+        const nextMessages = new Map(prev.messagesBySession);
+        nextMessages.set(initialKey, {
+          ...bucket,
+          messages: bucket.messages.slice(2),
+        });
+        console.log(
+          '[chatStore] sendMessage: cleared 1 未达后端 失败对 before retry',
+          { storeKey: initialKey },
+        );
+        return { messagesBySession: nextMessages };
+      }
+      return {};
+    });
 
     const now = new Date().toISOString();
     const tempUserId = genTempId('human');
@@ -360,8 +447,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         const newKey = get()._onSseEvent(ctx.storeKey, event);
         if (newKey) ctx.storeKey = newKey;
       },
-      onClose: (reason) => {
-        get()._cleanupStream(ctx.storeKey, reason);
+      onClose: (reason, meta) => {
+        get()._cleanupStream(ctx.storeKey, reason, meta);
       },
     });
 
@@ -394,11 +481,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
     const result = await stopSession(sid);
     if (!result.ok) {
-      // Step 7 错误码映射会接管 toast；本 Step 仅 log + abort 兜底
       console.warn('[chatStore] stopStream: stop API failed, aborting handle', {
         sid,
         status: result.status,
       });
+      // Step 7 · 透 hook 派发：401 静默 / 403/404 切 session / 5xx toast。
+      // 派发与 abort 顺序无依赖：派发是同步调 toast / setState；abort 触发 onClose('abort') 走 _cleanupStream 链路。
+      if (onChatErrorHandler) {
+        onChatErrorHandler({
+          sid,
+          status: result.status,
+          source: 'stop',
+        });
+      }
       stream.handle.abort();
     }
     // 成功路径不在此处做 cleanup；服务端 stopped 帧到达后由 onEvent + onClose 串行触发
@@ -433,13 +528,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       orphanHuman.role !== 'human' ||
       !orphanHuman.serverId
     ) {
-      // 不变式破坏（不应发生）：UI 已显示「重新生成」按钮表示 status='failed' 在 messages[0]
+      // 不变式破坏：firstFrameTimeout / transport 失败时 session_meta 未达 → user.serverId 缺失，
+      // 后端 Row 6「复用孤儿 human」必须有 hid，缺失时 regenerate 这条路走不通。
+      // 用户应改走「直接重发」（pendingPrefill 已回填 ChatInput），toast 引导。
       console.warn('[chatStore] regenerate: invariant violated', {
         sid,
         failedAiRole: failedAi.role,
         failedAiStatus: failedAi.status,
         orphanHumanRole: orphanHuman.role,
         hasOrphanServerId: !!orphanHuman.serverId,
+      });
+      toast.show({
+        message: '网络异常导致请求未发出，请直接重新发送（已为你回填内容）',
+        variant: 'warning',
       });
       return;
     }
@@ -483,8 +584,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         const newKey = get()._onSseEvent(ctx.storeKey, event);
         if (newKey) ctx.storeKey = newKey;
       },
-      onClose: (reason) => {
-        get()._cleanupStream(ctx.storeKey, reason);
+      onClose: (reason, meta) => {
+        get()._cleanupStream(ctx.storeKey, reason, meta);
       },
     });
 
@@ -735,7 +836,24 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     return migratedTo;
   },
 
-  _cleanupStream: (storeKey, reason) => {
+  _cleanupStream: (storeKey, reason, meta) => {
+    // Step 7 · meta.transportStatus 存在 → transport 错误 / firstFrameTimeout 派发到 useChatErrorHandler hook。
+    // 业务 error 帧（CompressionError / InternalError）路径：chatStream.ts onClose **不带 meta** → meta undefined → 跳过派发，
+    // 走下方 buffer + status 收束链路，AI 气泡进 A4 失败态由 Step 6 视觉接管。
+    // firstFrameTimeout 路径：当前 chatStream.ts 调 `close('firstFrameTimeout')` 不带 meta，Step 8 接 resumeOnTimeout 时再补 hook 触达点。
+    if (
+      (reason === 'error' || reason === 'firstFrameTimeout') &&
+      meta?.transportStatus != null &&
+      onChatErrorHandler
+    ) {
+      onChatErrorHandler({
+        sid: storeKey,
+        status: meta.transportStatus,
+        source: 'streamTransport',
+        reason,
+      });
+    }
+
     // Step 4b · 先把组件级 bufferRef 处理掉，再做 status 收束。
     // - error → 丢弃未 flush chunk，保留已 flush 内容（§3.9「保留已渲染部分」）
     // - 其他（end / stopped / abort / firstFrameTimeout）→ 把残余 chunk 推完
@@ -805,9 +923,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         });
       }
 
+      // Step 7 · A4Late prefill：firstFrameTimeout 时把用户刚发的 user msg 内容回灌到 ChatInput，
+      // 便于用户原文修改后再发；其他 reason 不触发（end/stopped/abort/error 都不是「未达后端」场景）。
+      // user msg 在 sendMessage 乐观插入时就入 bucket，_cleanupStream 不删它，所以 find 必中。
+      // PENDING 路径（session_meta 未到 → storeKey === PENDING_SESSION_KEY）user msg 仍在 PENDING bucket 内，逻辑一致。
+      const prefillCandidate =
+        reason === 'firstFrameTimeout' && stream && bucket
+          ? bucket.messages.find((m) => m.id === stream.tempUserId)?.content
+          : undefined;
+
       return {
         activeStreams: nextStreams,
         messagesBySession: nextMessages,
+        ...(prefillCandidate ? { pendingPrefill: prefillCandidate } : {}),
       };
     });
 

@@ -2,14 +2,17 @@
  * M7 · 子端主对话页 (/child/chat)。
  *
  * 当前实现累计范围：
- *   - Step 1.4：mount loadSessions + today_session_id 决定首屏 + 顶部 SessionList
- *   - Step 2.3：§3.10 缓存判定矩阵（30s 窗口）+ MessageList 渲染
- *   - Step 3.2：输入区按 activeSessionId vs todaySessionId 三分支
- *       · null → WelcomeShell 占满（不显示输入区）
- *       · === todaySessionId → ChatInput 草稿态
- *       · !== todaySessionId（历史）→ 「返回继续对话」图标按钮
+ * - Step 1.4：mount loadSessions + today_session_id 决定首屏 + 顶部 SessionList
+ * - Step 2.3：§3.10 缓存判定矩阵（30s 窗口）+ MessageList 渲染
+ * - Step 3.2：输入区按 activeSessionId vs todaySessionId 三分支
+ *   · null → WelcomeShell 占满（不显示输入区）
+ *   · === todaySessionId → ChatInput 草稿态
+ *   · !== todaySessionId（历史）→ 「返回继续对话」图标按钮
+ * - Step 7：挂 useChatErrorHandler hook（接 store transport error / stopStream 失败回调）
+ *          两处 loadSessions / loadMessages catch 接 handleApiError（按 §3.9 分发 toast / 切 session）
+ *          ChatInput 接入 pendingPrefill 链路（A4Late 首帧超时回灌）
  *
- * 后续 Step：SSE sendMessage（Step 4a）、token buffer（Step 4b）、Resume（Step 8）。
+ * 后续 Step：Resume 三分支决策器（Step 8）。
  */
 import { Ionicons } from '@expo/vector-icons'
 import { useEffect, useState } from 'react'
@@ -21,6 +24,7 @@ import { MessageList } from '@/components/chat/MessageList'
 import { SessionList } from '@/components/chat/SessionList'
 import { WelcomeContent } from '@/components/chat/WelcomeContent'
 import { WelcomeShell } from '@/components/chat/WelcomeShell'
+import { useChatErrorHandler } from '@/hooks/useChatErrorHandler'
 import { useChatStore } from '@/stores/chat'
 
 export default function ChatIndex() {
@@ -30,6 +34,14 @@ export default function ChatIndex() {
     const todaySessionId = useChatStore((s) => s.todaySessionId)
     const sendMessage = useChatStore((s) => s.sendMessage)
     const stopStream = useChatStore((s) => s.stopStream)
+    const pendingPrefill = useChatStore((s) => s.pendingPrefill)
+    const setPendingPrefill = useChatStore((s) => s.setPendingPrefill)
+
+    // Step 7 · 错误反馈映射 hook
+    // - mount 时 setOnChatErrorHandler 注册（接管 store transport error / stopStream 失败回调）
+    // - 暴露 handleApiError：loadSessions / loadMessages catch 块按 §3.9 分发
+    // - unmount 时清空 callback 避免 stale ref
+    const { handleApiError } = useChatErrorHandler()
 
     useEffect(() => {
         let cancelled = false
@@ -42,14 +54,15 @@ export default function ChatIndex() {
                     setActiveSession(today)
                 }
             } catch (err) {
-                // Step 7 接错误码映射 UI 反馈
                 console.error('[ChatIndex] loadSessions failed', err)
+                // Step 7 · 按 §3.9 状态码分发；非 ApiError 重新抛出到 ErrorBoundary
+                handleApiError(err, { kind: 'loadSessions' })
             }
         })()
         return () => {
             cancelled = true
         }
-    }, [loadSessions, setActiveSession])
+    }, [loadSessions, setActiveSession, handleApiError])
 
     const [isLoadingMessages, setIsLoadingMessages] = useState(false)
     const loadMessages = useChatStore((s) => s.loadMessages)
@@ -72,8 +85,9 @@ export default function ChatIndex() {
             try {
                 await loadMessages(activeSessionId)
             } catch (err) {
-                // Step 7 接错误码映射 UI 反馈
                 console.error('[ChatIndex] loadMessages failed', err)
+                // Step 7 · 403/404 → 切 session + reset；5xx → toast；0 → 网络异常 toast
+                handleApiError(err, { kind: 'loadMessages', sid: activeSessionId })
             } finally {
                 if (!cancelled) setIsLoadingMessages(false)
             }
@@ -81,7 +95,7 @@ export default function ChatIndex() {
         return () => {
             cancelled = true
         }
-    }, [activeSessionId, loadMessages])
+    }, [activeSessionId, loadMessages, handleApiError])
 
     const handleBackToToday = () => {
         if (todaySessionId != null) {
@@ -130,6 +144,8 @@ export default function ChatIndex() {
                             void stopStream(activeSessionId)
                         }
                     }}
+                    prefill={pendingPrefill}
+                    onPrefillConsumed={() => setPendingPrefill(null)}
                 />
             )}
             {isHistoryActive && (

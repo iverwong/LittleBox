@@ -38,6 +38,19 @@ export type ChatStreamCloseReason =
   | 'abort'
   | 'firstFrameTimeout';
 
+/**
+ * Step 7 · close 元信息透传。
+ * - transportStatus 仅 transport 错误（HTTP 4xx/5xx / 网络断 / 解析失败）路径带；
+ *   业务 error 帧（CompressionError / InternalError）与 end / stopped / abort / firstFrameTimeout
+ *   路径不带 meta，调用方据此二分错误来源。
+ * - transportStatus === 0 表示网络层不可达（库未上报 xhrStatus），与 client.ts 网络层失败约定一致。
+ * - 当前由 store `_cleanupStream` 接收后透传给 useChatErrorHandler（Step 7 第 5 子步），
+ *   分发到 toast / createSession / loadMessages / resumeOnEnter（Step 8）等动作。
+ */
+export type ChatStreamCloseMeta = {
+  transportStatus?: number;
+};
+
 export type ChatStreamHandle = {
   abort: () => void;
 };
@@ -47,7 +60,7 @@ export type OpenChatStreamArgs = {
   content: string;
   regenerateFor?: string | null;
   onEvent: (e: SseEvent) => void;
-  onClose: (reason: ChatStreamCloseReason) => void;
+  onClose: (reason: ChatStreamCloseReason, meta?: ChatStreamCloseMeta) => void;
   firstFrameTimeoutMs?: number;
 };
 
@@ -88,7 +101,7 @@ export function openChatStream(args: OpenChatStreamArgs): ChatStreamHandle {
   let firstFrameTimer: ReturnType<typeof setTimeout> | null = null;
   let es: EventSource<CustomEventName> | null = null;
 
-  const close = (reason: ChatStreamCloseReason) => {
+  const close = (reason: ChatStreamCloseReason, meta?: ChatStreamCloseMeta) => {
     if (closed) return;
     closed = true;
     if (firstFrameTimer) {
@@ -100,13 +113,17 @@ export function openChatStream(args: OpenChatStreamArgs): ChatStreamHandle {
     } catch {
       // ignore
     }
-    onClose(reason);
+    onClose(reason, meta);
   };
 
   if (firstFrameTimeoutMs > 0) {
     firstFrameTimer = setTimeout(() => {
       if (closed || firstFrameSeen) return;
-      close('firstFrameTimeout');
+      // Step 7 修复 · firstFrameTimeout 同属「后端不可达」语义；
+      // react-native-sse 在 connect refused / socket pending 场景下不 emit error event，
+      // 全靠 5s 首帧超时收口。带 transportStatus=0（与 xhr transport 错误 status=0 同义），
+      // 让 store `_cleanupStream` 透 hook → toast「网络连接异常」。
+      close('firstFrameTimeout', { transportStatus: 0 });
     }, firstFrameTimeoutMs);
   }
 
@@ -236,7 +253,12 @@ export function openChatStream(args: OpenChatStreamArgs): ChatStreamHandle {
       return;
     }
 
-    // transport 错误
+    // transport 错误（HTTP 4xx/5xx / 网络断 / 解析失败）
+    // Step 7 · 透传 xhrStatus 给 onClose meta，由 store → useChatErrorHandler 按状态码分发：
+    // - 401：handle401 已接管 clearSession+跳 landing，meta 仍带便于 hook 兜底诊断 / 不重复 toast
+    // - 403/404：hook 出「会话不可用」toast + 清 lastSessionId + createSession + loadSessions reset
+    // - 409：hook 出「会话正在响应」toast + 触发 resumeOnEnter（Step 8 接管）
+    // - 5xx / status==0（网络层不可达）：hook 兜底 toast「服务暂时不可用」
     console.warn('[chatStream] transport error', {
       xhrStatus: ev.xhrStatus,
       message: ev.message,
@@ -245,7 +267,7 @@ export function openChatStream(args: OpenChatStreamArgs): ChatStreamHandle {
     if (ev.xhrStatus === 401) {
       void handle401();
     }
-    close('error');
+    close('error', { transportStatus: ev.xhrStatus ?? 0 });
   });
 
   return {
