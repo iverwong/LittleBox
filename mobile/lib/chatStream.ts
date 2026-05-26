@@ -36,7 +36,8 @@ export type ChatStreamCloseReason =
   | 'stopped'
   | 'error'
   | 'abort'
-  | 'firstFrameTimeout';
+  | 'firstFrameTimeout'
+  | 'backgroundClose';
 
 /**
  * Step 7 · close 元信息透传。
@@ -52,7 +53,7 @@ export type ChatStreamCloseMeta = {
 };
 
 export type ChatStreamHandle = {
-  abort: () => void;
+  abort: (reason?: 'abort' | 'backgroundClose') => void;
 };
 
 export type OpenChatStreamArgs = {
@@ -133,7 +134,7 @@ export function openChatStream(args: OpenChatStreamArgs): ChatStreamHandle {
     console.warn('[chatStream] missing deviceId, aborting');
     // 必须延后 close 到下一 tick,避免在 return handle 之前就触发 onClose
     setTimeout(() => close('error'), 0);
-    return { abort: () => close('abort') };
+    return { abort: (reason) => close(reason ?? 'abort') };
   }
 
   const headers: Record<string, string> = {
@@ -271,6 +272,6 @@ export function openChatStream(args: OpenChatStreamArgs): ChatStreamHandle {
   });
 
   return {
-    abort: () => close('abort'),
+    abort: (reason) => close(reason ?? 'abort'),
   };
 }

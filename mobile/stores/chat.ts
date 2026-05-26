@@ -51,7 +51,13 @@ export type MessageId = string;
 
 export type MessageRole = 'human' | 'ai';
 
-export type MessageStatus = 'committed' | 'streaming' | 'failed' | 'stopped';
+export type MessageStatus =
+  | 'committed'
+  | 'streaming'
+  | 'failed'
+  | 'stopped'
+  | 'reconnecting' // AppState background→active 期间，等待服务端权威态
+  | 'disconnected'; // 底层 fetch 60s 超时，等用户主动点「重新连接」chip
 
 export type StreamPhase =
   | 'idle'
@@ -179,6 +185,37 @@ export type ChatStore = {
    * timeout 路径：no-op（_cleanupStream firstFrameTimeout 已把真 ai placeholder 切 failed）
    */
   _fabricateA4LateSlot: (sid: SessionId, ctx: 'enter' | 'timeout') => void;
+  /**
+   * Step 9 · AppState background→active 接入点。
+   * 调用方：app/_layout.tsx AppState 监听器（Step 9 小步 3 接线）。
+   * 流程：_startReconnecting → _resumeBranchDecide('enter') → _completeReconnecting / _markDisconnected。
+   * fetch 默认 60s 超时（client.ts 不设 AbortController），期间 OS 层 SYN 重试 → 网络恢复就自动可连。
+   */
+  _handleAppStateActive: (sid: SessionId) => Promise<void>;
+  /**
+   * Step 9 · 用户点「重新连接」chip 触发（disconnected → reconnecting → 重发决策请求）。
+   */
+  _retryReconnect: (sid: SessionId) => Promise<void>;
+  /**
+   * Step 9 · bucket[0] streaming AI 残留槽切 reconnecting 视觉。
+   * 仅在 bucket[0] 是 streaming AI 时生效（其他场景无 reconnecting 必要）。
+   */
+  _startReconnecting: (sid: SessionId) => void;
+  /**
+   * Step 9 · reconnecting → disconnected（fetch 自然超时或网络层失败时）。
+   */
+  _markDisconnected: (sid: SessionId) => void;
+  /**
+   * Step 9 · 决策器返回后按分支切终态：
+   * - OK2 → 删 reconnecting 槽 + loadMessages
+   * - Waiting → _startResumePolling 接管（reconnecting → streaming，启 polling）
+   * - A4Late → reconnecting → failed
+   * - Active → 极小概率（race），删 reconnecting 槽让 active 流接管
+   */
+  _completeReconnecting: (
+    sid: SessionId,
+    branch: ResumeBranch,
+  ) => Promise<void>;
   /**
    * Step 4b · 组件级 50ms flush tick 回写 store.content 的内部 action。
    * 调用方：useStreamBuffer hook 的 onFlush 回调。
@@ -784,7 +821,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       let nextMessages: Message[];
       if (
         head?.role === 'ai' &&
-        head.status === 'failed' &&
+        (head.status === 'failed' || head.status === 'reconnecting') &&
         !head.id.startsWith(FAB_ID_PREFIX)
       ) {
         nextMessages = [
@@ -1259,23 +1296,34 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               nextStatus = 'failed';
               break;
             case 'abort':
-              // 用户语义级中断：content>0 保留固化（已实际产出）；content=0 切 'stopped'（语义级中断，非系统失败）
               nextStatus = m.content.length > 0 ? 'committed' : 'stopped';
               break;
+            case 'backgroundClose':
+              // Step 9 · AppState background 触发的主动关闭。
+              // 不收束 status：维持 'streaming'，后续 _startReconnecting 切 'reconnecting' 接管视觉。
+              // bucket.inProgress / streamPhase 也保留（下方 set 收尾会覆盖，需要分支保护 — 见 set 出口）。
+              // buffer 已在本函数顶部 dispatchBufferFlushFinal 推完。
+              return m;
           }
           return { ...m, status: nextStatus, stoppedTag };
         });
         nextMessages.set(storeKey, {
           ...bucket,
           messages: updatedMessages,
-          inProgress: false,
-          streamPhase: 'idle',
+          // backgroundClose 维持 inProgress/streamPhase，等 _startReconnecting 接管；
+          // 其他 reason 收尾 idle。
+          ...(reason === 'backgroundClose'
+            ? {}
+            : { inProgress: false, streamPhase: 'idle' }),
         });
       } else if (bucket) {
         nextMessages.set(storeKey, {
           ...bucket,
-          inProgress: false,
-          streamPhase: 'idle',
+          // Step 9 · backgroundClose 维持 inProgress/streamPhase，等 _startReconnecting 接管；
+          // 其他 reason 收尾 idle。与上方 if 分支处理一致。
+          ...(reason === 'backgroundClose'
+            ? {}
+            : { inProgress: false, streamPhase: 'idle' }),
         });
       }
 
@@ -1283,9 +1331,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       // 便于用户原文修改后再发；其他 reason 不触发（end/stopped/abort/error 都不是「未达后端」场景）。
       // user msg 在 sendMessage 乐观插入时就入 bucket，_cleanupStream 不删它，所以 find 必中。
       // PENDING 路径（session_meta 未到 → storeKey === PENDING_SESSION_KEY）user msg 仍在 PENDING bucket 内，逻辑一致。
+      // Step 9 · 扩展 prefill 触发条件：
+      // - firstFrameTimeout：原逻辑保持（首帧超时必然 user.serverId 缺失）
+      // - error：补 5xx + session_meta 未达 的 gap（user.serverId 缺失 = 后端 0 记录 = 必须 prefill 回灌）
+      // - 统一判定逻辑：(firstFrameTimeout || error) && user.serverId 缺失
+      const userMsg =
+        stream && bucket
+          ? bucket.messages.find((m) => m.id === stream.tempUserId)
+          : undefined;
       const prefillCandidate =
-        reason === 'firstFrameTimeout' && stream && bucket
-          ? bucket.messages.find((m) => m.id === stream.tempUserId)?.content
+        (reason === 'firstFrameTimeout' || reason === 'error') &&
+        userMsg != null &&
+        !userMsg.serverId
+          ? userMsg.content
           : undefined;
 
       return {
@@ -1334,6 +1392,175 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
 
     console.log('[chatStore] _cleanupStream', { storeKey, reason });
+  },
+
+  _handleAppStateActive: async (sid) => {
+    // Step 9 · AppState background→active 入口。
+    // 调用前置条件（由 app/_layout.tsx 接线时保证）：
+    // - background 时 activeStreams.size > 0（gate flag）
+    // - sid = todaySessionId
+    // 流程：reconnecting 视觉 → 决策器 → 按分支收口 / 失败切 disconnected。
+    get()._startReconnecting(sid);
+    try {
+      const branch = await get()._resumeBranchDecide(sid, 'enter');
+      await get()._completeReconnecting(sid, branch);
+    } catch (e) {
+      // ApiError：fetch 60s 超时 / 网络层 reject / 5xx 等。
+      // 切 disconnected 等用户主动重连。底层不再循环重试（与 60s 单计时器简化方案一致）。
+      console.warn(
+        '[chatStore] _handleAppStateActive: decide failed → disconnected',
+        e,
+      );
+      get()._markDisconnected(sid);
+    }
+  },
+
+  _retryReconnect: async (sid) => {
+    // Step 9 · 用户点「重新连接」chip 入口。
+    // disconnected → reconnecting，重新跑决策器一轮。
+    set((state) => {
+      const bucket = state.messagesBySession.get(sid);
+      if (!bucket) return {};
+      const head = bucket.messages[0];
+      if (head?.role !== 'ai' || head.status !== 'disconnected') return {};
+      const next = new Map(state.messagesBySession);
+      next.set(sid, {
+        ...bucket,
+        messages: [
+          { ...head, status: 'reconnecting' },
+          ...bucket.messages.slice(1),
+        ],
+      });
+      return { messagesBySession: next };
+    });
+    try {
+      const branch = await get()._resumeBranchDecide(sid, 'enter');
+      await get()._completeReconnecting(sid, branch);
+    } catch (e) {
+      console.warn(
+        '[chatStore] _retryReconnect: decide failed → disconnected',
+        e,
+      );
+      get()._markDisconnected(sid);
+    }
+  },
+
+  _startReconnecting: (sid) => {
+    // Step 9 · bucket[0] streaming AI 残留槽切 reconnecting。
+    // 仅在 backgroundClose 后留下的 streaming AI 槽上生效；
+    // bucket 空 / head 非 streaming AI → 静默 no-op（保护语义）。
+    set((state) => {
+      const bucket = state.messagesBySession.get(sid);
+      if (!bucket) return {};
+      const head = bucket.messages[0];
+      if (head?.role !== 'ai' || head.status !== 'streaming') return {};
+      const next = new Map(state.messagesBySession);
+      next.set(sid, {
+        ...bucket,
+        messages: [
+          { ...head, status: 'reconnecting' },
+          ...bucket.messages.slice(1),
+        ],
+        // inProgress 保持 true（仍在「与服务端对齐」中），streamPhase 切 idle（不展示 thinking/delta 占位文案）
+        streamPhase: 'idle',
+      });
+      return { messagesBySession: next };
+    });
+  },
+
+  _markDisconnected: (sid) => {
+    // Step 9 · reconnecting → disconnected。
+    // 视觉切「与服务器断开连接 + 重新连接 chip」；inProgress 仍 true（仍未明确终态）。
+    set((state) => {
+      const bucket = state.messagesBySession.get(sid);
+      if (!bucket) return {};
+      const head = bucket.messages[0];
+      if (head?.role !== 'ai' || head.status !== 'reconnecting') return {};
+      const next = new Map(state.messagesBySession);
+      next.set(sid, {
+        ...bucket,
+        messages: [
+          { ...head, status: 'disconnected' },
+          ...bucket.messages.slice(1),
+        ],
+      });
+      return { messagesBySession: next };
+    });
+  },
+
+  _completeReconnecting: async (sid, branch) => {
+    // Step 9 · 决策器返回后按分支收口。
+    switch (branch.type) {
+      case 'OK2': {
+        // 删头部 reconnecting 槽，loadMessages 拉权威态覆盖。
+        set((state) => {
+          const bucket = state.messagesBySession.get(sid);
+          if (!bucket) return {};
+          const head = bucket.messages[0];
+          if (head?.role !== 'ai' || head.status !== 'reconnecting') return {};
+          const next = new Map(state.messagesBySession);
+          next.set(sid, {
+            ...bucket,
+            messages: bucket.messages.slice(1),
+          });
+          return { messagesBySession: next };
+        });
+        try {
+          await get().loadMessages(sid);
+        } catch (e) {
+          console.warn(
+            '[chatStore] _completeReconnecting OK2 loadMessages failed',
+            e,
+          );
+        }
+        break;
+      }
+      case 'Waiting': {
+        // _startResumePolling 内 reconnecting 复用分支命中（改动 2.3）：
+        // 切 streaming + 启 setInterval 每 2s 决策。
+        get()._startResumePolling(sid, 'enter');
+        break;
+      }
+      case 'A4Late': {
+        // reconnecting → failed（A4 失败态 + 重新生成 chip）。
+        // bucket[1] 是真 human + serverId 通常已有（session_meta 在 backgroundClose 前到达）→ chip 可见。
+        set((state) => {
+          const bucket = state.messagesBySession.get(sid);
+          if (!bucket) return {};
+          const head = bucket.messages[0];
+          if (head?.role !== 'ai' || head.status !== 'reconnecting') return {};
+          const next = new Map(state.messagesBySession);
+          next.set(sid, {
+            ...bucket,
+            messages: [
+              { ...head, status: 'failed' },
+              ...bucket.messages.slice(1),
+            ],
+            inProgress: false,
+            streamPhase: 'idle',
+          });
+          return { messagesBySession: next };
+        });
+        break;
+      }
+      case 'Active': {
+        // 极小概率 race（decide 期间用户在另一处启动了新 stream）。
+        // 删 reconnecting 槽让 active 流接管，bucket 不再保留过时占位。
+        set((state) => {
+          const bucket = state.messagesBySession.get(sid);
+          if (!bucket) return {};
+          const head = bucket.messages[0];
+          if (head?.role !== 'ai' || head.status !== 'reconnecting') return {};
+          const next = new Map(state.messagesBySession);
+          next.set(sid, {
+            ...bucket,
+            messages: bucket.messages.slice(1),
+          });
+          return { messagesBySession: next };
+        });
+        break;
+      }
+    }
   },
 
   _appendFlushedDelta: (storeKey, aiId, chunk) => {
