@@ -441,33 +441,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       return {};
     });
 
-    // thinking 阶段 stop 后重发：仅清头部 ai stopped 占位槽（content 空，无 aid 入库）。
-    // 旧 human 已入 PG（session_meta 已达），前端不动 — 由后端在收到新 user msg 时按
-    // Decision Matrix 处理（discard 与否后端决定），下次 loadMessages 自动同步权威态。
-    // Gate aiHead.content.length === 0：防御性，避免清掉 stopped 但有 partial 内容的边缘场景。
-    set((prev) => {
-      const bucket = prev.messagesBySession.get(initialKey);
-      if (!bucket || bucket.messages.length < 1) return {};
-      const aiHead = bucket.messages[0];
-      if (
-        aiHead?.role === 'ai' &&
-        aiHead?.status === 'stopped' &&
-        aiHead.content.length === 0
-      ) {
-        const nextMessages = new Map(prev.messagesBySession);
-        nextMessages.set(initialKey, {
-          ...bucket,
-          messages: bucket.messages.slice(1),
-        });
-        console.log(
-          '[chatStore] sendMessage: cleared stopped 占位槽 before retry',
-          { storeKey: initialKey },
-        );
-        return { messagesBySession: nextMessages };
-      }
-      return {};
-    });
-
     const now = new Date().toISOString();
     const tempUserId = genTempId('human');
     const tempAiId = genTempId('ai');
