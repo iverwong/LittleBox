@@ -159,6 +159,27 @@ export type ChatStore = {
     meta?: ChatStreamCloseMeta,
   ) => void;
   /**
+   * Step 8 · Resume 三分支决策器（共用入口）。
+   * resumeOnEnter / resumeOnTimeout 共用本逻辑；调用方按返回的 ResumeBranch 分发动作。
+   */
+  _resumeBranchDecide: (
+    sid: SessionId,
+    ctx: 'enter' | 'timeout',
+  ) => Promise<ResumeBranch>;
+  /**
+   * Step 8 · Waiting 后台 polling 启停。
+   * _startResumePolling 内 fabricate / 复用一条 streaming ai 槽 + setInterval 每 2s 决策；
+   * 终态（OK2 / A4Late / Active / 超限）由 tick callback 调 _stopResumePolling 收口。
+   */
+  _startResumePolling: (sid: SessionId, ctx: 'enter' | 'timeout') => number;
+  _stopResumePolling: (sid: SessionId) => void;
+  /**
+   * Step 8 · A4Late fabricate failed ai placeholder。
+   * enter 路径：unshift fab_ai_ failed 槽到 bucket.messages[0]（用户能看到 A4 失败卡 + 重新生成 chip）
+   * timeout 路径：no-op（_cleanupStream firstFrameTimeout 已把真 ai placeholder 切 failed）
+   */
+  _fabricateA4LateSlot: (sid: SessionId, ctx: 'enter' | 'timeout') => void;
+  /**
    * Step 4b · 组件级 50ms flush tick 回写 store.content 的内部 action。
    * 调用方：useStreamBuffer hook 的 onFlush 回调。
    */
@@ -204,6 +225,26 @@ export function setOnChatErrorHandler(
 
 // sid=null 路径的临时桶 key；session_meta 到来时必 migrate 到真实 sid
 export const PENDING_SESSION_KEY: SessionId = '__pending__';
+
+/**
+ * Step 8 · Resume Waiting 后台 polling handle 注册表。
+ * key=sid，value={ handle }。tick callback 在 await 前后两次比对 map.get(sid)?.handle === handle 防 race。
+ */
+const resumePollHandles = new Map<
+  SessionId,
+  { handle: ReturnType<typeof setInterval> }
+>();
+
+/** Step 8 · Waiting polling 上限：100 次 × 2s = 200s，超限切 A4Late。 */
+const RESUME_POLL_MAX = 100;
+const RESUME_POLL_INTERVAL_MS = 2000;
+
+/** Step 8 · fabricate id 前缀；loadMessages 据此 preserve 头部 fabricated 槽不被服务端 items 覆盖。 */
+const FAB_ID_PREFIX = 'fab_ai_';
+
+function genFabricateId(): MessageId {
+  return `${FAB_ID_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
 
 function genTempId(prefix: 'human' | 'ai'): MessageId {
   return `temp_${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -296,14 +337,26 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const data = result.data;
 
     set((state) => {
+      // Step 8 · preserve 头部 fabricated（fab_ai_*）槽：mount/timeout 路径上 §3.10 useEffect
+      // 与 resumeOnEnter/Timeout 并发跑 loadMessages 时，A4Late fabricate 先 prepend 到 [0]，
+      // 后到的 loadMessages 默认覆盖整个 messages → fab_ 槽丢失。保留头部 fab_ 槽以维持视觉。
+      // streamPhase 同样 preserve：polling 期间 _startResumePolling 已切 'feeling'，
+      // 不应被 loadMessages 清回 'idle'。
+      const prev = state.messagesBySession.get(sid);
+      const headFab = prev?.messages[0]?.id.startsWith(FAB_ID_PREFIX)
+        ? prev.messages[0]
+        : null;
+      const serverMessages = data.items.map((item) =>
+        mapApiMessageToStore(item, sid),
+      );
       const nextMessages = new Map(state.messagesBySession);
       nextMessages.set(sid, {
-        messages: data.items.map((item) => mapApiMessageToStore(item, sid)),
+        messages: headFab ? [headFab, ...serverMessages] : serverMessages,
         hasMore: data.next_cursor != null,
         cursor: data.next_cursor,
         lastFetchedAt: Date.now(),
         inProgress: data.in_progress,
-        streamPhase: 'idle',
+        streamPhase: prev?.streamPhase ?? 'idle',
       });
       return { messagesBySession: nextMessages };
     });
@@ -369,12 +422,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const bucket = prev.messagesBySession.get(initialKey);
       if (!bucket || bucket.messages.length < 2) return {};
       const aiHead = bucket.messages[0];
-      const humanHead = bucket.messages[1];
       if (
-        aiHead?.role === 'ai' &&
-        aiHead?.status === 'failed' &&
-        humanHead?.role === 'human' &&
-        !humanHead?.serverId
+        aiHead.role === 'ai' &&
+        (aiHead.status === 'failed' || aiHead.status === 'stopped') &&
+        aiHead.content.length === 0
       ) {
         const nextMessages = new Map(prev.messagesBySession);
         nextMessages.set(initialKey, {
@@ -383,6 +434,33 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         });
         console.log(
           '[chatStore] sendMessage: cleared 1 未达后端 失败对 before retry',
+          { storeKey: initialKey },
+        );
+        return { messagesBySession: nextMessages };
+      }
+      return {};
+    });
+
+    // thinking 阶段 stop 后重发：仅清头部 ai stopped 占位槽（content 空，无 aid 入库）。
+    // 旧 human 已入 PG（session_meta 已达），前端不动 — 由后端在收到新 user msg 时按
+    // Decision Matrix 处理（discard 与否后端决定），下次 loadMessages 自动同步权威态。
+    // Gate aiHead.content.length === 0：防御性，避免清掉 stopped 但有 partial 内容的边缘场景。
+    set((prev) => {
+      const bucket = prev.messagesBySession.get(initialKey);
+      if (!bucket || bucket.messages.length < 1) return {};
+      const aiHead = bucket.messages[0];
+      if (
+        aiHead?.role === 'ai' &&
+        aiHead?.status === 'stopped' &&
+        aiHead.content.length === 0
+      ) {
+        const nextMessages = new Map(prev.messagesBySession);
+        nextMessages.set(initialKey, {
+          ...bucket,
+          messages: bucket.messages.slice(1),
+        });
+        console.log(
+          '[chatStore] sendMessage: cleared stopped 占位槽 before retry',
           { storeKey: initialKey },
         );
         return { messagesBySession: nextMessages };
@@ -522,9 +600,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
     const failedAi = bucket.messages[0];
     const orphanHuman = bucket.messages[1];
+    // status 二分允许 'failed' | 'stopped'：
+    // - failed：A4 失败态 chip（原路径）
+    // - stopped：thinking 阶段被 stop / abort 兜底无内容（chip 语义 = 重发）
+    // 二者点 chip 后行为完全相同：复用 orphan human 走后端 Row 6 重跑 prompt。
     if (
       failedAi.role !== 'ai' ||
-      failedAi.status !== 'failed' ||
+      (failedAi.status !== 'failed' && failedAi.status !== 'stopped') ||
       orphanHuman.role !== 'human' ||
       !orphanHuman.serverId
     ) {
@@ -602,17 +684,309 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       return { activeStreams: next };
     });
   },
-  resumeOnEnter: (sid) => {
-    void sid;
-    return notImplemented('resumeOnEnter');
+  resumeOnEnter: async (sid) => {
+    // mount 路径决策器入口。
+    // OK2 由 §3.10 useEffect 兜底装 bucket（不在此处调 loadMessages 避免双拉）；
+    // Waiting → _startResumePolling 启 polling + fabricate streaming；
+    // A4Late → _fabricateA4LateSlot unshift failed 槽（用户能点重新生成 chip）。
+    const branch = await get()._resumeBranchDecide(sid, 'enter');
+    if (branch.type === 'Waiting') {
+      const handle = get()._startResumePolling(sid, 'enter');
+      return { type: 'Waiting', pollHandle: handle };
+    }
+    if (branch.type === 'A4Late') {
+      get()._fabricateA4LateSlot(sid, 'enter');
+    }
+    return branch;
   },
-  resumeOnTimeout: (sid) => {
-    void sid;
-    return notImplemented('resumeOnTimeout');
+  resumeOnTimeout: async (sid) => {
+    // firstFrameTimeout 自纠错路径。_cleanupStream 已切 ai placeholder 'failed' + 写 pendingPrefill；
+    // 决策器若纠为 OK2 → 拉权威态覆盖失败槽；
+    // 若纠为 Waiting → _startResumePolling 内复用 bucket[0] 的 failed ai 改回 streaming + 清 pendingPrefill；
+    // 若仍 A4Late → no-op（_cleanupStream 已成型 A4，timeout 路径 _fabricateA4LateSlot 内部短路）。
+    const branch = await get()._resumeBranchDecide(sid, 'timeout');
+    if (branch.type === 'Waiting') {
+      const handle = get()._startResumePolling(sid, 'timeout');
+      return { type: 'Waiting', pollHandle: handle };
+    }
+    if (branch.type === 'OK2') {
+      try {
+        await get().loadMessages(sid);
+      } catch (e) {
+        console.warn('[chatStore] resumeOnTimeout OK2 loadMessages failed', e);
+      }
+    }
+    return branch;
   },
   deleteSession: (sid) => {
     void sid;
     return notImplemented('deleteSession');
+  },
+
+  _resumeBranchDecide: async (sid, ctx) => {
+    // Step 8 · Resume 三分支决策器。决策顺序：
+    // 1. 已有 active stream → Active（防御并发，让现有流接管）
+    // 2. PENDING_SESSION_KEY → A4Late（无 sid 无法查后端；enter 路径 console.warn）
+    // 3. GET messages 失败 → throw ApiError（上游 useChatErrorHandler 兜底）
+    // 4. in_progress=true → Waiting（Redis lock 仍存在，后端真在跑）
+    // 5. items 空 + idle → OK2（空 session）
+    // 6. items[0].role='ai'（newest first）→ OK2（上一轮已 commit）
+    // 7. items[0].role='human' → A4Late（孤儿 human，上次跑挂了）
+    if (get().activeStreams.has(sid)) {
+      return { type: 'Active' };
+    }
+    if (sid === PENDING_SESSION_KEY) {
+      if (ctx === 'enter') {
+        console.warn(
+          '[chatStore] _resumeBranchDecide: PENDING key on enter path (unexpected)',
+        );
+      }
+      return { type: 'A4Late' };
+    }
+
+    const result = await getMessages(sid, { limit: 1 });
+    if (!result.ok) {
+      throw new ApiError(result.status, result.body);
+    }
+    const { items, in_progress } = result.data;
+
+    if (in_progress) {
+      return { type: 'Waiting', pollHandle: -1 };
+    }
+    if (items.length === 0) {
+      return { type: 'OK2' };
+    }
+    if (items[0].role === 'ai') {
+      return { type: 'OK2' };
+    }
+    return { type: 'A4Late' };
+  },
+
+  _fabricateA4LateSlot: (sid, ctx) => {
+    // timeout 路径：no-op —— _cleanupStream firstFrameTimeout 已把 sendMessage 的真 ai placeholder 切 failed。
+    if (ctx === 'timeout') return;
+
+    set((state) => {
+      const bucket = state.messagesBySession.get(sid) ?? emptyBucket();
+      const head = bucket.messages[0];
+      // 幂等：bucket[0] 已是 fab_ failed 槽 → 不重复 prepend
+      if (head?.id.startsWith(FAB_ID_PREFIX) && head.status === 'failed') {
+        return {};
+      }
+      const fabSlot: Message = {
+        id: genFabricateId(),
+        sid,
+        role: 'ai',
+        content: '',
+        status: 'failed',
+        createdAt: new Date().toISOString(),
+      };
+      const next = new Map(state.messagesBySession);
+      next.set(sid, {
+        ...bucket,
+        messages: [fabSlot, ...bucket.messages],
+        inProgress: false,
+        streamPhase: 'idle',
+      });
+      return { messagesBySession: next };
+    });
+  },
+
+  _startResumePolling: (sid, ctx) => {
+    // 防重入：同 sid 已有 polling → clear 旧的
+    const existing = resumePollHandles.get(sid);
+    if (existing) {
+      clearInterval(existing.handle);
+      resumePollHandles.delete(sid);
+    }
+
+    // 视觉占位：bucket[0] 二分判定
+    // - timeout 路径 + bucket[0] = 真 ai failed（非 fab_ 前缀）→ 复用：切回 streaming + 清 content/stoppedTag
+    // - bucket[0] 已是 fab_ 前缀 → 改 status 'streaming' + 清 content（幂等覆盖）
+    // - 其他（enter 路径或空 bucket）→ unshift 新 fab_ streaming 槽
+    // 同时切 inProgress=true + streamPhase='feeling'；timeout 路径清 pendingPrefill（ai 重跑，prefill 不再需要）
+    set((state) => {
+      const bucket = state.messagesBySession.get(sid) ?? emptyBucket();
+      const head = bucket.messages[0];
+      let nextMessages: Message[];
+      if (
+        head?.role === 'ai' &&
+        head.status === 'failed' &&
+        !head.id.startsWith(FAB_ID_PREFIX)
+      ) {
+        nextMessages = [
+          {
+            ...head,
+            status: 'streaming',
+            content: '',
+            stoppedTag: undefined,
+            finishReason: undefined,
+          },
+          ...bucket.messages.slice(1),
+        ];
+      } else if (head?.id.startsWith(FAB_ID_PREFIX)) {
+        nextMessages = [
+          { ...head, status: 'streaming', content: '' },
+          ...bucket.messages.slice(1),
+        ];
+      } else {
+        const fabSlot: Message = {
+          id: genFabricateId(),
+          sid,
+          role: 'ai',
+          content: '',
+          status: 'streaming',
+          createdAt: new Date().toISOString(),
+        };
+        nextMessages = [fabSlot, ...bucket.messages];
+      }
+      const next = new Map(state.messagesBySession);
+      next.set(sid, {
+        ...bucket,
+        messages: nextMessages,
+        inProgress: true,
+        streamPhase: 'feeling',
+      });
+      return {
+        messagesBySession: next,
+        ...(ctx === 'timeout' ? { pendingPrefill: null } : {}),
+      };
+    });
+
+    let count = 0;
+    let handle: ReturnType<typeof setInterval>;
+
+    const tick = async () => {
+      // race guard #1: clearInterval 后 RN 仍可能调度本 tick → handle mismatch 退出
+      if (resumePollHandles.get(sid)?.handle !== handle) return;
+      count++;
+
+      try {
+        const branch = await get()._resumeBranchDecide(sid, ctx);
+        // race guard #2: await 期间被外部 _stopResumePolling → 退出
+        if (resumePollHandles.get(sid)?.handle !== handle) return;
+
+        switch (branch.type) {
+          case 'Waiting':
+            if (count >= RESUME_POLL_MAX) {
+              console.warn(
+                '[chatStore] resume polling exhausted, removing fab slot',
+                { sid, count },
+              );
+              toast.show({
+                message: '连接异常，请稍后再试',
+                variant: 'error',
+              });
+              get()._stopResumePolling(sid);
+              // 超限场景下 fab 槽无对应 orphan human → regenerate chip 链路不可用，
+              // 直接移除 fab 槽；用户通过下一次 sendMessage 自然恢复
+              set((state) => {
+                const bucket = state.messagesBySession.get(sid);
+                if (!bucket) return {};
+                const h = bucket.messages[0];
+                if (!h?.id.startsWith(FAB_ID_PREFIX)) return {};
+                const next = new Map(state.messagesBySession);
+                next.set(sid, {
+                  ...bucket,
+                  messages: bucket.messages.slice(1),
+                });
+                return { messagesBySession: next };
+              });
+            }
+            break;
+          case 'OK2':
+            console.log('[chatStore] resume polling → OK2, reloading bucket', {
+              sid,
+              count,
+            });
+            get()._stopResumePolling(sid);
+            // 先移除 fab streaming 槽（避免 loadMessages preserve 逻辑保留它与 server ai 双显示）
+            set((state) => {
+              const bucket = state.messagesBySession.get(sid);
+              if (!bucket) return {};
+              const h = bucket.messages[0];
+              if (!h?.id.startsWith(FAB_ID_PREFIX)) return {};
+              const next = new Map(state.messagesBySession);
+              next.set(sid, { ...bucket, messages: bucket.messages.slice(1) });
+              return { messagesBySession: next };
+            });
+            try {
+              await get().loadMessages(sid);
+            } catch (e) {
+              console.warn(
+                '[chatStore] resume polling OK2 loadMessages failed',
+                e,
+              );
+            }
+            break;
+          case 'A4Late':
+            console.warn(
+              '[chatStore] resume polling → A4Late mid-flight, slot → failed',
+              { sid },
+            );
+            get()._stopResumePolling(sid);
+            // 中途切 A4Late：把 streaming 槽切 failed（A4 失败态 + chip）
+            set((state) => {
+              const bucket = state.messagesBySession.get(sid);
+              if (!bucket) return {};
+              const h = bucket.messages[0];
+              if (h?.role !== 'ai' || h.status !== 'streaming') return {};
+              const next = new Map(state.messagesBySession);
+              next.set(sid, {
+                ...bucket,
+                messages: [
+                  { ...h, status: 'failed' },
+                  ...bucket.messages.slice(1),
+                ],
+              });
+              return { messagesBySession: next };
+            });
+            break;
+          case 'Active':
+            console.warn(
+              '[chatStore] resume polling → Active mid-flight, yielding',
+              { sid },
+            );
+            get()._stopResumePolling(sid);
+            // active stream 接管；移除 fab 槽避免与 sendMessage 的 ai placeholder 冲突
+            set((state) => {
+              const bucket = state.messagesBySession.get(sid);
+              if (!bucket) return {};
+              const h = bucket.messages[0];
+              if (!h?.id.startsWith(FAB_ID_PREFIX)) return {};
+              const next = new Map(state.messagesBySession);
+              next.set(sid, { ...bucket, messages: bucket.messages.slice(1) });
+              return { messagesBySession: next };
+            });
+            break;
+        }
+      } catch (err) {
+        // 网络抖动 / 5xx → 不停 polling，等下一 tick 重试；持续故障到 MAX 自然超限
+        console.warn(
+          '[chatStore] resume polling tick failed (will retry next tick)',
+          err,
+        );
+      }
+    };
+
+    handle = setInterval(tick, RESUME_POLL_INTERVAL_MS);
+    resumePollHandles.set(sid, { handle });
+    return handle as unknown as number;
+  },
+
+  _stopResumePolling: (sid) => {
+    const existing = resumePollHandles.get(sid);
+    if (existing) {
+      clearInterval(existing.handle);
+      resumePollHandles.delete(sid);
+    }
+    set((state) => {
+      const bucket = state.messagesBySession.get(sid);
+      if (!bucket) return {};
+      const next = new Map(state.messagesBySession);
+      next.set(sid, { ...bucket, inProgress: false, streamPhase: 'idle' });
+      return { messagesBySession: next };
+    });
   },
 
   _onSseEvent: (storeKey, event) => {
@@ -891,20 +1265,29 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               // 此处按 m.stoppedTag 二分判定 status —— buffer 已在本函数顶部 dispatchBufferFlushFinal 完成，
               // m.content 已反映最终全部内容（含 stopped 帧到达前未 flush 的残余 chars）。
               // - stoppedTag=true（StopWithAi，aid 存在）→ committed
-              // - stoppedTag=undefined/false（StopNoAi，aid 缺失）/ race 兜底（stopped 事件丢失）→ failed
+              // - stoppedTag=undefined/false（StopNoAi，aid 缺失）→ 'stopped'（用户语义级中断，非系统失败）
+              // - race 兜底（stopped 事件丢失）：保守切 'stopped'，避免被误判为系统失败
               if (m.stoppedTag) {
                 nextStatus = 'committed';
               } else {
-                nextStatus = 'failed';
+                nextStatus = 'stopped';
               }
               break;
             case 'error':
+              // 后端通过 SSE error 帧通知（CompressionError | InternalError）。
+              // 后端错误路径不写 ai 行 → human 仍是孤儿，等下轮新消息走 Row 5 discarded。
+              // 前端同步对齐：清空 partial content，让 gate `(failed||stopped) && content=0`
+              // 在下次 sendMessage / regenerate 时命中，顶替孤儿 ai 头槽 → 与后端最终态一致。
+              m.content = '';
+              nextStatus = 'failed';
+              break;
             case 'firstFrameTimeout':
+              // first frame 之前 content 必然 = 0，无需清。
               nextStatus = 'failed';
               break;
             case 'abort':
-              // 用户语义级中断：内容保留固化，无 stoppedTag
-              nextStatus = m.content.length > 0 ? 'committed' : 'failed';
+              // 用户语义级中断：content>0 保留固化（已实际产出）；content=0 切 'stopped'（语义级中断，非系统失败）
+              nextStatus = m.content.length > 0 ? 'committed' : 'stopped';
               break;
           }
           return { ...m, status: nextStatus, stoppedTag };
@@ -951,6 +1334,27 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         .catch((e) => {
           console.warn(
             '[chatStore] regenerate failure: loadMessages fallback failed',
+            e,
+          );
+        });
+    }
+
+    // Step 8 · firstFrameTimeout 自纠错：触发 resumeOnTimeout 决策器异步纠正
+    //（5s 内首帧未到，但后端可能在 5-200s 区间内真返回）。
+    // Gate：
+    // - reason === 'firstFrameTimeout'：仅首帧超时；transport error / business error / end / stopped / abort 不触发
+    // - storeKey !== PENDING_SESSION_KEY：PENDING 无真 sid 可查，pendingPrefill 链路已接管
+    // - !streamSnapshot?.isRegenerate：regenerate 失败上方已有 loadMessages 兜底，叠加决策无意义
+    if (
+      reason === 'firstFrameTimeout' &&
+      storeKey !== PENDING_SESSION_KEY &&
+      !streamSnapshot?.isRegenerate
+    ) {
+      void get()
+        .resumeOnTimeout(storeKey)
+        .catch((e) => {
+          console.warn(
+            '[chatStore] firstFrameTimeout: resumeOnTimeout failed',
             e,
           );
         });

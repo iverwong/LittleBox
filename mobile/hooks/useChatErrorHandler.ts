@@ -73,8 +73,17 @@ function dispatchByStatus(status: number, ctx: DispatchContext): void {
       message: '会话正在响应中，正在重新连接…',
       variant: 'info',
     });
-    // Step 8 · resumeOnEnter(sid) 接管；本 Step 占位 log
-    console.log('[useChatErrorHandler] 409 → resumeOnEnter stub (Step 8)', ctx);
+    // Step 8 · 409 触发 resumeOnEnter
+    // Gate source==='api'：sendMessage POST /me/chat/stream 收到 409 才走这里；
+    // SSE transport 不会出 409（SSE 已建连），stop 失败已由 stopStream 自己 abort 兜底
+    if (ctx.source === 'api' && ctx.sid) {
+      void useChatStore
+        .getState()
+        .resumeOnEnter(ctx.sid)
+        .catch((e) => {
+          console.warn('[useChatErrorHandler] 409 → resumeOnEnter failed', e);
+        });
+    }
     return;
   }
 

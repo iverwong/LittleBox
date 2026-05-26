@@ -36,6 +36,7 @@ export default function ChatIndex() {
     const stopStream = useChatStore((s) => s.stopStream)
     const pendingPrefill = useChatStore((s) => s.pendingPrefill)
     const setPendingPrefill = useChatStore((s) => s.setPendingPrefill)
+    const resumeOnEnter = useChatStore((s) => s.resumeOnEnter)
 
     // Step 7 · 错误反馈映射 hook
     // - mount 时 setOnChatErrorHandler 注册（接管 store transport error / stopStream 失败回调）
@@ -50,8 +51,24 @@ export default function ChatIndex() {
                 await loadSessions({ reset: true })
                 if (cancelled) return
                 const today = useChatStore.getState().todaySessionId
-                if (today != null) {
-                    setActiveSession(today)
+                if (today == null) return
+                setActiveSession(today)
+
+                // Step 8 · 接通 resumeOnEnter
+                // setActiveSession(today) 触发 §3.10 useEffect → loadMessages（limit:50）；
+                // 同时 resumeOnEnter 并发 GET messages（limit:1）做决策，分支侧效在 store 内：
+                // - OK2 / Active：不做事，bucket 由 §3.10 兜底
+                // - Waiting：_startResumePolling 接管（每 2s 决策 + fabricate streaming 槽）
+                // - A4Late：_fabricateA4LateSlot unshift failed 槽（A4 失败卡 + 重新生成 chip）
+                try {
+                    const branch = await resumeOnEnter(today)
+                    if (cancelled) return
+                    if (branch.type === 'Active') {
+                        console.warn('[ChatIndex] resumeOnEnter returned Active on mount (unexpected)')
+                    }
+                } catch (err) {
+                    console.error('[ChatIndex] resumeOnEnter failed', err)
+                    handleApiError(err, { kind: 'loadMessages', sid: today })
                 }
             } catch (err) {
                 console.error('[ChatIndex] loadSessions failed', err)
@@ -62,7 +79,7 @@ export default function ChatIndex() {
         return () => {
             cancelled = true
         }
-    }, [loadSessions, setActiveSession, handleApiError])
+    }, [loadSessions, setActiveSession, resumeOnEnter, handleApiError])
 
     const [isLoadingMessages, setIsLoadingMessages] = useState(false)
     const loadMessages = useChatStore((s) => s.loadMessages)

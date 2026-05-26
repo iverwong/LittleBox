@@ -123,6 +123,32 @@ function AIMessageImpl({ message }: Props) {
         return <StreamingPlaceholder sid={message.sid} />
     }
 
+    if (message.status === 'stopped') {
+        // 用户主动 stop 且后端无 aid（thinking 阶段被打断 / abort 兜底且 content 空）。
+        // 独立「已停止」气泡（非默认分支末位 stoppedTag 角标），末位时挂同款 chip：
+        // 行为 = failed 路径完全一致（regenerate(sid) → Row 6 复用孤儿 human）。
+        return (
+            <View style={styles.row}>
+                <View style={styles.bubble}>
+                    <View style={styles.stoppedStandalone}>
+                        <Ionicons name="stop-circle-outline" size={14} color="#998260" />
+                        <Text style={styles.stoppedText}>已停止</Text>
+                    </View>
+                </View>
+                {isLastAi && (
+                    <TouchableOpacity
+                        style={styles.regenerateChip}
+                        onPress={handleRegenerate}
+                        activeOpacity={0.7}
+                    >
+                        <Ionicons name="refresh" size={14} color="#7A6A4F" />
+                        <Text style={styles.regenerateText}>重新生成</Text>
+                    </TouchableOpacity>
+                )}
+            </View>
+        )
+    }
+
     if (message.status === 'failed') {
         // Step 6 · A4 失败态：bubble 内显示「⚠ 回复失败」（保留 partial content 如有），
         // bubble 右侧外挂「重新生成」chip 按钮（同一行）。
@@ -206,6 +232,12 @@ const styles = StyleSheet.create({
         paddingTop: 6,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: '#E5DBC9',
+        gap: 4,
+        alignSelf: 'flex-start',
+    },
+    stoppedStandalone: {
+        flexDirection: 'row',
+        alignItems: 'center',
         gap: 4,
         alignSelf: 'flex-start',
     },
