@@ -131,6 +131,15 @@ export default function ChatIndex() {
         activeSessionId != null && s.activeStreams.has(activeSessionId)
     )
 
+    // Step 9 · 当前活跃 session 是否离线态(reconnecting / disconnected)。
+    // 判定 bucket[0].status 是否落在二态中。与 isStreaming 互斥。
+    const isOffline = useChatStore((s) => {
+        if (activeSessionId == null) return false
+        const head = s.messagesBySession.get(activeSessionId)?.messages[0]
+        if (!head || head.role !== 'ai') return false
+        return head.status === 'reconnecting' || head.status === 'disconnected'
+    })
+
     return (
         <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
             <View style={styles.history}>
@@ -163,6 +172,7 @@ export default function ChatIndex() {
                     }}
                     prefill={pendingPrefill}
                     onPrefillConsumed={() => setPendingPrefill(null)}
+                    isOffline={isOffline}
                 />
             )}
             {isHistoryActive && (

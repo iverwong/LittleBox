@@ -40,6 +40,12 @@ type ChatInputProps = {
      * 父组件通常传 `() => chatStore.setPendingPrefill(null)`。
      */
     onPrefillConsumed?: () => void
+    /**
+     * Step 9 · 当前活跃 session 是否处于离线态(reconnecting / disconnected)。
+     * - true:发送按钮图标切 cloud-offline-outline + 置灰 + 点击 no-op;输入框仍可输入
+     * - 与 isStreaming 互斥(reconnecting/disconnected 期间 activeStreams 已删 → isStreaming=false)
+     */
+    isOffline?: boolean
 }
 
 export function ChatInput({
@@ -48,6 +54,7 @@ export function ChatInput({
     onStop,
     prefill,
     onPrefillConsumed,
+    isOffline = false,
 }: ChatInputProps) {
     const [value, setValue] = useState('')
 
@@ -63,11 +70,13 @@ export function ChatInput({
     }, [prefill])
 
     const trimmed = value.trim()
-    const canSend = !isStreaming && trimmed.length > 0
-    // streaming 态下 stop 按钮始终可点；非 streaming 态按 canSend 决定
-    const canPress = isStreaming || canSend
+    const canSend = !isStreaming && !isOffline && trimmed.length > 0
+    // streaming 态下 stop 按钮始终可点;离线态按钮置灰 no-op(等用户在 AI 气泡上点「重新连接」chip);
+    // 其他按 canSend 决定。
+    const canPress = !isOffline && (isStreaming || canSend)
 
     const handlePress = () => {
+        if (isOffline) return // Step 9 · 离线态点击 no-op
         if (isStreaming) {
             onStop?.()
             return
@@ -91,7 +100,7 @@ export function ChatInput({
             />
             <Pressable
                 onPress={handlePress}
-                accessibilityLabel={isStreaming ? '停止' : '发送'}
+                accessibilityLabel={isOffline ? '离线' : isStreaming ? '停止' : '发送'}
                 disabled={!canPress}
                 style={({ pressed }) => [
                     styles.sendBtn,
@@ -100,7 +109,13 @@ export function ChatInput({
                 ]}
             >
                 <Ionicons
-                    name={isStreaming ? 'stop' : 'arrow-up'}
+                    name={
+                        isOffline
+                            ? 'cloud-offline-outline'
+                            : isStreaming
+                                ? 'stop'
+                                : 'arrow-up'
+                    }
                     size={20}
                     color={canPress ? '#FFFFFF' : '#998260'}
                 />

@@ -1524,11 +1524,20 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       case 'A4Late': {
         // reconnecting → failed（A4 失败态 + 重新生成 chip）。
         // bucket[1] 是真 human + serverId 通常已有（session_meta 在 backgroundClose 前到达）→ chip 可见。
+        // Step 9 方案 A · corner case 兜底：极快切后台（session_meta 未达就 backgroundClose）→
+        // bucket[1].serverId 缺失,regenerate 会 invariant violated → 引导用户「直接重发」时
+        // ChatInput 应有内容回灌。此时把 bucket[1].content 写到 pendingPrefill,
+        // 与 _cleanupStream 内 firstFrameTimeout / error gap 修复对齐。
         set((state) => {
           const bucket = state.messagesBySession.get(sid);
           if (!bucket) return {};
           const head = bucket.messages[0];
           if (head?.role !== 'ai' || head.status !== 'reconnecting') return {};
+          const humanRow = bucket.messages[1];
+          const prefillCandidate =
+            humanRow?.role === 'human' && !humanRow.serverId
+              ? humanRow.content
+              : undefined;
           const next = new Map(state.messagesBySession);
           next.set(sid, {
             ...bucket,
@@ -1539,7 +1548,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             inProgress: false,
             streamPhase: 'idle',
           });
-          return { messagesBySession: next };
+          return {
+            messagesBySession: next,
+            ...(prefillCandidate ? { pendingPrefill: prefillCandidate } : {}),
+          };
         });
         break;
       }

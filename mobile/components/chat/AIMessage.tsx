@@ -26,7 +26,7 @@
  */
 import { Ionicons } from '@expo/vector-icons'
 import { memo, useCallback, useEffect, useState } from 'react'
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native'
+import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 
 import { useStreamBuffer } from '@/hooks/useStreamBuffer'
 import type { Message, StreamPhase } from '@/stores/chat'
@@ -90,6 +90,7 @@ function StreamingPlaceholder({ sid }: { sid: string }) {
 function AIMessageImpl({ message }: Props) {
     const appendFlushedDelta = useChatStore((s) => s._appendFlushedDelta)
     const regenerate = useChatStore((s) => s.regenerate)
+    const retryReconnect = useChatStore((s) => s._retryReconnect)
     const isLastAi = useChatStore((s) => {
         const bucket = s.messagesBySession.get(message.sid)
         if (!bucket) return false
@@ -104,6 +105,10 @@ function AIMessageImpl({ message }: Props) {
     const handleRegenerate = useCallback(() => {
         void regenerate(message.sid)
     }, [regenerate, message.sid])
+
+    const handleRetryReconnect = useCallback(() => {
+        void retryReconnect(message.sid)
+    }, [retryReconnect, message.sid])
 
     const onFlush = useCallback(
         (chunk: string) => {
@@ -121,6 +126,42 @@ function AIMessageImpl({ message }: Props) {
 
     if (isStreaming && message.content.length === 0) {
         return <StreamingPlaceholder sid={message.sid} />
+    }
+
+    // Step 9 · AppState background→active 恢复中。
+    // 不显示 streamPhase 文案,不显示 partial content(若有),由 spinner + 文案占满气泡。
+    if (message.status === 'reconnecting') {
+        return (
+            <View style={styles.row}>
+                <View style={styles.bubble}>
+                    <View style={styles.reconnectingRow}>
+                        <ActivityIndicator size="small" color="#998260" />
+                        <Text style={[styles.text, styles.placeholder]}>
+                            正在恢复对话…
+                        </Text>
+                    </View>
+                </View>
+            </View>
+        )
+    }
+
+    // Step 9 · 底层 fetch 超时 / 网络层失败 → disconnected,等用户主动点 chip 重连。
+    // chip 行为:调 _retryReconnect(sid) → disconnected → reconnecting → 重跑决策器。
+    if (message.status === 'disconnected') {
+        return (
+            <View style={styles.row}>
+                <View style={styles.bubble}>
+                    <View style={styles.failedTag}>
+                        <Ionicons name="cloud-offline-outline" size={14} color="#C26B6B" />
+                        <Text style={styles.failedText}>与服务器断开连接</Text>
+                    </View>
+                </View>
+                <TouchableOpacity onPress={handleRetryReconnect} style={styles.regenerateChip}>
+                    <Ionicons name="refresh-outline" size={14} color="#7A6A4F" />
+                    <Text style={styles.regenerateText}>重新连接</Text>
+                </TouchableOpacity>
+            </View>
+        )
     }
 
     if (message.status === 'stopped') {
@@ -224,6 +265,11 @@ const styles = StyleSheet.create({
     placeholder: {
         color: '#998260',
         fontStyle: 'italic',
+    },
+    reconnectingRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
     },
     stoppedTag: {
         flexDirection: 'row',
