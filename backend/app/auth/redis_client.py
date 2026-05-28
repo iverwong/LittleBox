@@ -43,11 +43,3 @@ async def get_redis() -> Redis:
     """主业务 Redis（db=0）。"""
     assert _redis is not None, "redis pool not initialized (check lifespan)"
     return _redis
-
-
-async def get_audit_redis() -> Redis:
-    """ARQ 队列 + 审查信号管道 Redis（db=arq_redis_db，通常=1）。"""
-    assert _audit_redis is not None, (
-        "audit redis pool not initialized (check lifespan)"
-    )
-    return _audit_redis

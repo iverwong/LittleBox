@@ -42,10 +42,14 @@ markers = [
 
 [tool.ruff]
 line-length = 100
+exclude = ["alembic"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
+per-file-ignores = {"alembic/*" = ["E501", "I001"]}
 
 [tool.basedpyright]
 typeCheckingMode = "standard"
 pythonVersion = "3.14"
+include = ["app"]
+exclude = ["alembic", "tests"]

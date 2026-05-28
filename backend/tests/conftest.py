@@ -34,6 +34,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import subprocess
 from collections.abc import AsyncGenerator
@@ -75,7 +76,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.auth.redis_client import get_audit_redis, get_redis
+from app.auth.redis_client import get_redis
 from app.config import settings
 from app.db import get_db
 from app.main import create_app
@@ -281,8 +282,66 @@ async def redis_client() -> AsyncGenerator[FakeRedis, None]:
 # ---------- function scope：FastAPI ASGI client ----------
 
 
+def _inject_mock_resources(application: FastAPI, redis_client: FakeRedis) -> None:
+    """为 app 注入 mock RuntimeResources + 禁用 lifespan（避免 Redis 连接 hang）。"""
+    import app.api.me as me_mod
+
+    mock_rr = _make_mock_resources(redis_client)
+    # 使用动态代理：mock_rr.main_graph 的 astream 始终读取/写入
+    # me._main_graph（测试 patch 的目标）。即使测试 monkeypatch 替换
+    # me._main_graph 为 AsyncMock，代理仍能透传属性访问。
+    mock_rr.main_graph = _MainGraphProxy()
+    application.state.resources = mock_rr
+    application.router.lifespan_context = lambda _: contextlib.nullcontext()
+
+
+class _MainGraphProxy:
+    """动态代理 me._main_graph 的 astream 属性，使测试 patch 与生成器路径一致。"""
+
+    def _get_current(self):
+        import app.api.me as me_mod
+        return getattr(me_mod, '_main_graph', None)
+
+    def __getattr__(self, name):
+        current = self._get_current()
+        return getattr(current, name) if current else None
+
+    def __setattr__(self, name, value):
+        if name.startswith('_'):
+            object.__setattr__(self, name, value)
+        else:
+            current = self._get_current()
+            if current is not None:
+                setattr(current, name, value)
+
+
+def _make_mock_resources(redis_client: FakeRedis):
+    """创建测试用 mock RuntimeResources，避免 build_runtime 连接真实 Redis/DB。"""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.runtime import RuntimeResources
+
+    mock_rr = MagicMock(spec=RuntimeResources)
+    mock_rr.main_graph = MagicMock()
+    mock_rr.main_graph.astream = AsyncMock()
+    mock_rr.audit_graph = MagicMock()
+    mock_rr.settings = MagicMock()
+    mock_rr.settings.main_provider = "deepseek"
+    mock_rr.settings.compression_provider = "deepseek"
+    mock_rr.settings.deepseek_api_key.get_secret_value.return_value = ""
+    mock_rr.db_session_factory = MagicMock()
+    mock_rr.audit_redis = redis_client
+    mock_rr.arq_pool = AsyncMock()
+    mock_rr.arq_pool.close = AsyncMock()
+    mock_rr.db_engine = AsyncMock()
+    mock_rr.db_engine.dispose = AsyncMock()
+    return mock_rr
+
+
 @pytest_asyncio.fixture
 async def app(db_session: AsyncSession, redis_client: FakeRedis) -> AsyncGenerator[FastAPI, None]:
+    from unittest.mock import patch
+
     application = create_app()
 
     async def _get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -291,16 +350,16 @@ async def app(db_session: AsyncSession, redis_client: FakeRedis) -> AsyncGenerat
     async def _get_redis() -> FakeRedis:
         return redis_client
 
-    async def _get_audit_redis() -> FakeRedis:
-        return redis_client
-
     application.dependency_overrides[get_db] = _get_db
     application.dependency_overrides[get_redis] = _get_redis
-    application.dependency_overrides[get_audit_redis] = _get_audit_redis
-    try:
-        yield application
-    finally:
-        application.dependency_overrides.clear()
+
+    _inject_mock_resources(application, redis_client)
+
+    with patch("app.main.build_runtime"):
+        try:
+            yield application
+        finally:
+            application.dependency_overrides.clear()
 
 
 @pytest_asyncio.fixture

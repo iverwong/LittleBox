@@ -29,7 +29,7 @@ def serialize_history_to_xml(
     *,
     include_system: bool = False,
 ) -> str:
-    """将 message 序列序列化为 <history><turn idx="N" role="user|assistant|system">…</turn></history>。
+    """将 message 序列化为 <history><turn idx="N" role="user|assistant|system">…</turn></history>。
 
     轮次编号规则（按 user/assistant 配对）：
     - 遇 HumanMessage → 开启新 idx (从 1 起)，role="user"
@@ -41,14 +41,13 @@ def serialize_history_to_xml(
 
     Args:
         history: LangChain message 列表
-        include_system: 是否包含 SystemMessage。默认 False；调用方通常已将 system 拆出走独立 SystemMessage 槽。
+        include_system: 是否包含 SystemMessage。默认 False；调用方通常已将 system 拆出独立槽。
 
     Returns:
         XML 字符串（单行，无缩进；调试需要时调用方自行 prettify）
     """
     turns: list[str] = []
     current_idx = 0
-    last_role: str | None = None
 
     for msg in history:
         if isinstance(msg, SystemMessage):
@@ -59,7 +58,6 @@ def serialize_history_to_xml(
                     idx="sys", role="system", content=escape_xml_text(str(msg.content))
                 )
             )
-            last_role = "system"
             continue
 
         if isinstance(msg, HumanMessage):
@@ -71,7 +69,6 @@ def serialize_history_to_xml(
                     content=escape_xml_text(str(msg.content)),
                 )
             )
-            last_role = "user"
             continue
 
         if isinstance(msg, AIMessage):
@@ -85,7 +82,6 @@ def serialize_history_to_xml(
                     content=escape_xml_text(str(msg.content)),
                 )
             )
-            last_role = "assistant"
             continue
 
         # 未知 message 类型：跳过（调用方监控决定是否补类型分支）

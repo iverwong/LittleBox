@@ -1,4 +1,8 @@
-"""审查 LangGraph agentic loop 测试：7 路径覆盖 + D11 v3 post-processing 测试。"""
+"""审查 LangGraph agentic loop 测试：7 路径覆盖 + D11 v3 post-processing 测试。
+
+T11+T12（D-patch0-6）：build_audit_graph() 无参工厂 + Runtime[AuditContextSchema] DI。
+测试通过 _make_fake_runtime 构造 fake Runtime 注入 AuditContextSchema 模拟资源。
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -18,6 +22,9 @@ pytestmark = [
     pytest.mark.audit,
     pytest.mark.asyncio,
 ]
+
+SID = "00000000-0000-0000-0000-000000000001"
+CUID = "00000000-0000-0000-0000-000000000002"
 
 
 # ---------------------------------------------------------------------------
@@ -84,14 +91,38 @@ _TC_REPLACE_MULTI = _tc(TOOL_NAME_REPLACE, {"old_str": "a", "new_str": "b"})
 
 def _initial_state() -> AuditGraphState:
     return {
-        "sid": "session-1",
+        "sid": SID,
         "turn_number": 1,
         "child_profile": None,
         "session_notes_working": "用户今天情绪稳定。",
         "tool_iter_count": 0,
         "structured_output": None,
         "messages": [],
+        "max_iter": 5,  # D-patch0-6：路由函数妥协，由 load_context 写入
     }
+
+
+def _make_fake_runtime(max_iter: int = 5) -> object:
+    """构造最小 Runtime[AuditContextSchema] 替代（LangGraph 注入 mock）。
+
+    T11（D-patch0-6）：audit 侧 Runtime DI 测试范式，
+    对齐 tests/chat/test_load_audit_state.py::_make_fake_runtime。
+    测试中直接调节点函数 (state, runtime)，runtime 仅提供 .context 属性。
+    """
+    from types import SimpleNamespace
+
+    from app.audit.context_schema import AuditContextSchema
+    from unittest.mock import MagicMock
+
+    ctx = AuditContextSchema(
+        session_id=SID,
+        child_user_id=CUID,
+        max_iter=max_iter,
+        settings=MagicMock(),
+        db_session_factory=MagicMock(),
+        audit_redis=MagicMock(),
+    )
+    return SimpleNamespace(context=ctx)
 
 
 def _run(
@@ -100,18 +131,27 @@ def _run(
     max_iter: int = 5,
     exhausted_raises: bool = False,
 ) -> dict:
-    """构造 graph + 注入 fake LLM + 调用 ainvoke，返回终态。"""
+    """构造 graph + 注入 fake LLM + 调用 ainvoke，返回终态。
+
+    T11：build_audit_graph() 无参调用 + context= 参数传递。
+    """
     fake = FakeAuditLLM(responses, exhausted_raises=exhausted_raises)
     monkeypatch.setattr("app.audit.graph.build_audit_llm", lambda s: fake)
     # mock 数据层调用为 no-op
-    async def _mock_load(*_): return []
+    async def _mock_load(*_: Any, **__: Any) -> list:
+        return []
     monkeypatch.setattr("app.audit.graph._load_messages_from_pg", _mock_load)
-    async def _mock_write(*_, **__): pass
+    async def _mock_write(*_: Any, **__: Any) -> None:
+        pass
     monkeypatch.setattr("app.audit.graph.write_audit_results", _mock_write)
 
-    graph = build_audit_graph(max_iter=max_iter)
+    graph = build_audit_graph()
     state = _initial_state()
-    result = graph.ainvoke(state, {"configurable": {"settings": None}})
+    state["max_iter"] = max_iter
+    runtime = _make_fake_runtime(max_iter=max_iter)
+    # 注入 context 到 state，使得路由函数能读到 max_iter
+    # （路由函数不从 runtime 读，但 load_context 从 runtime.context 读）
+    result = graph.ainvoke(state, context=runtime.context)
     return result
 
 
@@ -171,9 +211,10 @@ class TestAuditGraph:
     async def test_replace_multi_then_precise(self, monkeypatch):
         """路径 ⑤：replace ≥2 命中 → LLM 用更精确 old_str 重试 → 1 命中。"""
         state: AuditGraphState = {
-            "sid": "session-1", "turn_number": 1, "child_profile": None,
+            "sid": SID, "turn_number": 1, "child_profile": None,
             "session_notes_working": "a a b",  # "a" 出现 2 次
             "tool_iter_count": 0, "structured_output": None, "messages": [],
+            "max_iter": 5,
         }
 
         fake = FakeAuditLLM([
@@ -182,13 +223,16 @@ class TestAuditGraph:
             _aim(tool_calls=[_TC_OUTPUT]),
         ])
         monkeypatch.setattr("app.audit.graph.build_audit_llm", lambda s: fake)
-        async def _mock_load(*_: Any) -> list: return []
+        async def _mock_load(*_: Any, **__: Any) -> list:
+            return []
         monkeypatch.setattr("app.audit.graph._load_messages_from_pg", _mock_load)
-        async def _mock_write(*_: Any, **__: Any) -> None: pass
+        async def _mock_write(*_: Any, **__: Any) -> None:
+            pass
         monkeypatch.setattr("app.audit.graph.write_audit_results", _mock_write)
 
         graph = build_audit_graph()
-        result = await graph.ainvoke(state, {"configurable": {"settings": None}})
+        runtime = _make_fake_runtime(max_iter=5)
+        result = await graph.ainvoke(state, context=runtime.context)
 
         assert result["session_notes_working"] == "b b b"
         assert result["tool_iter_count"] == 2

@@ -83,7 +83,7 @@ class AuditOutputSchema(BaseModel):
     guidance: str = Field(
         default="",
         max_length=300,
-        description="家长引导建议，≤300 字符；M8 期透传，M9 接 inject_guidance 节点真消费",
+        description="家长引导建议，≤300 字符；M8 期透传，M9 接入干预节点真消费",
     )
     turn_summary: str = Field(
         max_length=100,

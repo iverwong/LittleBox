@@ -33,7 +33,9 @@ from sqlalchemy import select
 
 from app.auth.redis_ops import commit_with_redis
 from app.auth.tokens import issue_token
-from app.chat.graph import main_graph
+from app.chat.graph import build_main_graph
+
+main_graph = build_main_graph()
 from app.chat.locks import running_streams
 from app.db import get_db
 from app.models.accounts import Family, FamilyMember, User
@@ -121,8 +123,11 @@ async def redis_client_with_eval(redis_client: FakeRedis) -> FakeRedis:
 @pytest.fixture
 async def app_with_eval(db_session, redis_client_with_eval):
     """App fixture with patched redis for Lua DEL simulation."""
+    from unittest.mock import patch
+
     from app.auth.redis_client import get_redis
     from app.main import create_app
+    from tests.conftest import _inject_mock_resources
 
     application = create_app()
 
@@ -134,6 +139,8 @@ async def app_with_eval(db_session, redis_client_with_eval):
 
     application.dependency_overrides[get_db] = _get_db
     application.dependency_overrides[get_redis] = _get_redis
+
+    _inject_mock_resources(application, redis_client_with_eval)
     try:
         yield application
     finally:
@@ -244,7 +251,7 @@ async def test_stop_no_ai(
     """StopNoAi: event set before graph yields content → stopped without aid, DB human only."""
     headers, child = auth_headers_child
 
-    async def fake_astream_no_content(initial_state, stream_mode="custom"):
+    async def fake_astream_no_content(initial_state, stream_mode="custom", **kwargs):
         # Generator registered its event in running_streams before calling astream;
         # look it up and set it before yielding any content-bearing payload.
         sid = initial_state["session_id"]
@@ -253,7 +260,7 @@ async def test_stop_no_ai(
             ev.set()
         yield {"finish_reason": "stop"}  # no delta → has_emitted_content stays False
 
-    with patch.object(main_graph, "astream", fake_astream_no_content):
+    with patch("app.api.me._main_graph.astream",fake_astream_no_content):
         body = make_payload(content="Hello")
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
@@ -313,7 +320,7 @@ async def test_stop_with_ai(
     """StopWithAi: event set after first delta → stopped with aid + DB ai + 'user_stopped'."""
     headers, child = auth_headers_child
 
-    async def fake_astream_with_stop(initial_state, stream_mode="custom"):
+    async def fake_astream_with_stop(initial_state, stream_mode="custom", **kwargs):
         yield {"delta": "Hello"}  # first payload: has_emitted_content = True
         # Generator processes this payload (accumulate, yield SSE),
         # then calls __anext__() — resume here.
@@ -325,7 +332,7 @@ async def test_stop_with_ai(
         yield {"finish_reason": "stop"}
         # Generator: no delta, stop check fires → StopWithAi
 
-    with patch.object(main_graph, "astream", fake_astream_with_stop):
+    with patch("app.api.me._main_graph.astream",fake_astream_with_stop):
         body = make_payload(content="Hi")
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
@@ -398,7 +405,7 @@ async def test_keepgo_connection_error(
         {"finish_reason": "stop"},
     ]
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         nonlocal consumed_count
         for p in fake_payloads:
             consumed_count += 1
@@ -414,7 +421,7 @@ async def test_keepgo_connection_error(
                 raise ConnectionError("mock client disconnect")
             yield _make_delta_frame(p.get("delta", ""))
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         with patch("app.api.me.stream_graph_to_sse", mock_stream_to_sse):
             body = make_payload(content="Hi")
             resp = await api_client_with_eval.post(
@@ -468,11 +475,11 @@ async def test_running_streams_cleaned_after_normal_end(
     """Natural stream end: running_streams entry is removed in finally."""
     headers, child = auth_headers_child
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         yield {"delta": "Normal"}
         yield {"finish_reason": "stop"}
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         body = make_payload(content="Hi")
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
@@ -499,11 +506,11 @@ async def test_running_streams_cleaned_after_error(
     """Error path: running_streams entry is removed in finally."""
     headers, child = auth_headers_child
 
-    async def fake_astream_broken(initial_state, stream_mode="custom"):
+    async def fake_astream_broken(initial_state, stream_mode="custom", **kwargs):
         yield {"delta": "before error"}
         raise RuntimeError("graph failure")
 
-    with patch.object(main_graph, "astream", fake_astream_broken):
+    with patch("app.api.me._main_graph.astream",fake_astream_broken):
         body = make_payload(content="Hi")
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
@@ -555,7 +562,7 @@ async def test_keepgo_inner_yield_connection_error(
     ]
     consumed_count = 0
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         nonlocal consumed_count
         for p in fake_payloads:
             consumed_count += 1
@@ -570,7 +577,7 @@ async def test_keepgo_inner_yield_connection_error(
         self.body_iterator = _BrokenOnCall(self.body_iterator, break_after=2)
 
     with patch.object(StreamingResponse, "__init__", patched_sr_init):
-        with patch.object(main_graph, "astream", fake_astream):
+        with patch("app.api.me._main_graph.astream",fake_astream):
             body = {"content": "Hi"}
             resp = await api_client_with_eval.post(
                 "/api/v1/me/chat/stream", json=body, headers=headers,

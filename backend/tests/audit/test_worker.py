@@ -5,17 +5,23 @@
 2. 最后尝试失败（job_try=3）→ set_failed + 抛异常
 3. 前几次失败（job_try=1）→ set_failed 不调 + 抛异常
 4. WorkerSettings 结构正确性
+
+T10（D-patch0-7）：mock RuntimeResources 替代 build_audit_graph 直接 mock。
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app.audit.worker import MAX_TRIES, run_audit
+from app.runtime import RuntimeResources
 from app.schemas.audit import AuditDimensionScores, AuditOutputSchema
 
 pytestmark = pytest.mark.audit
+
+SID = "00000000-0000-0000-0000-000000000001"
+CUID = "00000000-0000-0000-0000-000000000002"
 
 _AUDIT_OUTPUT = AuditOutputSchema(
     dimension_scores=AuditDimensionScores(),
@@ -28,32 +34,53 @@ _AUDIT_OUTPUT = AuditOutputSchema(
 )
 
 
-async def _fake_graph_ainvoke_ok(state: dict) -> dict:
+async def _fake_graph_ainvoke_ok(state: dict, **kwargs: object) -> dict:
     """模拟 graph 返回含有 structured_output 的结果。"""
     return {"structured_output": _AUDIT_OUTPUT}
 
 
-async def _fake_graph_ainvoke_raise(state: dict) -> dict:
+async def _fake_graph_ainvoke_raise(state: dict, **kwargs: object) -> dict:
     """模拟 graph 抛异常。"""
     msg = f"LLM error sid={state.get('sid', '?')} turn={state.get('turn_number', '?')}"
     raise RuntimeError(msg)
 
 
+def _make_fake_rr() -> MagicMock:
+    """构造 fake RuntimeResources 供 worker 测试使用。
+
+    T10 后 run_audit 不直接调 build_audit_graph，而是从 ctx["resources"]
+    取 rr.audit_graph.ainvoke()。测试通过此工厂构造 mock RuntimeResources，
+    注入预期的 ainvoke 行为。
+    """
+    fake_rr = MagicMock(spec=RuntimeResources)
+    fake_rr.audit_graph = AsyncMock()
+    fake_rr.audit_graph.ainvoke = AsyncMock()
+    fake_rr.settings = MagicMock()
+    fake_rr.settings.max_audit_tool_iterations = 5
+    fake_rr.db_session_factory = MagicMock()
+    fake_rr.audit_redis = MagicMock()
+    return fake_rr
+
+
 def _make_ctx(
     *,
     job_try: int = 1,
-    sid: str = "test-sid",
+    sid: str = SID,
     turn: int = 1,
 ) -> dict:
-    """构造模拟 ARQ ctx。"""
+    """构造模拟 ARQ ctx，含 RuntimeResources + signals_manager。"""
     from app.state.audit_signals import AuditSignalsManager
     from fakeredis.aioredis import FakeRedis
 
     redis = FakeRedis(decode_responses=True)
+    fake_rr = _make_fake_rr()
+    fake_rr.audit_redis = redis
+
     return {
         "job_id": f"audit:{sid}:{turn}",
         "job_try": job_try,
         "redis": redis,
+        "resources": fake_rr,
         "signals_manager": AuditSignalsManager(redis, ttl=86400),
     }
 
@@ -67,14 +94,14 @@ class TestRunAudit:
         ctx = _make_ctx()
         mgr = ctx["signals_manager"]
 
-        with patch(
-            "app.audit.worker.build_audit_graph",
-            return_value=AsyncMock(ainvoke=_fake_graph_ainvoke_ok),
-        ):
-            await run_audit(ctx, "test-sid", turn_number=1)
+        # 配置 fake RuntimeResources 的 audit_graph.ainvoke 返回成功结果
+        fake_rr: MagicMock = ctx["resources"]
+        fake_rr.audit_graph.ainvoke = _fake_graph_ainvoke_ok
+
+        await run_audit(ctx, SID, turn_number=1, child_user_id=CUID)
 
         # 验证 Redis 状态
-        payload = await mgr.get("test-sid")
+        payload = await mgr.get(SID)
         assert payload is not None
         assert payload.status == "ready"
 
@@ -84,15 +111,14 @@ class TestRunAudit:
         ctx = _make_ctx(job_try=MAX_TRIES)
         mgr = ctx["signals_manager"]
 
-        with patch(
-            "app.audit.worker.build_audit_graph",
-            return_value=AsyncMock(ainvoke=_fake_graph_ainvoke_raise),
-        ):
-            with pytest.raises(RuntimeError, match="LLM error"):
-                await run_audit(ctx, "test-sid", turn_number=2)
+        fake_rr: MagicMock = ctx["resources"]
+        fake_rr.audit_graph.ainvoke = _fake_graph_ainvoke_raise
+
+        with pytest.raises(RuntimeError, match="LLM error"):
+            await run_audit(ctx, SID, turn_number=2, child_user_id=CUID)
 
         # 验证 Redis 状态
-        payload = await mgr.get("test-sid")
+        payload = await mgr.get(SID)
         assert payload is not None
         assert payload.status == "failed"
         assert payload.error is not None
@@ -103,15 +129,14 @@ class TestRunAudit:
         ctx = _make_ctx(job_try=1)
         mgr = ctx["signals_manager"]
 
-        with patch(
-            "app.audit.worker.build_audit_graph",
-            return_value=AsyncMock(ainvoke=_fake_graph_ainvoke_raise),
-        ):
-            with pytest.raises(RuntimeError, match="LLM error"):
-                await run_audit(ctx, "test-sid", turn_number=2)
+        fake_rr: MagicMock = ctx["resources"]
+        fake_rr.audit_graph.ainvoke = _fake_graph_ainvoke_raise
+
+        with pytest.raises(RuntimeError, match="LLM error"):
+            await run_audit(ctx, SID, turn_number=2, child_user_id=CUID)
 
         # 验证 Redis 状态未写入（key 不存在）
-        payload = await mgr.get("test-sid")
+        payload = await mgr.get(SID)
         assert payload is None
 
 

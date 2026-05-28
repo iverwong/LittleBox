@@ -12,7 +12,9 @@ from httpx import ASGITransport, AsyncClient
 
 from app.auth.redis_ops import commit_with_redis
 from app.auth.tokens import issue_token
-from app.chat.graph import main_graph
+from app.chat.graph import build_main_graph
+
+main_graph = build_main_graph()
 from app.db import get_db
 from app.models.accounts import Family, FamilyMember, User
 from app.models.chat import Session as SessionModel
@@ -41,8 +43,11 @@ def redis_client_with_eval(redis_client):
 
 @pytest.fixture
 async def app_with_eval(db_session, redis_client_with_eval):
+    from unittest.mock import patch
+
     from app.auth.redis_client import get_redis
     from app.main import create_app
+    from tests.conftest import _inject_mock_resources
 
     application = create_app()
 
@@ -54,6 +59,8 @@ async def app_with_eval(db_session, redis_client_with_eval):
 
     application.dependency_overrides[get_db] = _get_db
     application.dependency_overrides[get_redis] = _get_redis
+
+    _inject_mock_resources(application, redis_client_with_eval)
     yield application
     application.dependency_overrides.clear()
 
@@ -113,11 +120,11 @@ async def test_first_message_creates_session(api_client, auth_headers_child, db_
     """首次消息 → 新 session，标题 √± 格式。（Group 4）"""
     headers, child = auth_headers_child
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in [{"delta": "[fake]"}, {"finish_reason": "stop"}]:
             yield p
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         body = make_payload(content="你好")
         resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
         assert resp.status_code == 200

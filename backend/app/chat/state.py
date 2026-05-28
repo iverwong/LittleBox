@@ -1,11 +1,7 @@
 """Main dialogue graph state — MainDialogueState TypedDict.
 
 M6 Step 6: replaces the M3 skeleton.
-Architecture (baseline §7.1 / §7.5):
 - messages: session history, managed by add_messages reducer (LangGraph)
-- pending_guidance: staging field written by inject_guidance node,
-  consumed by call_main_llm to assemble the LLM prompt.
-  NOT persisted — stays in-graph only.
 - audit_state: M8 load_audit_state 节点读取 Redis audit:{sid} 填充
 """
 
@@ -15,10 +11,6 @@ from typing import Annotated, TypedDict
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph import add_messages
-
-from app.models.accounts import (
-    ChildProfile,  # runtime import: needed by LangGraph get_type_hints to resolve forward ref
-)
 
 
 class AuditState(TypedDict):
@@ -42,11 +34,9 @@ class MainDialogueState(TypedDict):
 
     session_id: str
     child_user_id: str
-    child_profile: ChildProfile | None  # set by generator (Step 8b); M6 nodes do not read
     provider: str  # 当前对话 provider 名，由 me.py 从 settings.main_provider 填入
     messages: Annotated[list[BaseMessage], add_messages]
     audit_state: AuditState  # M8: load_audit_state 节点填充
-    pending_guidance: str | None  # staging — not persisted, not written to messages table
     generated_token_count: int
     client_alive: bool
     user_stop_requested: bool

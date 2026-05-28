@@ -264,17 +264,16 @@ async def test_enqueue_audit_sets_pending_and_enqueues(db_session, child_user):
     mock_manager.set_pending = AsyncMock()
 
     from unittest.mock import MagicMock
-    mock_redis = AsyncMock()
+    from redis.asyncio import Redis as _Redis
+
+    mock_redis = AsyncMock(spec=_Redis)
     mock_redis.connection_pool = MagicMock()
     mock_redis.connection_pool.connection_kwargs = {
         "host": "localhost", "port": 6379, "password": None,
     }
 
     with (
-        patch(
-            "app.auth.redis_client.get_audit_redis",
-            return_value=mock_redis,
-        ),
+        patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
         patch(
             "app.chat.graph.AuditSignalsManager",
             return_value=mock_manager,
@@ -284,7 +283,7 @@ async def test_enqueue_audit_sets_pending_and_enqueues(db_session, child_user):
             return_value=mock_arq_pool,
         ),
     ):
-        await enqueue_audit(sid, db_session, turn_number=1)
+        await enqueue_audit(sid, db_session, turn_number=1, child_user_id=child_user.id)
 
         mock_manager.set_pending.assert_awaited_once()
         args, kwargs = mock_manager.set_pending.await_args

@@ -7,7 +7,6 @@ M3 dev 路径（_sse_pack / stream_chat）已于 M6-patch3 移除。
 import json
 import logging
 from collections.abc import AsyncIterator
-from typing import Any
 
 logger = logging.getLogger(__name__)
 

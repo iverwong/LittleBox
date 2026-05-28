@@ -24,6 +24,45 @@ pytestmark = [
     pytest.mark.asyncio,
 ]
 
+
+def _make_fake_runtime(sid: str = "00000000-0000-0000-0000-000000000001") -> object:
+    """构造最小 Runtime[ChatContextSchema] 替代（LangGraph 注入 mock）。
+
+    测试中直接调 load_audit_state(state, runtime)，runtime 仅提供
+    .context.session_id / .context.audit_redis / .context.settings 三个属性。
+    """
+    from types import SimpleNamespace
+
+    from app.chat.context_schema import ChatContextSchema
+
+    ctx = ChatContextSchema(
+        session_id=sid,
+        child_user_id="child-1",
+        child_profile={},
+        age=8,
+        gender=None,
+        user_input="test",
+        settings=SimpleNamespace(
+            main_provider="deepseek",
+            deepseek_api_key="",
+            deepseek_base_url="https://api.deepseek.com/v1",
+            deepseek_model="deepseek-v4-flash",
+            deepseek_reasoning_effort="high",
+            bailian_api_key="",
+            bailian_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            bailian_model="deepseek-v4-flash",
+            llm_request_timeout_seconds=60.0,
+            enable_fallback=False,
+            fallback_provider=None,
+            audit_redis_ttl_seconds=86400,
+            audit_wait_timeout_seconds=30,
+        ),
+        db_session_factory=AsyncMock(),
+        audit_redis=AsyncMock(),
+    )
+    return SimpleNamespace(context=ctx)
+
+
 def _make_state(turn_number: int = 2, sid: str = "test-sid") -> MainDialogueState:
     return MainDialogueState(
         session_id=sid,
@@ -32,7 +71,6 @@ def _make_state(turn_number: int = 2, sid: str = "test-sid") -> MainDialogueStat
         provider="deepseek",
         messages=[],
         audit_state={},
-        pending_guidance=None,
         generated_token_count=0,
         client_alive=True,
         user_stop_requested=False,
@@ -58,27 +96,28 @@ class TestLoadAuditState:
     async def test_first_turn_returns_all_false(self) -> None:
         """turn_number==1 → 直接返回 all-False，不 poll_wait。"""
         state = _make_state(turn_number=1)
-        result = await load_audit_state(state)
+        runtime = _make_fake_runtime()
+        result = await load_audit_state(state, runtime)
         audit = result.get("audit_state", {})
         assert audit.get("crisis_detected") is False
         assert audit.get("redline_triggered") is False
         assert audit.get("guidance") is None
 
     async def _do_poll_wait_test(self, kind, turn_number=2, **kwargs):
-        """共享逻辑：patch get_audit_redis + AuditSignalsManager → 调 load_audit_state。"""
+        """共享逻辑：patch AuditSignalsManager → 调 load_audit_state。"""
         state = _make_state(turn_number=turn_number)
+        runtime = _make_fake_runtime()
 
         async def _mock_poll_wait(sid, expected_turn, timeout=None):
             return AuditWaitResult(kind=kind, **kwargs)
 
         with (
-            patch("app.auth.redis_client.get_audit_redis", return_value=AsyncMock()),
             patch(
                 "app.chat.graph.AuditSignalsManager",
                 return_value=AsyncMock(poll_wait=_mock_poll_wait),
             ),
         ):
-            return await load_audit_state(state)
+            return await load_audit_state(state, runtime)
 
     @pytest.mark.asyncio
     async def test_ready_injects_signals(self) -> None:

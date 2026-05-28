@@ -32,7 +32,9 @@ from sqlalchemy import select
 
 from app.auth.redis_ops import commit_with_redis
 from app.auth.tokens import issue_token
-from app.chat.graph import main_graph
+from app.chat.graph import build_main_graph
+
+main_graph = build_main_graph()
 from app.db import get_db
 from app.models.accounts import Family, FamilyMember, User
 from app.models.chat import Message
@@ -65,8 +67,11 @@ async def redis_client_with_eval(redis_client: FakeRedis) -> FakeRedis:
 @pytest.fixture
 async def app_with_eval(db_session, redis_client_with_eval):
     """App fixture with patched redis for Lua DEL simulation."""
+    from unittest.mock import patch
+
     from app.auth.redis_client import get_redis
     from app.main import create_app
+    from tests.conftest import _inject_mock_resources
 
     application = create_app()
 
@@ -78,6 +83,8 @@ async def app_with_eval(db_session, redis_client_with_eval):
 
     application.dependency_overrides[get_db] = _get_db
     application.dependency_overrides[get_redis] = _get_redis
+
+    _inject_mock_resources(application, redis_client_with_eval)
     try:
         yield application
     finally:
@@ -199,11 +206,11 @@ async def test_sse_sequence_session_meta_multi_delta_end(
         {"finish_reason": "stop"},  # no output from sse adapter
     ]
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in fake_payloads:
             yield p
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         body = make_payload(content="Hello")
         resp = await api_client_with_eval.post("/api/v1/me/chat/stream", json=body, headers=headers)
         assert resp.status_code == 200
@@ -232,11 +239,11 @@ async def test_sse_sequence_delta_only_no_reasoning(
         {"finish_reason": "stop"},
     ]
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in fake_payloads:
             yield p
 
-    with patch("app.api.me.main_graph") as mock_graph:
+    with patch("app.api.me._main_graph") as mock_graph:
         mock_graph.astream = fake_astream
 
         body = make_payload(content="Hi")
@@ -270,11 +277,11 @@ async def test_t5_writes_ai_active_with_stop(
         {"finish_reason": "stop"},
     ]
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in fake_payloads:
             yield p
 
-    with patch("app.api.me.main_graph") as mock_graph:
+    with patch("app.api.me._main_graph") as mock_graph:
         mock_graph.astream = fake_astream
 
         body = make_payload(content="Hello")
@@ -321,11 +328,11 @@ async def test_t5_finish_reason_length(
         {"finish_reason": "length"},  # length not stop
     ]
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in fake_payloads:
             yield p
 
-    with patch("app.api.me.main_graph") as mock_graph:
+    with patch("app.api.me._main_graph") as mock_graph:
         mock_graph.astream = fake_astream
 
         body = make_payload(content="Tell me a story")
@@ -363,11 +370,11 @@ async def test_t5_finish_reason_content_filter(
         {"finish_reason": "content_filter"},
     ]
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in fake_payloads:
             yield p
 
-    with patch("app.api.me.main_graph") as mock_graph:
+    with patch("app.api.me._main_graph") as mock_graph:
         mock_graph.astream = fake_astream
 
         body = make_payload(content="Test filter")
@@ -412,7 +419,7 @@ async def test_t5_commit_called_after_persist(
         {"finish_reason": "stop"},
     ]
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in fake_payloads:
             yield p
 
@@ -426,7 +433,7 @@ async def test_t5_commit_called_after_persist(
 
     db_session.commit = spy_commit
 
-    with patch("app.api.me.main_graph") as mock_graph:
+    with patch("app.api.me._main_graph") as mock_graph:
         mock_graph.astream = fake_astream
 
         body = make_payload(content="Hello")
@@ -454,11 +461,11 @@ async def test_ai_row_persisted_cross_connection(
         {"finish_reason": "stop"},
     ]
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in fake_payloads:
             yield p
 
-    with patch("app.api.me.main_graph") as mock_graph:
+    with patch("app.api.me._main_graph") as mock_graph:
         mock_graph.astream = fake_astream
 
         body = make_payload(content="Hello")
@@ -495,11 +502,11 @@ async def test_error_path_emits_error_frame_and_preserves_human(
     """graph raises Exception → SSE error frame + human active row retained + no ai row."""
     headers, child = auth_headers_child
 
-    async def fake_astream_broken(initial_state, stream_mode="custom"):
+    async def fake_astream_broken(initial_state, stream_mode="custom", **kwargs):
         yield {"delta": "partial before error"}
         raise RuntimeError("graph internal error")
 
-    with patch("app.api.me.main_graph") as mock_graph:
+    with patch("app.api.me._main_graph") as mock_graph:
         mock_graph.astream = fake_astream_broken
 
         body = make_payload(content="Hello")
@@ -539,11 +546,11 @@ async def test_error_path_lock_released(
     """Error path: session lock must be released even when graph raises."""
     headers, child = auth_headers_child
 
-    async def fake_astream_broken(initial_state, stream_mode="custom"):
+    async def fake_astream_broken(initial_state, stream_mode="custom", **kwargs):
         yield {"delta": "partial"}
         raise RuntimeError("graph error")
 
-    with patch("app.api.me.main_graph") as mock_graph:
+    with patch("app.api.me._main_graph") as mock_graph:
         mock_graph.astream = fake_astream_broken
 
         body = make_payload(content="Hello")
@@ -577,11 +584,11 @@ async def test_accumulated_content_concatenates_all_deltas(
         {"finish_reason": "stop"},
     ]
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in fake_payloads:
             yield p
 
-    with patch("app.api.me.main_graph") as mock_graph:
+    with patch("app.api.me._main_graph") as mock_graph:
         mock_graph.astream = fake_astream
 
         body = make_payload(content="Hi")
@@ -617,11 +624,11 @@ async def test_end_frame_contains_real_aid(
         {"finish_reason": "stop"},
     ]
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in fake_payloads:
             yield p
 
-    with patch("app.api.me.main_graph") as mock_graph:
+    with patch("app.api.me._main_graph") as mock_graph:
         mock_graph.astream = fake_astream
 
         body = make_payload(content="Hello")
@@ -661,11 +668,11 @@ async def test_thinking_start_end_sse_sequence(
         {"finish_reason": "stop"},
     ]
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in fake_payloads:
             yield p
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         body = make_payload(content="Hello")
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers
@@ -699,11 +706,11 @@ async def test_thinking_no_reasoning_no_signals(
         {"finish_reason": "stop"},
     ]
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in fake_payloads:
             yield p
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         body = make_payload(content="Hello")
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers
@@ -733,11 +740,11 @@ async def test_thinking_only_no_content_no_emit_end(
         {"finish_reason": "stop"},
     ]
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in fake_payloads:
             yield p
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         body = make_payload(content="Hello")
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers
@@ -806,15 +813,15 @@ async def test_compression_normal_path(
         {"finish_reason": "stop"},
     ]
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in fake_payloads:
             yield p
 
     fake_c_llm = AsyncMock()
     fake_c_llm.ainvoke = AsyncMock(return_value=AIMessage(content="用户打招呼，AI 回应天气"))
 
-    monkeypatch.setattr("app.api.me.main_graph", AsyncMock())
-    monkeypatch.setattr("app.api.me.main_graph.astream", fake_astream)
+    monkeypatch.setattr("app.api.me._main_graph", AsyncMock())
+    monkeypatch.setattr("app.api.me._main_graph.astream", fake_astream)
 
     with patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
         body = make_payload(content="继续聊聊", session_id=str(sid))
@@ -868,15 +875,15 @@ async def test_compression_with_reasoning_path(
         {"finish_reason": "stop"},
     ]
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in fake_payloads:
             yield p
 
     fake_c_llm = AsyncMock()
     fake_c_llm.ainvoke = AsyncMock(return_value=AIMessage(content="摘要"))
 
-    monkeypatch.setattr("app.api.me.main_graph", AsyncMock())
-    monkeypatch.setattr("app.api.me.main_graph.astream", fake_astream)
+    monkeypatch.setattr("app.api.me._main_graph", AsyncMock())
+    monkeypatch.setattr("app.api.me._main_graph.astream", fake_astream)
 
     with patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
         body = make_payload(content="继续", session_id=str(sid))
@@ -910,10 +917,10 @@ async def test_compression_failure_path(
     fake_c_llm.ainvoke = AsyncMock(side_effect=RuntimeError("LLM compression failed"))
 
     monkeypatch.setattr("app.chat.factory.build_provider_llm", lambda *a, **kw: fake_c_llm)
-    async def _fake_astream_fail(initial_state, stream_mode="custom"):
+    async def _fake_astream_fail(initial_state, stream_mode="custom", **kwargs):
         yield {"finish_reason": "stop"}
-    monkeypatch.setattr("app.api.me.main_graph", AsyncMock())
-    monkeypatch.setattr("app.api.me.main_graph.astream", _fake_astream_fail)
+    monkeypatch.setattr("app.api.me._main_graph", AsyncMock())
+    monkeypatch.setattr("app.api.me._main_graph.astream", _fake_astream_fail)
 
     body = make_payload(content="继续", session_id=str(sid))
     resp = await api_client_with_eval.post(
@@ -979,11 +986,11 @@ async def test_compression_row84_regression(
     )
 
     monkeypatch.setattr("app.chat.factory.build_provider_llm", lambda *a, **kw: fake_c_llm)
-    monkeypatch.setattr("app.api.me.main_graph", AsyncMock())
-    async def _fake_astream_84(initial_state, stream_mode="custom"):
+    monkeypatch.setattr("app.api.me._main_graph", AsyncMock())
+    async def _fake_astream_84(initial_state, stream_mode="custom", **kwargs):
         yield {"delta": "r"}
         yield {"finish_reason": "stop"}
-    monkeypatch.setattr("app.api.me.main_graph.astream", _fake_astream_84)
+    monkeypatch.setattr("app.api.me._main_graph.astream", _fake_astream_84)
 
     body = make_payload(content="继续聊聊", session_id=str(sid))
     resp = await api_client_with_eval.post(
@@ -1042,12 +1049,12 @@ async def test_compression_noop_empty_filter(
         {"finish_reason": "stop"},
     ]
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in fake_payloads:
             yield p
 
-    monkeypatch.setattr("app.api.me.main_graph", AsyncMock())
-    monkeypatch.setattr("app.api.me.main_graph.astream", fake_astream)
+    monkeypatch.setattr("app.api.me._main_graph", AsyncMock())
+    monkeypatch.setattr("app.api.me._main_graph.astream", fake_astream)
 
     body = make_payload(content="新的消息", session_id=str(sid))
     resp = await api_client_with_eval.post(
@@ -1100,7 +1107,7 @@ async def test_compression_messages_order_assertion(
     captured: list = []
     summary_content = "测试摘要XYZ"
 
-    async def spy_astream(initial_state, stream_mode="custom"):
+    async def spy_astream(initial_state, stream_mode="custom", **kwargs):
         captured.append(initial_state)
         yield {"delta": "回复"}
         yield {"finish_reason": "stop"}
@@ -1108,8 +1115,8 @@ async def test_compression_messages_order_assertion(
     fake_c_llm = AsyncMock()
     fake_c_llm.ainvoke = AsyncMock(return_value=AIMessage(content=summary_content))
 
-    monkeypatch.setattr("app.api.me.main_graph", AsyncMock())
-    monkeypatch.setattr("app.api.me.main_graph.astream", spy_astream)
+    monkeypatch.setattr("app.api.me._main_graph", AsyncMock())
+    monkeypatch.setattr("app.api.me._main_graph.astream", spy_astream)
 
     with _patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
         body = make_payload(content="继续聊聊", session_id=str(sid))
@@ -1189,7 +1196,7 @@ async def test_compression_with_existing_summary(
 
     captured: list = []
 
-    async def spy_astream(initial_state, stream_mode="custom"):
+    async def spy_astream(initial_state, stream_mode="custom", **kwargs):
         captured.append(initial_state)
         yield {"delta": "回复"}
         yield {"finish_reason": "stop"}
@@ -1197,8 +1204,8 @@ async def test_compression_with_existing_summary(
     fake_c_llm = AsyncMock()
     fake_c_llm.ainvoke = AsyncMock(return_value=AIMessage(content="新合并摘要"))
 
-    monkeypatch.setattr("app.api.me.main_graph", AsyncMock())
-    monkeypatch.setattr("app.api.me.main_graph.astream", spy_astream)
+    monkeypatch.setattr("app.api.me._main_graph", AsyncMock())
+    monkeypatch.setattr("app.api.me._main_graph.astream", spy_astream)
 
     with _patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
         body = make_payload(content="第三轮", session_id=str(sid))

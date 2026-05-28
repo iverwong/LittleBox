@@ -30,10 +30,10 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.chat.prompts import SUMMARY_PREFIX
 from app.models.audit import RollingSummary
 from app.models.chat import Message
 from app.models.enums import MessageRole
-from app.chat.prompts import SUMMARY_PREFIX
 
 
 async def build_context(sid: UUID, db: AsyncSession) -> list[BaseMessage]:

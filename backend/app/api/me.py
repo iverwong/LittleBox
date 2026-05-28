@@ -12,7 +12,7 @@ from typing import Annotated
 from uuid import UUID, uuid4
 
 import anyio
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 from sqlalchemy import select, tuple_, update
@@ -22,8 +22,8 @@ from starlette.responses import StreamingResponse
 from app.auth.deps import get_current_account, require_child
 from app.auth.redis_client import get_redis
 from app.chat.compression import CONTEXT_COMPRESS_THRESHOLD_TOKENS
-from app.chat.context import build_context
-from app.chat.graph import enqueue_audit, main_graph
+from app.chat.context_schema import ChatContextSchema
+from app.chat.graph import enqueue_audit
 from app.chat.locks import (
     acquire_session_lock,
     acquire_throttle_lock,
@@ -43,6 +43,7 @@ from app.models.accounts import ChildProfile, User
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
 from app.models.enums import MessageRole, MessageStatus, SessionStatus
+from app.runtime import RuntimeResources
 from app.schemas.accounts import AccountOut, CurrentAccount
 from app.schemas.children import ChildProfileOut
 from app.schemas.sessions import (
@@ -55,6 +56,15 @@ from app.schemas.sessions import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/me", tags=["me"])
+
+# T8 后生产路径走 app.state.resources.main_graph。
+# 保留模块级 _main_graph（含 astream=None）仅为测试兼容，
+# 供 patch("app.api.me._main_graph.astream", ...) 使用。生成器不走此变量。
+class _MainGraphCompat:
+    """测试 patch 占位 — 生产路径不消费此对象。"""
+    astream: object = None
+
+_main_graph = _MainGraphCompat()
 
 
 @router.get("", response_model=AccountOut)
@@ -394,6 +404,7 @@ async def _stub_stream() -> list[bytes]:
 
 @router.post("/chat/stream")
 async def chat_stream(
+    request: Request,
     req: ChatStreamRequest,
     current: Annotated[CurrentAccount, Depends(require_child)],
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -483,6 +494,7 @@ async def chat_stream(
         db.add(session)
         is_new_session = True
     else:
+        assert latest is not None, "已有 active session"
         sid = latest.id
         session = latest
         is_new_session = False
@@ -592,10 +604,7 @@ async def chat_stream(
                 # 此分支不可达——raise 以捕获未来状态空间错误。
                 raise AssertionError("unreachable: non-orphan human cannot be last active row")
 
-        # ---- 构建 history + system prompt（在 decision matrix + flush 后，orphan discard 已可见） ----
-        history = await build_context(sid, db)
-        system_prompt = build_system_prompt(_age, _gender)
-
+        # build_context / build_system_prompt 已由 build_messages_main 节点在图内执行
         # commit① — user 消息落库（同事务内同步 last_active_at）
         if user_msg is not None:
             session.last_active_at = user_msg.created_at
@@ -610,22 +619,37 @@ async def chat_stream(
             client_alive = True
             user_stopped = False
 
-            # 为主图谱构建初始状态
+            # 从 app.state 取 RuntimeResources + 构造 ChatContextSchema
+            rr: RuntimeResources = request.app.state.resources
 
             from app.chat.state import MainDialogueState
-            from app.config import settings as _app_settings
 
             # M8: ai_turn_counter → turn_number（下一轮号）
             _turn_number = (session.ai_turn_counter or 0) + 1
 
+            ctx = ChatContextSchema(
+                session_id=sid,
+                child_user_id=current.id,
+                child_profile={},
+                age=_age,
+                gender=_gender,
+                user_input=req.content,
+                settings=rr.settings,
+                db_session_factory=rr.db_session_factory,
+                audit_redis=rr.audit_redis,
+            )
+
             initial_state: MainDialogueState = {
                 "session_id": str(sid),
                 "child_user_id": str(current.id),
-                "child_profile": None,  # M6：节点不读取此字段
-                "provider": _app_settings.main_provider,
-                "messages": [system_prompt, *history],
-                "audit_state": {},  # load_audit_state 节点填充
-                "pending_guidance": None,
+                "provider": rr.settings.main_provider,
+                "messages": [],  # build_messages_main 节点从 DB 装载
+                "audit_state": {
+                    "crisis_locked": False,
+                    "crisis_detected": False,
+                    "redline_triggered": False,
+                    "guidance": None,
+                },
                 "generated_token_count": 0,
                 "client_alive": True,
                 "user_stop_requested": False,
@@ -654,6 +678,7 @@ async def chat_stream(
                         from app.chat.factory import build_provider_llm
 
                         # R+: 计算受保护行（本轮新 human / 复用 orphan）
+                        assert last_msg is not None
                         protected_id = user_msg.id if user_msg is not None else last_msg.id
 
                         # R+: 查询待压缩集，排除受保护行
@@ -674,13 +699,14 @@ async def chat_stream(
                         )
 
                         if actives_orm:
-                            # R+: 自组装 summarizer 输入，不调 build_context（避免新 human 和排序问题）
+                            # R+: 自组装 summarizer 输入，不调 build_context
+                            # （避免新 human 和排序问题）
                             c_input = build_compression_prompt(
                                 [_to_lc_message(mo) for mo in actives_orm]
                             )
                             c_llm = build_provider_llm(
-                                f"compression_{_app_settings.compression_provider}",
-                                _app_settings,
+                                f"compression_{rr.settings.compression_provider}",
+                                rr.settings,
                             )
                             c_result = await c_llm.ainvoke(c_input)
                             raw = (
@@ -690,7 +716,7 @@ async def chat_stream(
                             )
                             summary = extract_compression_summary(raw)
                             for mo in actives_orm:
-                                mo.status = "compressed"
+                                mo.status = MessageStatus.compressed
                             db.add(
                                 Message(
                                     session_id=sid,
@@ -749,13 +775,18 @@ async def chat_stream(
                         )
                         return
 
-                async for payload in main_graph.astream(initial_state, stream_mode="custom"):
-                    # 关注点1（修订）：stop 检查移至 for 顶部 —— 每个 chunk iter 进来即检查，
-                    # 不论 payload 类型（reasoning / delta / usage_metadata 等）。
-                    # 修复两个旧位置（原 reasoning continue 之后、SSE yield 之前）的 bug：
-                    #   B1. reasoning 分支 `continue` 跳过原检查 → 思考阶段 stop 要等首 content delta（5-30s）才生效
-                    #   B2. 原检查在 accumulated += d 之后但 yield 之前 → StopWithAi persist 了客户端未收到的最后一帧
-                    # 顶部检查保证 has_emitted_content / accumulated 仅反映「已成功 yield 的 chunks」，前后端一致。
+                graph = request.app.state.resources.main_graph
+                async for payload in graph.astream(
+                    initial_state, context=ctx, stream_mode="custom",
+                ):
+                    # 关注点1（修订）：stop 检查移至 for 顶部。每个 chunk 进来即检查，
+                    # 不论 payload 类型。修复两个旧位置的 bug：
+                    #   B1. reasoning `continue` 跳过原检查 → 思考阶段 stop
+                    #       要等首 content delta（5-30s）才生效
+                    #   B2. 原检查在 accumulated += d 后、yield 前 → StopWithAi
+                    #       persist 了客户端未收到的最后一帧
+                    # 顶部检查保证 has_emitted_content / accumulated 仅反映
+                    # 「已成功 yield 的 chunks」，前后端一致。
                     if event.is_set():
                         user_stopped = True
                         break
@@ -839,7 +870,7 @@ async def chat_stream(
                                 session.needs_compression = True
                         await db.commit()
 
-                        await enqueue_audit(sid, db, _turn_number)
+                        await enqueue_audit(sid, db, _turn_number, current.id)
 
                         if client_alive:
                             yield _frame_sse_event(
@@ -873,7 +904,7 @@ async def chat_stream(
                             session.needs_compression = True
                     await db.commit()
 
-                    await enqueue_audit(sid, db, _turn_number)
+                    await enqueue_audit(sid, db, _turn_number, current.id)
 
                     if client_alive:
                         yield _frame_sse_event(

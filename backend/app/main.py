@@ -12,13 +12,19 @@ from app.api.health import router as health_router
 from app.api.me import router as me_router
 from app.auth.redis_client import redis_lifespan
 from app.config import settings
+from app.runtime import build_runtime, teardown_runtime
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """合并 lifespan：Redis 连接池。"""
+    """合并 lifespan：Redis 连接池 + 进程级 RuntimeResources。"""
     async with redis_lifespan():
-        yield
+        rr = await build_runtime(settings)
+        app.state.resources = rr
+        try:
+            yield
+        finally:
+            await teardown_runtime(rr)
 
 
 def create_app() -> FastAPI:

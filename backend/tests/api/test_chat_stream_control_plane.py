@@ -43,7 +43,9 @@ from sqlalchemy import select
 
 from app.auth.redis_ops import commit_with_redis
 from app.auth.tokens import issue_token
-from app.chat.graph import main_graph
+from app.chat.graph import build_main_graph
+
+main_graph = build_main_graph()
 from app.chat.locks import acquire_session_lock
 from app.db import get_db
 from app.models.accounts import Family, FamilyMember, User
@@ -77,8 +79,11 @@ async def redis_client_with_eval(redis_client: FakeRedis) -> FakeRedis:
 @pytest.fixture
 async def app_with_eval(db_session, redis_client_with_eval):
     """App fixture using redis_client_with_eval (needed for Lua DEL via release_session_lock)."""
+    from unittest.mock import patch
+
     from app.auth.redis_client import get_redis
     from app.main import create_app
+    from tests.conftest import _inject_mock_resources
 
     application = create_app()
 
@@ -90,6 +95,8 @@ async def app_with_eval(db_session, redis_client_with_eval):
 
     application.dependency_overrides[get_db] = _get_db
     application.dependency_overrides[get_redis] = _get_redis
+
+    _inject_mock_resources(application, redis_client_with_eval)
     try:
         yield application
     finally:
@@ -173,7 +180,7 @@ def _make_fake_graph_astream(fake_payloads: list[dict]):
     SSE sequence: session_meta → delta → end.
     """
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in fake_payloads:
             yield p
 
@@ -195,7 +202,7 @@ async def test_decision_row1_first_turn(api_client_with_eval, auth_headers_child
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers
         )
@@ -277,7 +284,7 @@ async def test_decision_row3_ai_continuation(api_client_with_eval, auth_headers_
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers
         )
@@ -361,7 +368,7 @@ async def test_decision_row5_orphan_regen_null(
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers
         )
@@ -426,7 +433,7 @@ async def test_decision_row6_orphan_reuse(
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers
         )
@@ -549,7 +556,7 @@ async def test_decision_row3_with_prior_human(
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers
         )
@@ -615,7 +622,7 @@ async def test_decision_row5_with_prior_ai(
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers
         )
@@ -681,7 +688,7 @@ async def test_decision_row6_with_prior_ai_reuse(
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers
         )
@@ -713,7 +720,7 @@ async def test_throttle_lock_rejects_second_request(api_client_with_eval, auth_h
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         resp1 = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers
         )
@@ -804,7 +811,7 @@ async def test_400_releases_session_lock(
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         resp2 = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body2, headers=headers
         )
@@ -821,7 +828,7 @@ async def test_throttle_lock_self_expires(
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         resp1 = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers
         )
@@ -846,7 +853,7 @@ async def test_title_12_graphemes_ascii(api_client_with_eval, auth_headers_child
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers
         )
@@ -869,7 +876,7 @@ async def test_title_zwj_emoji_counts_as_one_grapheme(
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers
         )
@@ -897,7 +904,7 @@ async def test_lock_released_in_generator_finally(
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers
         )

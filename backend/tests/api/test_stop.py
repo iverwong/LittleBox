@@ -49,8 +49,11 @@ async def redis_client_with_eval(redis_client):
 @pytest.fixture
 async def app_with_eval(db_session, redis_client_with_eval):
     """App fixture with overridden db + redis."""
+    from unittest.mock import patch
+
     from app.auth.redis_client import get_redis
     from app.main import create_app
+    from tests.conftest import _inject_mock_resources
 
     application = create_app()
 
@@ -62,6 +65,8 @@ async def app_with_eval(db_session, redis_client_with_eval):
 
     application.dependency_overrides[get_db] = _get_db
     application.dependency_overrides[get_redis] = _get_redis
+
+    _inject_mock_resources(application, redis_client_with_eval)
     try:
         yield application
     finally:

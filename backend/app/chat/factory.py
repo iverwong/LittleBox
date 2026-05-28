@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import importlib.metadata as _metadata
 from collections.abc import Callable
-from functools import lru_cache
 from typing import Any
 
 from langchain_core.language_models import LanguageModelInput
@@ -211,16 +210,3 @@ def build_main_llm(settings: Any) -> Runnable[LanguageModelInput, BaseMessage]:
     return retryable.with_fallbacks([secondary])
 
 
-# ---- backward compat (M6 Step 2.5 API) — remove after graph.py migration (Step 11.2) ----
-
-
-@lru_cache(maxsize=1)
-def get_chat_llm() -> Runnable[LanguageModelInput, BaseMessage]:
-    """返回主对话 LLM 单例（已弃用，Step 11.2 后由 graph.py 直接调用 build_main_llm）。
-
-    Deprecated: M6 Step 2.5 compat layer. graph.py call_main_llm 仍引用此函数，
-    Step 11.2 迁移后删除。
-    """
-    from app.config import settings
-
-    return build_main_llm(settings)

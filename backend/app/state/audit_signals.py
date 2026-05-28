@@ -8,11 +8,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
-from redis.asyncio import Redis
 from pydantic import ValidationError
+from redis.asyncio import Redis
 
 from app.schemas.audit import AuditOutputSchema, AuditSignalsPayload
 

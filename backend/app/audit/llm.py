@@ -35,10 +35,10 @@ def build_audit_llm(settings: Settings) -> Runnable:
     secondary = build_provider_llm("audit_bailian", settings)
 
     # 先 bind_tools 再包 retry/fallback，确保工具绑定在各层都生效
-    primary_bound = primary.bind_tools(
+    primary_bound = primary.bind_tools(  # type: ignore[attr-defined]
         [AppendNote, ReplaceInNotes, AuditOutputSchema],
     )
-    secondary_bound = secondary.bind_tools(
+    secondary_bound = secondary.bind_tools(  # type: ignore[attr-defined]
         [AppendNote, ReplaceInNotes, AuditOutputSchema],
     )
 

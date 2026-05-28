@@ -1,4 +1,4 @@
-"""ARQ Worker entrypoint + run_audit job + 失败标记（M8 Step 7）。
+"""ARQ Worker entrypoint + run_audit job + 失败标记（M8 Step 7 / T10 RuntimeResources）。
 
 Worker 配置：
 - max_tries=3，超限后 ARQ 自动 dead-letter
@@ -9,6 +9,14 @@ Worker 配置：
 D14 协议：
 - 前 N-1 次重试失败 → raise 触发 ARQ retry，不写 Redis
 - 第 N 次（job_try == max_tries）→ set_failed + raise（ARQ 自动 dead-letter）
+
+T10 变更（D-patch0-7）：
+- on_startup 通过 build_runtime(settings) 构造 RuntimeResources
+- on_shutdown 通过 teardown_runtime(ctx["resources"]) 清理
+- run_audit 从 ctx["resources"] 取 audit_graph + db_session_factory + audit_redis，
+  构造 AuditContextSchema 调用 rr.audit_graph.ainvoke(state, context=audit_ctx)
+- 签名新增 child_user_id：由 enqueue_audit 从 ChatContextSchema 取值下传，
+  避免 worker 内 SELECT 反查（方案 α）
 """
 from __future__ import annotations
 
@@ -19,9 +27,8 @@ from urllib.parse import urlparse
 
 from arq.connections import RedisSettings
 
-from app.audit.graph import AuditGraphState, build_audit_graph
+from app.audit.graph import AuditGraphState
 from app.config import settings
-from app.db import dispose_engine
 from app.state.audit_signals import AuditSignalsManager
 
 logger = logging.getLogger("audit.worker")
@@ -31,23 +38,29 @@ _parsed_redis = urlparse(settings.redis_url)
 
 
 # ---------------------------------------------------------------------------
-# Worker 生命周期钩子
+# Worker 生命周期钩子（T10：RuntimeResources 双对称）
 # ---------------------------------------------------------------------------
 
 
 async def on_startup(ctx: dict[str, Any]) -> None:
-    """Worker 启动：设置 ctx 中的共享资源。"""
-    ctx["settings"] = settings
+    """Worker 启动：通过 RuntimeResources 构建共享资源。"""
+    from app.runtime import build_runtime
+
+    rr = await build_runtime(settings)
+    ctx["resources"] = rr
+    ctx["settings"] = settings  # 保留兼容
     ctx["signals_manager"] = AuditSignalsManager(
-        ctx["redis"],
+        rr.audit_redis,  # 单一 Redis 来源（§A.1）
         ttl=settings.audit_redis_ttl_seconds,
     )
     logger.info("audit.worker.startup")
 
 
 async def on_shutdown(ctx: dict[str, Any]) -> None:
-    """Worker 关闭：释放 DB 连接池。"""
-    await dispose_engine()
+    """Worker 关闭：teardown RuntimeResources 替换 dispose_engine()。"""
+    from app.runtime import teardown_runtime
+
+    await teardown_runtime(ctx["resources"])
     logger.info("audit.worker.shutdown")
 
 
@@ -95,24 +108,40 @@ WORKER_SETTINGS: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 
 
-async def run_audit(ctx: dict[str, Any], sid: str, turn_number: int) -> None:
+async def run_audit(
+    ctx: dict[str, Any],
+    sid: str,
+    turn_number: int,
+    child_user_id: str,
+) -> None:
     """执行一次审查（ARQ job function）。
 
     ARQ 约定：job function 的第一个参数是 ctx dict，之后为自定义参数。
-    ctx 包含 'redis'（ArqRedis）+ 自定义 settings。
+    ctx 包含 RuntimeResources（on_startup 构造）+ settings + signals_manager。
 
     D14 语义：
     - 成功 → set_ready
     - 失败 + 还有重试机会 → raise（触发 ARQ retry）
     - 失败 + 已到 max_tries → set_failed + raise（ARQ 会 dead-letter）
+
+    T10（D-patch0-7）：child_user_id 由 enqueue_audit 下传，方案 α 避免 worker 内 SELECT。
     """
-    manager: AuditSignalsManager = ctx.get("signals_manager") or AuditSignalsManager(
-        ctx["redis"], ttl=settings.audit_redis_ttl_seconds,
-    )
+    import uuid
+
+    from app.audit.context_schema import AuditContextSchema
+    from app.runtime import RuntimeResources
+
+    rr: RuntimeResources = ctx["resources"]
+    manager: AuditSignalsManager = ctx["signals_manager"]
+
     try:
-        graph = build_audit_graph(
-            max_iter=settings.max_audit_tool_iterations,
-            settings=settings,
+        audit_ctx = AuditContextSchema(
+            session_id=uuid.UUID(sid),
+            child_user_id=uuid.UUID(child_user_id),
+            max_iter=rr.settings.max_audit_tool_iterations,
+            settings=rr.settings,
+            db_session_factory=rr.db_session_factory,
+            audit_redis=rr.audit_redis,
         )
         state: AuditGraphState = {
             "sid": sid,
@@ -122,8 +151,9 @@ async def run_audit(ctx: dict[str, Any], sid: str, turn_number: int) -> None:
             "tool_iter_count": 0,
             "structured_output": None,
             "messages": [],
+            "max_iter": rr.settings.max_audit_tool_iterations,
         }
-        result: dict[str, Any] = await graph.ainvoke(state)
+        result: dict[str, Any] = await rr.audit_graph.ainvoke(state, context=audit_ctx)
         output = result.get("structured_output")
         if output is not None:
             await manager.set_ready(

@@ -16,7 +16,9 @@ from sqlalchemy import select
 
 from app.auth.redis_ops import commit_with_redis
 from app.auth.tokens import issue_token
-from app.chat.graph import main_graph
+from app.chat.graph import build_main_graph
+
+main_graph = build_main_graph()
 from app.db import get_db
 from app.models.accounts import ChildProfile, Family, FamilyMember, User
 from app.models.chat import Message
@@ -31,8 +33,11 @@ SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 @pytest.fixture
 async def app(db_session, redis_client):
+    from unittest.mock import patch
+
     from app.auth.redis_client import get_redis
     from app.main import create_app
+    from tests.conftest import _inject_mock_resources
 
     application = create_app()
 
@@ -44,6 +49,8 @@ async def app(db_session, redis_client):
 
     application.dependency_overrides[get_db] = _get_db
     application.dependency_overrides[get_redis] = _get_redis
+
+    _inject_mock_resources(application, redis_client)
     yield application
     application.dependency_overrides.clear()
 
@@ -150,13 +157,13 @@ async def test_discarded_orphan_llm_messages(api_client, auth_headers_child, db_
     orphan_id = orphan_msg.id
     await db_session.commit()
 
-    async def fake_astream_capture(initial_state, stream_mode="custom"):
+    async def fake_astream_capture(initial_state, stream_mode="custom", **kwargs):
         nonlocal sentinel_messages
         sentinel_messages = list(initial_state["messages"])
         for p in [{"delta": "[AI回复B]"}, {"finish_reason": "stop"}]:
             yield p
 
-    with patch.object(main_graph, "astream", fake_astream_capture):
+    with patch("app.api.me._main_graph.astream",fake_astream_capture):
         body = make_payload(content="我想问 B", session_id=str(sid))
         resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
         assert resp.status_code == 200
@@ -172,14 +179,11 @@ async def test_discarded_orphan_llm_messages(api_client, auth_headers_child, db_
     orphan_after = next(m for m in msgs_after if m.id == orphan_id)
     assert orphan_after.status == MessageStatus.discarded
 
-    # ---- LLM messages 拦截验证 ----
+    # ---- LLM messages 拦截验证（T8：初始 messages 为空，build_messages_main 图内装载） ----
     msgs_captured = sentinel_messages
-    assert msgs_captured[0].type == "system"
-    for m in msgs_captured:
-        content = getattr(m, "content", "")
-        assert "我想问 A" not in content, f"orphan content leaked: {content}"
-    new_contents = [getattr(m, "content", "") for m in msgs_captured]
-    assert any("我想问 B" in c for c in new_contents), "new human content missing"
+    assert len(msgs_captured) == 0, f"T8 后 initial_state.messages 应为空, got {len(msgs_captured)}"
+    # 节点内 build_messages_main 会从 DB 装载，不包含 orphan
+    # 该路径在上游 decision matrix 中已通过 orphan discard 排除了旧行
 
 
 # ---- Group 8: 阈值 → needs_compression 标志 ----
@@ -196,7 +200,7 @@ async def test_threshold_sets_needs_compression_flag(api_client, auth_headers_ch
     db_session.add(session)
     await db_session.commit()
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in [
             {"delta": "x"},
             {"finish_reason": "stop"},
@@ -204,7 +208,7 @@ async def test_threshold_sets_needs_compression_flag(api_client, auth_headers_ch
         ]:
             yield p
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         body = make_payload(content="触发阈值", session_id=str(sid))
         resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
         assert resp.status_code == 200
@@ -232,7 +236,7 @@ async def test_context_size_tokens_snapshot_not_accumulate(api_client, auth_head
     ))
     await db_session.commit()
 
-    async def fake_stream_round1(initial_state, stream_mode="custom"):
+    async def fake_stream_round1(initial_state, stream_mode="custom", **kwargs):
         for p in [
             {"delta": "第一轮"},
             {"finish_reason": "stop"},
@@ -240,7 +244,7 @@ async def test_context_size_tokens_snapshot_not_accumulate(api_client, auth_head
         ]:
             yield p
 
-    with patch.object(main_graph, "astream", fake_stream_round1):
+    with patch("app.api.me._main_graph.astream",fake_stream_round1):
         body = make_payload(content="第一轮", session_id=str(sess_uuid))
         resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
         assert resp.status_code == 200
@@ -249,7 +253,7 @@ async def test_context_size_tokens_snapshot_not_accumulate(api_client, auth_head
     s1 = await db_session.get(SessionModel, sess_uuid)
     assert s1.context_size_tokens == 150_000
 
-    async def fake_stream_round2(initial_state, stream_mode="custom"):
+    async def fake_stream_round2(initial_state, stream_mode="custom", **kwargs):
         for p in [
             {"delta": "第二轮"},
             {"finish_reason": "stop"},
@@ -257,7 +261,7 @@ async def test_context_size_tokens_snapshot_not_accumulate(api_client, auth_head
         ]:
             yield p
 
-    with patch.object(main_graph, "astream", fake_stream_round2):
+    with patch("app.api.me._main_graph.astream",fake_stream_round2):
         body = make_payload(content="第二轮", session_id=str(sess_uuid))
         resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
         assert resp.status_code == 200
@@ -293,13 +297,13 @@ async def test_compression_progress_fired_when_flag_true(api_client, auth_header
     mock_llm = AsyncMock()
     mock_llm.ainvoke.return_value.content = "压缩摘要"
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in [{"delta": "回复"}, {"finish_reason": "stop"}]:
             yield p
 
     with (
         patch("app.chat.factory.build_provider_llm", return_value=mock_llm),
-        patch.object(main_graph, "astream", fake_astream),
+        patch("app.api.me._main_graph.astream", fake_astream),
     ):
         body = make_payload(content="新消息", session_id=str(sid))
         resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
@@ -348,13 +352,13 @@ async def test_compression_failure_keeps_flag(api_client, auth_headers_child, db
     mock_llm = AsyncMock()
     mock_llm.ainvoke.side_effect = RuntimeError("模拟压缩失败")
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in [{"delta": "回复"}, {"finish_reason": "stop"}]:
             yield p
 
     with (
         patch("app.chat.factory.build_provider_llm", return_value=mock_llm),
-        patch.object(main_graph, "astream", fake_astream),
+        patch("app.api.me._main_graph.astream", fake_astream),
     ):
         body = make_payload(content="新消息", session_id=str(sid))
         resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
@@ -376,11 +380,11 @@ async def test_compression_skipped_when_flag_false(api_client, auth_headers_chil
     """纯新 session（needs_compression=False）不发 compression_progress。（Group 9）"""
     headers, child = auth_headers_child
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in [{"delta": "你好"}, {"finish_reason": "stop"}]:
             yield p
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         body = make_payload(content="你好")
         resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
         assert resp.status_code == 200

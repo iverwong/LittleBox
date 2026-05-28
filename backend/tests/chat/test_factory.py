@@ -310,24 +310,6 @@ class TestCompressionFactory:
 # ---- T6: get_chat_llm backward compat ----
 
 
-class TestGetChatLlmCompat:
-    """get_chat_llm() returns RunnableWithFallbacks via deprecated wrapper."""
-
-    def test_get_chat_llm_returns_runnable_with_fallbacks(self) -> None:
-        from app.chat.factory import get_chat_llm
-
-        get_chat_llm.cache_clear()
-        runnable = get_chat_llm()
-        assert isinstance(runnable, RunnableWithFallbacks)
-
-    def test_get_chat_llm_cached(self) -> None:
-        from app.chat.factory import get_chat_llm
-
-        get_chat_llm.cache_clear()
-        first = get_chat_llm()
-        second = get_chat_llm()
-        assert first is second
-
 
 # ---- T7: audit LLM retry + fallback fault injection ----
 # 验证 build_audit_llm 的 with_retry / with_fallbacks 在 HTTP 层正确工作。

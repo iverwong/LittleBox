@@ -1,14 +1,11 @@
-"""Tests for the main dialogue graph (5 nodes + 1 router).
+"""Tests for the main dialogue graph (7 nodes + 4-branch router).
 
 M6 Step 6 coverage:
-- Graph topology: edges load_audit_state → route_by_risk → LLM nodes → END
-- inject_guidance → call_main_llm edge (guidance branch)
+- Graph topology: edges load_audit_state → route_by_risk → assembly → LLM → END
+- 7 nodes + 4 conditional edges (crisis / redline / guidance / main)
 - route_by_risk 5-signal → 4-output priority
-- inject_guidance behavior: (a) guidance before last HumanMessage,
-  (b) first SystemMessage untouched, (c) guidance not in state["messages"]
 - stub nodes: crisis_llm / redline_llm fall back to main + warning
-- M6 always routes to "main" (all signals False)
-- _assemble_llm_messages unit
+- M8 always routes to "main" (all signals False)
 """
 
 import logging
@@ -23,16 +20,20 @@ from langchain_core.messages import (
 )
 
 from app.chat.graph import (
-    _assemble_llm_messages,
+    build_main_graph,
     call_crisis_llm,
     call_main_llm,
     call_redline_llm,
-    inject_guidance,
     load_audit_state,
-    main_graph,
     route_by_risk,
 )
 from app.chat.state import MainDialogueState
+from tests.chat.test_load_audit_state import _make_fake_runtime as _mk_runtime
+
+main_graph = build_main_graph()
+
+# call_main_llm / load_audit_state 测试通用 fake runtime（minimal，mock 优先于真实调用）
+_FAKE_RUNTIME = _mk_runtime()
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -51,18 +52,15 @@ def _make_state(
     *,
     messages: list[BaseMessage] | None = None,
     audit_state: dict | None = None,
-    pending_guidance: str | None = None,
     provider: str = "deepseek",
 ) -> MainDialogueState:
     """Minimal initial state for graph node unit tests."""
     return {
         "session_id": "550e8400-e29b-41d4-a716-446655440000",
         "child_user_id": "child-uuid",
-        "child_profile": None,  # not read in M6 nodes
         "provider": provider,
         "messages": messages or [],
         "audit_state": audit_state or _ALL_FALSE_AUDIT,
-        "pending_guidance": pending_guidance,
         "generated_token_count": 0,
         "client_alive": True,
         "user_stop_requested": False,
@@ -82,13 +80,6 @@ def test_graph_has_load_audit_state_entry_point():
     assert edges_from_start[0].target == "load_audit_state"
 
 
-def test_graph_inject_guidance_then_main_llm():
-    """guidance branch: inject_guidance → call_main_llm edge exists."""
-    graph = main_graph.get_graph()
-    edge_names = [(e.source, e.target) for e in graph.edges]
-    assert ("inject_guidance", "call_main_llm") in edge_names
-
-
 def test_graph_llm_nodes_terminate_at_end():
     """call_main_llm, call_crisis_llm, call_redline_llm all have edges → __end__."""
     graph = main_graph.get_graph()
@@ -97,6 +88,24 @@ def test_graph_llm_nodes_terminate_at_end():
     expected = {"call_main_llm", "call_crisis_llm", "call_redline_llm"}
     assert expected.issubset(nodes_leading_to_end), (
         f"{expected} not all leading to __end__. Found: {nodes_leading_to_end}"
+    )
+
+
+def test_graph_has_7_nodes():
+    """7 个注册节点 + 条件路由（C6：节点拓扑完整性）。"""
+    graph = main_graph.get_graph()
+    node_names = set(graph.nodes.keys())
+    expected = {
+        "load_audit_state",
+        "build_messages_main",
+        "build_messages_crisis",
+        "build_messages_redline",
+        "call_main_llm",
+        "call_crisis_llm",
+        "call_redline_llm",
+    }
+    assert expected.issubset(node_names), (
+        f"Missing nodes: {expected - node_names}"
     )
 
 
@@ -192,8 +201,22 @@ def test_route_by_risk_empty_audit_state():
 @pytest.mark.asyncio
 async def test_load_audit_state_m6_returns_all_false():
     """M6 stub: all signals False, guidance None."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    # 最小 fake runtime（首轮不进 poll_wait，只需 .context 存在）
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(
+            session_id="test-sid",
+            audit_redis=AsyncMock(),
+            settings=SimpleNamespace(
+                audit_redis_ttl_seconds=86400,
+                audit_wait_timeout_seconds=30,
+            ),
+        ),
+    )
     state = _make_state()
-    result = await load_audit_state(state)
+    result = await load_audit_state(state, runtime)
     audit = result["audit_state"]
     assert audit["crisis_locked"] is False
     assert audit["crisis_detected"] is False
@@ -201,84 +224,26 @@ async def test_load_audit_state_m6_returns_all_false():
     assert audit["guidance"] is None
 
 
-# ---------------------------------------------------------------------------
-# G4: inject_guidance — M6 stub, pending_guidance=None
-# ---------------------------------------------------------------------------
+def _make_stub_runtime():
+    """最小 fake runtime（调用方不关心 stream 输出时用）。"""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
 
+    from app.config import settings as _app_settings
 
-@pytest.mark.asyncio
-async def test_inject_guidance_m6_returns_none():
-    """M6: inject_guidance writes None to pending_guidance."""
-    state = _make_state()
-    result = await inject_guidance(state)
-    assert result == {"pending_guidance": None}
-
-
-# ---------------------------------------------------------------------------
-# G5: _assemble_llm_messages — guidance injection behavior
-# ---------------------------------------------------------------------------
-
-
-def test_assemble_no_guidance_returns_copy():
-    """pending_guidance=None → returns shallow copy of messages unchanged."""
-    msgs = [
-        SystemMessage(content="system"),
-        HumanMessage(content="hello"),
-    ]
-    state = _make_state(messages=msgs, pending_guidance=None)
-    result = _assemble_llm_messages(state)
-    assert result == msgs
-    assert result is not msgs  # is a copy
-
-
-def test_assemble_guidance_before_last_human_message():
-    """(a) guidance inserted immediately before the last HumanMessage."""
-    msgs = [
-        SystemMessage(content="system prompt"),
-        HumanMessage(content="first"),
-        AIMessage(content="reply"),
-        HumanMessage(content="last human"),
-    ]
-    state = _make_state(messages=msgs, pending_guidance="please encourage")
-    result = _assemble_llm_messages(state)
-
-    guidance_msgs = [m for m in result if isinstance(m, SystemMessage) and "encourage" in m.content]
-    assert len(guidance_msgs) == 1
-    guidance_idx = result.index(guidance_msgs[0])
-    last_human_idx = max(i for i, m in enumerate(result) if isinstance(m, HumanMessage))
-    assert guidance_idx == last_human_idx - 1, (
-        f"guidance at {guidance_idx}, last human at {last_human_idx}"
+    return SimpleNamespace(
+        context=SimpleNamespace(
+            settings=_app_settings,
+            audit_redis=AsyncMock(),
+            session_id="test-sid",
+            child_user_id="child-uuid",
+            child_profile={},
+            age=8,
+            gender=None,
+            user_input="test",
+            db_session_factory=AsyncMock(),
+        ),
     )
-
-
-def test_assemble_first_system_message_untouched():
-    """(b) First SystemMessage is NOT modified (same object reference)."""
-    sys_prompt = SystemMessage(content="do not touch this")
-    msgs = [sys_prompt, HumanMessage(content="hello")]
-    state = _make_state(messages=msgs, pending_guidance="some guidance")
-    result = _assemble_llm_messages(state)
-    assert result[0] is sys_prompt
-
-
-def test_assemble_guidance_not_in_state_messages():
-    """(c) state['messages'] is not modified — guidance stays in-graph only."""
-    msgs = [SystemMessage(content="system"), HumanMessage(content="hello")]
-    state = _make_state(messages=msgs.copy(), pending_guidance="in-graph only")
-    # _assemble_llm_messages must not mutate state["messages"]
-    original_len = len(state["messages"])
-    _assemble_llm_messages(state)
-    assert len(state["messages"]) == original_len
-    assert not any("in-graph only" in str(m.content) for m in state["messages"])
-
-
-def test_assemble_empty_messages_with_guidance():
-    """Empty history + guidance → guidance appended as a SystemMessage (no crash)."""
-    msgs: list[BaseMessage] = []
-    state = _make_state(messages=msgs, pending_guidance="be nice")
-    result = _assemble_llm_messages(state)
-    assert len(result) == 1
-    assert isinstance(result[0], SystemMessage)
-    assert "be nice" in result[0].content
 
 
 # ---------------------------------------------------------------------------
@@ -288,11 +253,11 @@ def test_assemble_empty_messages_with_guidance():
 
 @pytest.mark.asyncio
 async def test_crisis_llm_falls_back_to_main_with_warning(caplog):
-    """call_crisis_llm logs M6 stub warning and delegates to call_main_llm."""
+    """call_crisis_llm logs patch0 fallback warning and delegates to call_main_llm."""
     state = _make_state(
         messages=[SystemMessage(content="sys"), HumanMessage(content="hi")],
-        pending_guidance=None,
     )
+    runtime = _make_stub_runtime()
     import app.chat.graph as graph_mod
 
     original = graph_mod.get_stream_writer
@@ -304,19 +269,19 @@ async def test_crisis_llm_falls_back_to_main_with_warning(caplog):
     graph_mod.get_stream_writer = lambda: FakeWriter()
     try:
         with caplog.at_level(logging.WARNING):
-            await call_crisis_llm(state)
-        assert any("M6 stub" in msg and "call_crisis_llm" in msg for msg in caplog.messages)
+            await call_crisis_llm(state, runtime)
+        assert any("crisis_llm not implemented" in msg for msg in caplog.messages)
     finally:
         graph_mod.get_stream_writer = original
 
 
 @pytest.mark.asyncio
 async def test_redline_llm_falls_back_to_main_with_warning(caplog):
-    """call_redline_llm logs M6 stub warning and delegates to call_main_llm."""
+    """call_redline_llm logs patch0 fallback warning and delegates to call_main_llm."""
     state = _make_state(
         messages=[SystemMessage(content="sys"), HumanMessage(content="hi")],
-        pending_guidance=None,
     )
+    runtime = _make_stub_runtime()
     import app.chat.graph as graph_mod
 
     original = graph_mod.get_stream_writer
@@ -328,23 +293,10 @@ async def test_redline_llm_falls_back_to_main_with_warning(caplog):
     graph_mod.get_stream_writer = lambda: FakeWriter()
     try:
         with caplog.at_level(logging.WARNING):
-            await call_redline_llm(state)
-        assert any("M6 stub" in msg and "call_redline_llm" in msg for msg in caplog.messages)
+            await call_redline_llm(state, runtime)
+        assert any("redline_llm not implemented" in msg for msg in caplog.messages)
     finally:
         graph_mod.get_stream_writer = original
-
-
-# ---------------------------------------------------------------------------
-# G7: _assemble_llm_messages returns new list
-# ---------------------------------------------------------------------------
-
-
-def test_assemble_llm_messages_returns_new_list():
-    """_assemble_llm_messages returns a new list object, not the state list."""
-    msgs = [SystemMessage(content="sys"), HumanMessage(content="hi")]
-    state = _make_state(messages=msgs, pending_guidance=None)
-    result = _assemble_llm_messages(state)
-    assert result is not msgs
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +329,7 @@ async def test_call_main_llm_finish_reason_passthrough_stop(monkeypatch):
             ]
         )
 
-    monkeypatch.setattr("app.chat.graph.get_chat_llm", _fake_get_llm)
+    monkeypatch.setattr("app.chat.graph.build_main_llm", lambda _: _fake_get_llm())
 
     written: list[dict] = []
     monkeypatch.setattr(
@@ -388,7 +340,7 @@ async def test_call_main_llm_finish_reason_passthrough_stop(monkeypatch):
     state = _make_state(
         messages=[SystemMessage(content="sys"), HumanMessage(content="hi")],
     )
-    await call_main_llm(state)
+    await call_main_llm(state, _FAKE_RUNTIME)
 
     finish_calls = [w for w in written if "finish_reason" in w]
     assert len(finish_calls) == 1
@@ -409,7 +361,7 @@ async def test_call_main_llm_finish_reason_passthrough_length(monkeypatch):
             ]
         )
 
-    monkeypatch.setattr("app.chat.graph.get_chat_llm", _fake_get_llm)
+    monkeypatch.setattr("app.chat.graph.build_main_llm", lambda _: _fake_get_llm())
 
     written: list[dict] = []
     monkeypatch.setattr(
@@ -420,7 +372,7 @@ async def test_call_main_llm_finish_reason_passthrough_length(monkeypatch):
     state = _make_state(
         messages=[SystemMessage(content="sys"), HumanMessage(content="hi")],
     )
-    await call_main_llm(state)
+    await call_main_llm(state, _FAKE_RUNTIME)
 
     finish_calls = [w for w in written if "finish_reason" in w]
     assert len(finish_calls) == 1
@@ -441,7 +393,7 @@ async def test_call_main_llm_finish_reason_passthrough_content_filter(monkeypatc
             ]
         )
 
-    monkeypatch.setattr("app.chat.graph.get_chat_llm", _fake_get_llm)
+    monkeypatch.setattr("app.chat.graph.build_main_llm", lambda _: _fake_get_llm())
 
     written: list[dict] = []
     monkeypatch.setattr(
@@ -452,7 +404,7 @@ async def test_call_main_llm_finish_reason_passthrough_content_filter(monkeypatc
     state = _make_state(
         messages=[SystemMessage(content="sys"), HumanMessage(content="hi")],
     )
-    await call_main_llm(state)
+    await call_main_llm(state, _FAKE_RUNTIME)
 
     finish_calls = [w for w in written if "finish_reason" in w]
     assert len(finish_calls) == 1
@@ -473,7 +425,7 @@ async def test_call_main_llm_finish_reason_non_whitelist_filtered(monkeypatch):
             ]
         )
 
-    monkeypatch.setattr("app.chat.graph.get_chat_llm", _fake_get_llm)
+    monkeypatch.setattr("app.chat.graph.build_main_llm", lambda _: _fake_get_llm())
 
     written: list[dict] = []
     monkeypatch.setattr(
@@ -484,7 +436,7 @@ async def test_call_main_llm_finish_reason_non_whitelist_filtered(monkeypatch):
     state = _make_state(
         messages=[SystemMessage(content="sys"), HumanMessage(content="hi")],
     )
-    await call_main_llm(state)
+    await call_main_llm(state, _FAKE_RUNTIME)
 
     finish_calls = [w for w in written if "finish_reason" in w]
     assert len(finish_calls) == 0, f"Expected no finish_reason writer call, got {finish_calls}"
@@ -513,7 +465,7 @@ async def test_call_main_llm_emits_reasoning_signal_on_reasoning_content(monkeyp
             ]
         )
 
-    monkeypatch.setattr("app.chat.graph.get_chat_llm", _fake_get_llm)
+    monkeypatch.setattr("app.chat.graph.build_main_llm", lambda _: _fake_get_llm())
 
     written: list[dict] = []
     monkeypatch.setattr(
@@ -524,7 +476,7 @@ async def test_call_main_llm_emits_reasoning_signal_on_reasoning_content(monkeyp
     state = _make_state(
         messages=[SystemMessage(content="sys"), HumanMessage(content="hi")],
     )
-    await call_main_llm(state)
+    await call_main_llm(state, _FAKE_RUNTIME)
 
     reasoning_calls = [w for w in written if w.get("reasoning") is True]
     assert len(reasoning_calls) == 1, f"Expected 1 reasoning signal, got {reasoning_calls}"
@@ -547,7 +499,7 @@ async def test_call_main_llm_no_reasoning_no_signal(monkeypatch):
             ]
         )
 
-    monkeypatch.setattr("app.chat.graph.get_chat_llm", _fake_get_llm)
+    monkeypatch.setattr("app.chat.graph.build_main_llm", lambda _: _fake_get_llm())
 
     written: list[dict] = []
     monkeypatch.setattr(
@@ -558,7 +510,7 @@ async def test_call_main_llm_no_reasoning_no_signal(monkeypatch):
     state = _make_state(
         messages=[SystemMessage(content="sys"), HumanMessage(content="hi")],
     )
-    await call_main_llm(state)
+    await call_main_llm(state, _FAKE_RUNTIME)
 
     reasoning_calls = [w for w in written if w.get("reasoning") is True]
     assert len(reasoning_calls) == 0, f"Expected no reasoning signal, got {reasoning_calls}"

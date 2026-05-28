@@ -18,7 +18,9 @@ from sqlalchemy import select
 
 from app.auth.redis_ops import commit_with_redis
 from app.auth.tokens import issue_token
-from app.chat.graph import main_graph
+from app.chat.graph import build_main_graph
+
+main_graph = build_main_graph()
 from app.db import get_db
 from app.models.accounts import Family, FamilyMember, User
 from app.models.chat import Message
@@ -50,8 +52,11 @@ def redis_client_with_eval(redis_client: FakeRedis) -> FakeRedis:
 
 @pytest.fixture
 async def app_with_eval(db_session, redis_client_with_eval):
+    from unittest.mock import patch
+
     from app.auth.redis_client import get_redis
     from app.main import create_app
+    from tests.conftest import _inject_mock_resources
 
     application = create_app()
 
@@ -63,6 +68,8 @@ async def app_with_eval(db_session, redis_client_with_eval):
 
     application.dependency_overrides[get_db] = _get_db
     application.dependency_overrides[get_redis] = _get_redis
+
+    _inject_mock_resources(application, redis_client_with_eval)
     yield application
     application.dependency_overrides.clear()
 
@@ -131,7 +138,7 @@ async def test_cross_4am_boundary_creates_new_session(
 
     fake_payloads = [{"delta": "[reply]"}, {"finish_reason": "stop"}]
 
-    async def fake_astream(initial_state, stream_mode="custom"):
+    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in fake_payloads:
             yield p
 
@@ -150,7 +157,7 @@ async def test_cross_4am_boundary_creates_new_session(
     db_session.add(old_msg)
     await db_session.commit()
 
-    with patch.object(main_graph, "astream", fake_astream):
+    with patch("app.api.me._main_graph.astream",fake_astream):
         body = make_payload(content="今日新消息")
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers
