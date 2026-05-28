@@ -2,8 +2,10 @@
  * M7 · 历史 session 列表。
  *
  * 列表来源：chatStore.sessions（永不含今日，由后端 sessions[] 过滤）。
- * Step 1.4 仅渲染 + 上拉加载更多；点击行为留 console.log，由 Step 3 接历史只读态。
+ * 渲染 + 上拉加载更多；点击行为 router.push('/child/sessions/<sid>') 跳详情只读页。
+ * 由 /child/sessions/index.tsx 与 /child/sessions/[sid].tsx 消费。
  */
+import { router } from 'expo-router'
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native'
 import { useChatStore, type SessionMeta } from '@/stores/chat'
 
@@ -46,9 +48,8 @@ function SessionListItem({ item }: { item: SessionMeta }) {
         <Pressable
             style={styles.item}
             onPress={() => {
-                // activeSessionId 变化由 chat/index.tsx 的 useEffect 按
-                // §3.10 缓存判定矩阵决定是否触发 loadMessages
-                useChatStore.getState().setActiveSession(item.id)
+                // 跳详情页：消息历史拉取由 [sid].tsx 内的 §3.10 缓存判定矩阵兜底
+                router.push(`/child/sessions/${item.id}` as never)
             }}
         >
             <Text style={styles.title}>{item.title ?? '（无标题）'}</Text>

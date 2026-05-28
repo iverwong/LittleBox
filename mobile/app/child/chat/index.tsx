@@ -15,14 +15,14 @@
  * 后续 Step：Resume 三分支决策器（Step 8）。
  */
 import { Ionicons } from '@expo/vector-icons'
+import { router } from 'expo-router'
 import { useEffect, useState } from 'react'
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller'
 
 import { ChatInput } from '@/components/chat/ChatInput'
 import { MessageList } from '@/components/chat/MessageList'
-import { SessionList } from '@/components/chat/SessionList'
 import { WelcomeContent } from '@/components/chat/WelcomeContent'
 import { WelcomeShell } from '@/components/chat/WelcomeShell'
 import { useChatErrorHandler } from '@/hooks/useChatErrorHandler'
@@ -115,18 +115,9 @@ export default function ChatIndex() {
         }
     }, [activeSessionId, loadMessages, handleApiError])
 
-    const handleBackToToday = () => {
-        if (todaySessionId != null) {
-            setActiveSession(todaySessionId)
-        } else {
-            // 边界：跨日且今日尚未发消息 → 清空 activeSessionId 触发 WelcomeShell
-            useChatStore.setState({ activeSessionId: null })
-        }
-    }
-
     // 「可写态」包含 today==active==null（WelcomeShell + 首条消息触发隐式建 session）
+    // 注：historyActive 分支已抽到 /child/sessions/[sid] 详情页，主页只剩 today / null 两态
     const isTodayActive = activeSessionId === todaySessionId
-    const isHistoryActive = activeSessionId != null && activeSessionId !== todaySessionId
     // Step 4a.2：当前活跃 session 是否在流式回复中 — 下传 ChatInput 切 stop 按钮
     const isStreaming = useChatStore((s) =>
         activeSessionId != null && s.activeStreams.has(activeSessionId)
@@ -144,9 +135,19 @@ export default function ChatIndex() {
     return (
         <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
             <KeyboardAvoidingView behavior="padding" style={styles.kav}>
-                <View style={styles.history}>
-                    <Text style={styles.historyHeader}>会话历史</Text>
-                    <SessionList />
+                <View style={styles.topBar}>
+                    <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="查看会话历史"
+                        hitSlop={8}
+                        onPress={() => router.push('/child/sessions' as never)}
+                        style={({ pressed }) => [
+                            styles.iconBtn,
+                            pressed && styles.iconBtnPressed,
+                        ]}
+                    >
+                        <Ionicons name="time-outline" size={24} color="#998260" />
+                    </Pressable>
                 </View>
 
                 <View style={styles.main}>
@@ -177,22 +178,6 @@ export default function ChatIndex() {
                         isOffline={isOffline}
                     />
                 )}
-                {isHistoryActive && (
-                    <View style={styles.backToTodayBar}>
-                        <Pressable
-                            accessibilityRole="button"
-                            accessibilityLabel="返回继续对话"
-                            onPress={handleBackToToday}
-                            hitSlop={8}
-                            style={({ pressed }) => [
-                                styles.backToTodayBtn,
-                                pressed && styles.backToTodayBtnPressed,
-                            ]}
-                        >
-                            <Ionicons name="return-down-back" size={20} color="#FFFFFF" />
-                        </Pressable>
-                    </View>
-                )}
             </KeyboardAvoidingView>
         </SafeAreaView>
     )
@@ -201,40 +186,21 @@ export default function ChatIndex() {
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#F2EADF' },
     kav: { flex: 1 },
-    history: {
-        maxHeight: 200,
+    topBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 12,
+        paddingVertical: 8,
         borderBottomWidth: 1,
         borderBottomColor: '#E5DBC9',
-        backgroundColor: 'rgba(255,255,255,0.4)',
     },
-    historyHeader: {
-        paddingHorizontal: 16,
-        paddingTop: 12,
-        paddingBottom: 4,
-        fontSize: 14,
-        color: '#998260',
-        fontWeight: '500',
-    },
-    main: { flex: 1 },
-    loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-    backToTodayBar: {
-        flexDirection: 'row',
-        justifyContent: 'center',
-        alignItems: 'center',
-        paddingVertical: 12,
-        borderTopWidth: 1,
-        borderTopColor: '#E5DBC9',
-        backgroundColor: '#F2EADF',
-    },
-    backToTodayBtn: {
+    iconBtn: {
         width: 40,
         height: 40,
-        borderRadius: 20,
-        backgroundColor: '#998260',
         alignItems: 'center',
         justifyContent: 'center',
     },
-    backToTodayBtnPressed: {
-        opacity: 0.7,
-    },
+    iconBtnPressed: { opacity: 0.6 },
+    main: { flex: 1 },
+    loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 })
