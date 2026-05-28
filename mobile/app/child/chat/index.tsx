@@ -2,17 +2,20 @@
  * M7 · 子端主对话页 (/child/chat)。
  *
  * 当前实现累计范围：
- * - Step 1.4：mount loadSessions + today_session_id 决定首屏 + 顶部 SessionList
+ * - Step 1.4：mount loadSessions + today_session_id 决定首屏
  * - Step 2.3：§3.10 缓存判定矩阵（30s 窗口）+ MessageList 渲染
- * - Step 3.2：输入区按 activeSessionId vs todaySessionId 三分支
- *   · null → WelcomeShell 占满（不显示输入区）
- *   · === todaySessionId → ChatInput 草稿态
- *   · !== todaySessionId（历史）→ 「返回继续对话」图标按钮
  * - Step 7：挂 useChatErrorHandler hook（接 store transport error / stopStream 失败回调）
  *          两处 loadSessions / loadMessages catch 接 handleApiError（按 §3.9 分发 toast / 切 session）
  *          ChatInput 接入 pendingPrefill 链路（A4Late 首帧超时回灌）
- *
- * 后续 Step：Resume 三分支决策器（Step 8）。
+ * - Step 8：mount 路径接通 resumeOnEnter（与 §3.10 useEffect 并发，分支侧效在 store 内）
+ * - Step 9：isOffline 派生（bucket[0].status === 'reconnecting' | 'disconnected'）下传 ChatInput
+ * - FE UI 优化阶段：
+ *   · 历史会话列表抽到 /child/sessions（左上角 time-outline 图标入口）
+ *   · 历史 session 详情抽到 /child/sessions/[sid]（含底部「回到今天继续聊」长条主按钮）
+ *   · 主页输入区从 today / history / null 三分支收成 today / null 两分支：
+ *     - null → WelcomeShell 占满（不显示输入区）
+ *     - === todaySessionId → ChatInput 草稿态（含 isStreaming / isOffline 派生）
+ *   · 键盘抬起方案 A：react-native-keyboard-controller 的 KeyboardProvider + 库版 KeyboardAvoidingView
  */
 import { Ionicons } from '@expo/vector-icons'
 import { router } from 'expo-router'
