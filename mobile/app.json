@@ -14,6 +14,7 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
+      "bundleIdentifier": "com.getlittlebox.app",
       "supportsTablet": true,
       "infoPlist": {
         "NSAppTransportSecurity": {
@@ -28,7 +29,11 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.CAMERA"
+      ],
+      "package": "com.getlittlebox.app"
     },
     "web": {
       "bundler": "metro",

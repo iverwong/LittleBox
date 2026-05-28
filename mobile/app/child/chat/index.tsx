@@ -18,6 +18,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useEffect, useState } from 'react'
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller'
 
 import { ChatInput } from '@/components/chat/ChatInput'
 import { MessageList } from '@/components/chat/MessageList'
@@ -142,61 +143,64 @@ export default function ChatIndex() {
 
     return (
         <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-            <View style={styles.history}>
-                <Text style={styles.historyHeader}>会话历史</Text>
-                <SessionList />
-            </View>
-
-            <View style={styles.main}>
-                {activeSessionId == null ? (
-                    <WelcomeShell content={<WelcomeContent />} />
-                ) : isLoadingMessages ? (
-                    <View style={styles.loading}>
-                        <ActivityIndicator size="large" color="#998260" />
-                    </View>
-                ) : (
-                    <MessageList sid={activeSessionId} />
-                )}
-            </View>
-
-            {isTodayActive && (
-                <ChatInput
-                    onSend={(content) => {
-                        void sendMessage(activeSessionId, content)
-                    }}
-                    isStreaming={isStreaming}
-                    onStop={() => {
-                        if (activeSessionId != null) {
-                            void stopStream(activeSessionId)
-                        }
-                    }}
-                    prefill={pendingPrefill}
-                    onPrefillConsumed={() => setPendingPrefill(null)}
-                    isOffline={isOffline}
-                />
-            )}
-            {isHistoryActive && (
-                <View style={styles.backToTodayBar}>
-                    <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel="返回继续对话"
-                        onPress={handleBackToToday}
-                        hitSlop={8}
-                        style={({ pressed }) => [
-                            styles.backToTodayBtn,
-                            pressed && styles.backToTodayBtnPressed,
-                        ]}
-                    >
-                        <Ionicons name="return-down-back" size={20} color="#FFFFFF" />
-                    </Pressable>
+            <KeyboardAvoidingView behavior="padding" style={styles.kav}>
+                <View style={styles.history}>
+                    <Text style={styles.historyHeader}>会话历史</Text>
+                    <SessionList />
                 </View>
-            )}
+
+                <View style={styles.main}>
+                    {activeSessionId == null ? (
+                        <WelcomeShell content={<WelcomeContent />} />
+                    ) : isLoadingMessages ? (
+                        <View style={styles.loading}>
+                            <ActivityIndicator size="large" color="#998260" />
+                        </View>
+                    ) : (
+                        <MessageList sid={activeSessionId} />
+                    )}
+                </View>
+
+                {isTodayActive && (
+                    <ChatInput
+                        onSend={(content) => {
+                            void sendMessage(activeSessionId, content)
+                        }}
+                        isStreaming={isStreaming}
+                        onStop={() => {
+                            if (activeSessionId != null) {
+                                void stopStream(activeSessionId)
+                            }
+                        }}
+                        prefill={pendingPrefill}
+                        onPrefillConsumed={() => setPendingPrefill(null)}
+                        isOffline={isOffline}
+                    />
+                )}
+                {isHistoryActive && (
+                    <View style={styles.backToTodayBar}>
+                        <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="返回继续对话"
+                            onPress={handleBackToToday}
+                            hitSlop={8}
+                            style={({ pressed }) => [
+                                styles.backToTodayBtn,
+                                pressed && styles.backToTodayBtnPressed,
+                            ]}
+                        >
+                            <Ionicons name="return-down-back" size={20} color="#FFFFFF" />
+                        </Pressable>
+                    </View>
+                )}
+            </KeyboardAvoidingView>
         </SafeAreaView>
     )
 }
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#F2EADF' },
+    kav: { flex: 1 },
     history: {
         maxHeight: 200,
         borderBottomWidth: 1,
