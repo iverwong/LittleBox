@@ -137,7 +137,7 @@ def _parse_sse_frames(raw: str) -> list[dict]:
 # ---- Group 6: orphan discard + LLM messages 拦截（去掉 token 累加断言）----
 
 @pytest.mark.asyncio
-async def test_discarded_orphan_llm_messages(api_client, auth_headers_child, db_session):
+async def test_discarded_orphan_llm_messages(api_client, auth_headers_child, db_session, app):
     """孤儿 human 改内容重发：LLM 收到不含旧 orphan 的 messages。（Group 6）"""
     headers, child = auth_headers_child
     sentinel_messages: list = []
@@ -163,11 +163,11 @@ async def test_discarded_orphan_llm_messages(api_client, auth_headers_child, db_
         for p in [{"delta": "[AI回复B]"}, {"finish_reason": "stop"}]:
             yield p
 
-    with patch("app.api.me._main_graph.astream",fake_astream_capture):
-        body = make_payload(content="我想问 B", session_id=str(sid))
-        resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
-        assert resp.status_code == 200
-        await resp.aclose()
+    app.state.resources.main_graph.astream = fake_astream_capture
+    body = make_payload(content="我想问 B", session_id=str(sid))
+    resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
+    assert resp.status_code == 200
+    await resp.aclose()
 
     msgs_after = (
         (await db_session.execute(
@@ -189,7 +189,7 @@ async def test_discarded_orphan_llm_messages(api_client, auth_headers_child, db_
 # ---- Group 8: 阈值 → needs_compression 标志 ----
 
 @pytest.mark.asyncio
-async def test_threshold_sets_needs_compression_flag(api_client, auth_headers_child, db_session):
+async def test_threshold_sets_needs_compression_flag(api_client, auth_headers_child, db_session, app):
     """usage_metadata ≥ 500_000 → session.needs_compression = True。（Group 8）"""
     headers, child = auth_headers_child
     sid = uuid.uuid4()
@@ -208,11 +208,11 @@ async def test_threshold_sets_needs_compression_flag(api_client, auth_headers_ch
         ]:
             yield p
 
-    with patch("app.api.me._main_graph.astream",fake_astream):
-        body = make_payload(content="触发阈值", session_id=str(sid))
-        resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
-        assert resp.status_code == 200
-        await resp.aclose()
+    app.state.resources.main_graph.astream = fake_astream
+    body = make_payload(content="触发阈值", session_id=str(sid))
+    resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
+    assert resp.status_code == 200
+    await resp.aclose()
 
     session_after = await db_session.get(SessionModel, sid)
     assert session_after.context_size_tokens is not None, "context_size_tokens should be set"
@@ -226,7 +226,7 @@ async def test_threshold_sets_needs_compression_flag(api_client, auth_headers_ch
 # ---- Group 9: 压缩 ----
 
 @pytest.mark.asyncio
-async def test_context_size_tokens_snapshot_not_accumulate(api_client, auth_headers_child, db_session):
+async def test_context_size_tokens_snapshot_not_accumulate(api_client, auth_headers_child, db_session, app):
     """两轮对话：context_size_tokens 是末轮 usage 快照，不是累积。（Group 9）"""
     headers, child = auth_headers_child
     sess_uuid = uuid.uuid4()
@@ -244,11 +244,11 @@ async def test_context_size_tokens_snapshot_not_accumulate(api_client, auth_head
         ]:
             yield p
 
-    with patch("app.api.me._main_graph.astream",fake_stream_round1):
-        body = make_payload(content="第一轮", session_id=str(sess_uuid))
-        resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
-        assert resp.status_code == 200
-        await resp.aclose()
+    app.state.resources.main_graph.astream = fake_stream_round1
+    body = make_payload(content="第一轮", session_id=str(sess_uuid))
+    resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
+    assert resp.status_code == 200
+    await resp.aclose()
 
     s1 = await db_session.get(SessionModel, sess_uuid)
     assert s1.context_size_tokens == 150_000
@@ -261,18 +261,18 @@ async def test_context_size_tokens_snapshot_not_accumulate(api_client, auth_head
         ]:
             yield p
 
-    with patch("app.api.me._main_graph.astream",fake_stream_round2):
-        body = make_payload(content="第二轮", session_id=str(sess_uuid))
-        resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
-        assert resp.status_code == 200
-        await resp.aclose()
+    app.state.resources.main_graph.astream = fake_stream_round2
+    body = make_payload(content="第二轮", session_id=str(sess_uuid))
+    resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
+    assert resp.status_code == 200
+    await resp.aclose()
 
     s2 = await db_session.get(SessionModel, sess_uuid)
     assert s2.context_size_tokens == 500_000, "should be round2's snapshot, NOT cumulative 650k"
 
 
 @pytest.mark.asyncio
-async def test_compression_progress_fired_when_flag_true(api_client, auth_headers_child, db_session):
+async def test_compression_progress_fired_when_flag_true(api_client, auth_headers_child, db_session, app):
     """needs_compression=True 时 user 到达后先发 compression_start + compression_end 帧。（Group 9）"""
     headers, child = auth_headers_child
     sid = uuid.uuid4()
@@ -301,9 +301,9 @@ async def test_compression_progress_fired_when_flag_true(api_client, auth_header
         for p in [{"delta": "回复"}, {"finish_reason": "stop"}]:
             yield p
 
+    app.state.resources.main_graph.astream = fake_astream
     with (
         patch("app.chat.factory.build_provider_llm", return_value=mock_llm),
-        patch("app.api.me._main_graph.astream", fake_astream),
     ):
         body = make_payload(content="新消息", session_id=str(sid))
         resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
@@ -327,7 +327,7 @@ async def test_compression_progress_fired_when_flag_true(api_client, auth_header
 
 
 @pytest.mark.asyncio
-async def test_compression_failure_keeps_flag(api_client, auth_headers_child, db_session):
+async def test_compression_failure_keeps_flag(api_client, auth_headers_child, db_session, app):
     """压缩 LLM 抛错 → SSE error 帧 + needs_compression 保持 True。（Group 9）"""
     headers, child = auth_headers_child
     sid = uuid.uuid4()
@@ -356,9 +356,9 @@ async def test_compression_failure_keeps_flag(api_client, auth_headers_child, db
         for p in [{"delta": "回复"}, {"finish_reason": "stop"}]:
             yield p
 
+    app.state.resources.main_graph.astream = fake_astream
     with (
         patch("app.chat.factory.build_provider_llm", return_value=mock_llm),
-        patch("app.api.me._main_graph.astream", fake_astream),
     ):
         body = make_payload(content="新消息", session_id=str(sid))
         resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
@@ -376,7 +376,7 @@ async def test_compression_failure_keeps_flag(api_client, auth_headers_child, db
 
 
 @pytest.mark.asyncio
-async def test_compression_skipped_when_flag_false(api_client, auth_headers_child, db_session):
+async def test_compression_skipped_when_flag_false(api_client, auth_headers_child, db_session, app):
     """纯新 session（needs_compression=False）不发 compression_progress。（Group 9）"""
     headers, child = auth_headers_child
 
@@ -384,11 +384,11 @@ async def test_compression_skipped_when_flag_false(api_client, auth_headers_chil
         for p in [{"delta": "你好"}, {"finish_reason": "stop"}]:
             yield p
 
-    with patch("app.api.me._main_graph.astream",fake_astream):
-        body = make_payload(content="你好")
-        resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
-        assert resp.status_code == 200
-        await resp.aclose()
+    app.state.resources.main_graph.astream = fake_astream
+    body = make_payload(content="你好")
+    resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
+    assert resp.status_code == 200
+    await resp.aclose()
 
     assert b"compression_start" not in resp.content, (
         "should NOT emit compression_start when flag is False"

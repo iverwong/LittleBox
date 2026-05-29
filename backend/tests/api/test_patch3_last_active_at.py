@@ -131,7 +131,7 @@ def _parse_sse_frames(raw: str) -> list[dict]:
 
 @pytest.mark.asyncio
 async def test_cross_4am_boundary_creates_new_session(
-    api_client_with_eval, auth_headers_child, db_session,
+    api_client_with_eval, auth_headers_child, db_session, app_with_eval,
 ):
     """user_msg.created_at 与 latest.last_active_at 跨 04:00 → 新建 session。（Group 3）"""
     headers, child = auth_headers_child
@@ -157,15 +157,15 @@ async def test_cross_4am_boundary_creates_new_session(
     db_session.add(old_msg)
     await db_session.commit()
 
-    with patch("app.api.me._main_graph.astream",fake_astream):
-        body = make_payload(content="今日新消息")
-        resp = await api_client_with_eval.post(
-            "/api/v1/me/chat/stream", json=body, headers=headers
-        )
-        assert resp.status_code == 200
+    app_with_eval.state.resources.main_graph.astream = fake_astream
+    body = make_payload(content="今日新消息")
+    resp = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body, headers=headers
+    )
+    assert resp.status_code == 200
 
-        frames = _parse_sse_frames(resp.text)
-        new_sid = uuid.UUID(frames[0]["data"]["session_id"])
+    frames = _parse_sse_frames(resp.text)
+    new_sid = uuid.UUID(frames[0]["data"]["session_id"])
 
     # 新 sid ≠ 旧 sid（跨硬切点触发了新建）
     assert new_sid != old_sid, "硬切点应创建新 session"

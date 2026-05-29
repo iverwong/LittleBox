@@ -140,6 +140,33 @@ class TestRunAudit:
         payload = await mgr.get(SID)
         assert payload is None
 
+    # ---- A4 worker-seam: target_message_id 透传验证 ----
+
+    @pytest.mark.asyncio
+    async def test_target_message_id_passed_to_graph_context(self) -> None:
+        """Given target_message_id str, When run_audit, Then AuditContextSchema.target_message_id
+        传入 audit_graph.ainvoke(context=...)，匹配 uuid.UUID 入参。
+
+        Given/When/Then: 给定 target_message_id → run_audit 将其传给图上下文。
+        """
+        import uuid
+        from unittest.mock import AsyncMock
+
+        expected_tid = uuid.UUID(TARGET_MID)
+        ctx = _make_ctx()
+        ainvoke_spy = AsyncMock(return_value={"structured_output": _AUDIT_OUTPUT})
+        fake_rr: MagicMock = ctx["resources"]
+        fake_rr.audit_graph.ainvoke = ainvoke_spy
+
+        await run_audit(ctx, SID, turn_number=1, child_user_id=CUID, target_message_id=TARGET_MID)
+
+        ainvoke_spy.assert_called_once()
+        _, kwargs = ainvoke_spy.call_args
+        audit_ctx = kwargs["context"]
+        assert audit_ctx.target_message_id == expected_tid, (
+            f"Expected {expected_tid}, got {audit_ctx.target_message_id}"
+        )
+
 
 class TestWorkerSettings:
     """WorkerSettings 结构正确性。"""

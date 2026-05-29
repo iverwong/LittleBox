@@ -116,7 +116,7 @@ def _parse_sse_frames(raw: str) -> list[dict]:
 # ---- Group 4 ----
 
 @pytest.mark.asyncio
-async def test_first_message_creates_session(api_client, auth_headers_child, db_session):
+async def test_first_message_creates_session(api_client, auth_headers_child, db_session, app_with_eval):
     """首次消息 → 新 session，标题 √± 格式。（Group 4）"""
     headers, child = auth_headers_child
 
@@ -124,13 +124,13 @@ async def test_first_message_creates_session(api_client, auth_headers_child, db_
         for p in [{"delta": "[fake]"}, {"finish_reason": "stop"}]:
             yield p
 
-    with patch("app.api.me._main_graph.astream",fake_astream):
-        body = make_payload(content="你好")
-        resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
-        assert resp.status_code == 200
+    app_with_eval.state.resources.main_graph.astream = fake_astream
+    body = make_payload(content="你好")
+    resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
+    assert resp.status_code == 200
 
-        frames = _parse_sse_frames(resp.text)
-        sid = frames[0]["data"]["session_id"]
+    frames = _parse_sse_frames(resp.text)
+    sid = frames[0]["data"]["session_id"]
 
     session = await db_session.get(SessionModel, sid)
     assert session is not None

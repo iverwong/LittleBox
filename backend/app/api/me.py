@@ -57,16 +57,6 @@ from app.schemas.sessions import (
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/me", tags=["me"])
 
-# T8 后生产路径走 app.state.resources.main_graph。
-# 保留模块级 _main_graph（含 astream=None）仅为测试兼容，
-# 供 patch("app.api.me._main_graph.astream", ...) 使用。生成器不走此变量。
-class _MainGraphCompat:
-    """测试 patch 占位 — 生产路径不消费此对象。"""
-    astream: object = None
-
-_main_graph = _MainGraphCompat()
-
-
 @router.get("", response_model=AccountOut)
 async def get_me(
     current: Annotated[CurrentAccount, Depends(get_current_account)],

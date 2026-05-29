@@ -80,7 +80,7 @@ def _patch_locks(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("app.api.me.release_session_lock", AsyncMock(return_value=None))
 
 
-async def test_normal_path_sse_sequence(api_client, auth_headers_child):
+async def test_normal_path_sse_sequence(api_client, auth_headers_child, app):
     """session_meta → delta → end SSE 事件序列回归。
 
     Mock graph.astream 含 **kwargs 兼容 context= 参数（C3），
@@ -95,14 +95,14 @@ async def test_normal_path_sse_sequence(api_client, auth_headers_child):
         yield {"finish_reason": "stop"}
         yield {"usage_metadata": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}}
 
-    with patch("app.api.me._main_graph.astream", fake_astream):
-        resp = await api_client.post(
-            "/api/v1/me/chat/stream",
-            json={"content": "你好"},
-            headers=headers,
-        )
-        assert resp.status_code == 200
-        await resp.aclose()
+    app.state.resources.main_graph.astream = fake_astream
+    resp = await api_client.post(
+        "/api/v1/me/chat/stream",
+        json={"content": "你好"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    await resp.aclose()
 
     frames = _parse_sse_frames(resp.text)
     types = [f["type"] for f in frames]
