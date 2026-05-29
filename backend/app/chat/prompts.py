@@ -120,6 +120,10 @@ COMPRESSION_PROMPT_STUB = (
 )
 
 
+# ---- M9 crisis anchor_window 前缀（§D.1，供 context.py 引用） ----
+
+ANCHOR_WINDOW_PREFIX = "[anchor 窗口]"
+
 # ---- M9 三级干预 STUB prompt + wrapper（14 个 TODO slot 中新增的 5 个） ----
 
 # C.1

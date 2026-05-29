@@ -30,7 +30,8 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.chat.prompts import SUMMARY_PREFIX
+from app.chat.prompts import ANCHOR_WINDOW_PREFIX, SUMMARY_PREFIX
+from app.config import settings
 from app.models.audit import RollingSummary
 from app.models.chat import Message
 from app.models.enums import MessageRole
@@ -108,6 +109,138 @@ async def build_context(sid: UUID, db: AsyncSession) -> list[BaseMessage]:
 
     return messages
 
+
+# ---------------------------------------------------------------------------
+# M9 三级干预上下文装配函数（§D）
+# ---------------------------------------------------------------------------
+
+
+async def load_recent_active_pairs(
+    sid: UUID,
+    current_turn: int,
+    db: AsyncSession,
+    n: int,
+) -> list[BaseMessage]:
+    """取当前轮之前最近 n 对 active human/ai 消息，按 turn 升序返回。
+
+    SQL：WHERE turn_number < current_turn AND status='active'
+    ORDER BY turn_number DESC LIMIT n*2 → Python reversed() 升序。
+    """
+    rows = (
+        (
+            await db.execute(
+                select(Message)
+                .where(
+                    Message.session_id == sid,
+                    Message.turn_number < current_turn,
+                    Message.status == "active",
+                )
+                .order_by(Message.turn_number.desc())
+                .limit(n * 2)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [_to_lc_message(m) for m in reversed(rows)]
+
+
+async def build_crisis_context(
+    sid: UUID,
+    db: AsyncSession,
+    target_message_id: UUID,
+) -> tuple[SystemMessage, list[BaseMessage]]:
+    """crisis 上下文装配：anchor_window（绕 status） + after_anchor（仅 active）。
+
+    anchor_window：anchor 及其之前 N 对（2N 条），绕过 status 过滤
+    （物理原文段，不应被压缩/丢弃截断）。
+    after_anchor：anchor 之后所有 active 行，不限条数。
+
+    Returns:
+        (anchor_system, after_anchor)
+        - anchor_system: SystemMessage(content="[anchor 窗口]\\nrole: content\\n...")
+        - after_anchor: 剩余 active 消息列表（HumanMessage/AIMessage）
+    """
+    anchor = await db.scalar(
+        select(Message).where(Message.id == target_message_id)
+    )
+    if anchor is None:
+        raise ValueError(f"crisis anchor not found: {target_message_id}")
+
+    n = settings.crisis_context_recent_turns  # 默认 5 对
+
+    # anchor_window：绕 status，以 created_at 切分
+    aw_rows = (
+        (
+            await db.execute(
+                select(Message)
+                .where(
+                    Message.session_id == sid,
+                    Message.created_at <= anchor.created_at,
+                )
+                .order_by(Message.created_at.desc())
+                .limit(n * 2)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    anchor_text_lines = [
+        f"{m.role.value}: {m.content}" for m in reversed(aw_rows)
+    ]
+    anchor_system = SystemMessage(
+        content=ANCHOR_WINDOW_PREFIX + "\n" + "\n".join(anchor_text_lines)
+    )
+
+    # after_anchor：仅 active，anchor 之后
+    after_rows = (
+        (
+            await db.execute(
+                select(Message)
+                .where(
+                    Message.session_id == sid,
+                    Message.created_at > anchor.created_at,
+                    Message.status == "active",
+                )
+                .order_by(Message.created_at.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return anchor_system, [_to_lc_message(m) for m in after_rows]
+
+
+async def build_redline_context(
+    sid: UUID,
+    current_turn: int,
+    db: AsyncSession,
+) -> tuple[list[SystemMessage], list[BaseMessage]]:
+    """红线上下文装配：turn_summaries 前缀 + 最近 active 对。
+
+    Returns:
+        (summaries_systems, recent_pairs)
+        - summaries_systems: 最近 redline_turn_summaries_window 条摘要的 SystemMessage 列表
+        - recent_pairs: 最近 redline_context_recent_turns 对 active 消息
+    """
+    rs = await db.scalar(
+        select(RollingSummary).where(RollingSummary.session_id == sid).limit(1)
+    )
+    summaries: list[SystemMessage] = []
+    if rs and rs.turn_summaries:
+        # 取最近 redline_turn_summaries_window 条
+        recent = rs.turn_summaries[-settings.redline_turn_summaries_window :]
+        for s in recent:
+            text = f"Turn {s.get('turn_number', '?')}: {s.get('summary', '')}"
+            summaries.append(SystemMessage(content=text))
+
+    pairs = await load_recent_active_pairs(
+        sid, current_turn, db, n=settings.redline_context_recent_turns,
+    )
+    return summaries, pairs
+
+
+# ---- LangChain 消息转换 ----
 
 def _to_lc_message(m: Message) -> BaseMessage:
     """将 Message ORM 对象转换为 LangChain 消息。"""
