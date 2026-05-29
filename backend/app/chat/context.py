@@ -36,6 +36,50 @@ from app.models.chat import Message
 from app.models.enums import MessageRole
 
 
+async def _load_active_messages(
+    sid: UUID,
+    db: AsyncSession,
+    *,
+    until_turn: int | None = None,
+) -> list[Message]:
+    """底层共享 helper：查询 session 中 status='active' 的消息。
+
+    Args:
+        until_turn: 非 None 时只返回 turn_number < until_turn 的行
+                    （用于 main W1 装配链，排除本轮 human）
+    """
+    stmt = select(Message).where(Message.session_id == sid, Message.status == "active")
+    if until_turn is not None:
+        stmt = stmt.where(Message.turn_number < until_turn)
+    stmt = stmt.order_by(Message.created_at.asc())
+    return list((await db.execute(stmt)).scalars())
+
+
+async def load_active_history_for_assembly(
+    sid: UUID,
+    current_turn: int,
+    db: AsyncSession,
+) -> list[BaseMessage]:
+    """main W1 wrapper 装配链专用：返回不含本轮 human 的历史 + turn_summaries 前缀。
+
+    与 build_context 的职责边界：
+    - build_context: audit 路径专用，含本轮 human，不注入 turn_summaries
+    - load_active_history_for_assembly: main W1 装配链专用，不含本轮 human，
+      前缀含 turn_summaries SystemMessage 列表
+    """
+    rs = await db.scalar(
+        select(RollingSummary).where(RollingSummary.session_id == sid).limit(1)
+    )
+    summaries: list[SystemMessage] = []
+    if rs and rs.turn_summaries:
+        for s in rs.turn_summaries:
+            text = f"Turn {s.get('turn_number', '?')}: {s.get('summary', '')}"
+            summaries.append(SystemMessage(content=text))
+
+    rows = await _load_active_messages(sid, db, until_turn=current_turn)
+    return [*summaries, *(_to_lc_message(m) for m in rows)]
+
+
 async def build_context(sid: UUID, db: AsyncSession) -> list[BaseMessage]:
     """返回 sid 所有 active 消息，按 created_at ASC，无 LIMIT。
 
@@ -45,13 +89,8 @@ async def build_context(sid: UUID, db: AsyncSession) -> list[BaseMessage]:
       将 SystemMessage 注入列表首位
     - session_notes：永不注入主 LLM
     """
-    rows = await db.execute(
-        select(Message)
-        .where(Message.session_id == sid, Message.status == "active")
-        .order_by(Message.created_at.asc())
-    )
-
-    messages: list[BaseMessage] = [_to_lc_message(m) for m in rows.scalars().all()]
+    rows = await _load_active_messages(sid, db)
+    messages: list[BaseMessage] = [_to_lc_message(m) for m in rows]
 
     # rolling_summaries：M6 只读路径，始终 fall through
     # （M8 review worker 写入后改由非空 turn_summaries 触发注入）

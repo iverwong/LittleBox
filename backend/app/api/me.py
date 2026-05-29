@@ -531,6 +531,9 @@ async def chat_stream(
             )
         ).scalar_one_or_none()
 
+        # M9: turn_number = 下一轮号（commit① human + commit② ai 共享同号）
+        _turn_number = (session.ai_turn_counter or 0) + 1
+
         hid: UUID  # human 消息 ID，用于 session_meta 事件
         user_msg: Message | None = None  # 追踪本轮新增的 human message，供 commit① 用
 
@@ -544,6 +547,7 @@ async def chat_stream(
                 role=MessageRole.human,
                 status=MessageStatus.active,
                 content=req.content,
+                turn_number=_turn_number,
             )
             db.add(human)
             await db.flush()
@@ -558,6 +562,7 @@ async def chat_stream(
                 role=MessageRole.human,
                 status=MessageStatus.active,
                 content=req.content,
+                turn_number=_turn_number,
             )
             db.add(human)
             await db.flush()
@@ -585,6 +590,7 @@ async def chat_stream(
                         role=MessageRole.human,
                         status=MessageStatus.active,
                         content=req.content,
+                        turn_number=_turn_number,
                     )
                     db.add(new_human)
                     await db.flush()
@@ -623,9 +629,6 @@ async def chat_stream(
             rr: RuntimeResources = request.app.state.resources
 
             from app.chat.state import MainDialogueState
-
-            # M8: ai_turn_counter → turn_number（下一轮号）
-            _turn_number = (session.ai_turn_counter or 0) + 1
 
             ctx = ChatContextSchema(
                 session_id=sid,
@@ -858,6 +861,7 @@ async def chat_stream(
                             content=accumulated,
                             status=MessageStatus.active,
                             finish_reason="user_stopped",
+                            turn_number=_turn_number,
                         )
                         db.add(ai_msg)
                         await db.flush()
@@ -892,6 +896,7 @@ async def chat_stream(
                         content=accumulated,
                         status=MessageStatus.active,
                         finish_reason=last_finish_reason,
+                        turn_number=_turn_number,
                     )
                     db.add(ai_msg)
                     await db.flush()
