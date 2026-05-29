@@ -65,12 +65,8 @@ def _make_fake_runtime(sid: str = "00000000-0000-0000-0000-000000000001") -> obj
     return SimpleNamespace(context=ctx)
 
 
-def _make_state(turn_number: int = 2, sid: str = "test-sid") -> MainDialogueState:
+def _make_state(turn_number: int = 2) -> MainDialogueState:
     return MainDialogueState(
-        session_id=sid,
-        child_user_id="child-1",
-        child_profile=None,
-        provider="deepseek",
         messages=[],
         audit_state={},
         generated_token_count=0,

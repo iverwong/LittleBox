@@ -88,9 +88,6 @@ def _make_state(
     messages: list | None = None,
 ) -> MainDialogueState:
     return {
-        "session_id": "s1",
-        "child_user_id": "c1",
-        "provider": "deepseek",
         "messages": messages or [],
         "audit_state": audit_state or dict(_ALL_FALSE_AUDIT),
         "generated_token_count": 0,

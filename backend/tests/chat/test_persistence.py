@@ -273,17 +273,12 @@ async def test_enqueue_audit_sets_pending_and_enqueues(db_session, child_user):
     }
 
     with (
-        patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
         patch(
             "app.chat.graph.AuditSignalsManager",
             return_value=mock_manager,
         ),
-        patch(
-            "arq.create_pool",
-            return_value=mock_arq_pool,
-        ),
     ):
-        await enqueue_audit(sid, db_session, turn_number=1, child_user_id=child_user.id, target_message_id=sid)
+        await enqueue_audit(mock_arq_pool, mock_redis, sid, db_session, turn_number=1, child_user_id=child_user.id, target_message_id=sid)
 
         mock_manager.set_pending.assert_awaited_once()
         args, kwargs = mock_manager.set_pending.await_args

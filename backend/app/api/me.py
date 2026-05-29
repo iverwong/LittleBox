@@ -633,9 +633,6 @@ async def chat_stream(
             )
 
             initial_state: MainDialogueState = {
-                "session_id": str(sid),
-                "child_user_id": str(current.id),
-                "provider": rr.settings.main_provider,
                 "messages": [],  # build_messages_main 节点从 DB 装载
                 "audit_state": {
                     "crisis_locked": False,
@@ -865,7 +862,7 @@ async def chat_stream(
                                 session.needs_compression = True
                         await db.commit()
 
-                        await enqueue_audit(sid, db, _turn_number, current.id, aid)
+                        await enqueue_audit(rr.arq_pool, rr.audit_redis, sid, db, _turn_number, current.id, aid)
 
                         if client_alive:
                             yield _frame_sse_event(
@@ -900,7 +897,7 @@ async def chat_stream(
                             session.needs_compression = True
                     await db.commit()
 
-                    await enqueue_audit(sid, db, _turn_number, current.id, aid)
+                    await enqueue_audit(rr.arq_pool, rr.audit_redis, sid, db, _turn_number, current.id, aid)
 
                     if client_alive:
                         yield _frame_sse_event(

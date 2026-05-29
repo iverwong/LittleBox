@@ -25,9 +25,6 @@ def test_route_by_risk_four_branches():
     from app.chat.state import MainDialogueState
 
     state: MainDialogueState = {
-        "session_id": "test",
-        "child_user_id": "child-1",
-        "provider": "deepseek",
         "messages": [],
         "audit_state": {
             "crisis_locked": False,

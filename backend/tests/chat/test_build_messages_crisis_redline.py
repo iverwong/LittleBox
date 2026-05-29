@@ -16,7 +16,6 @@ from app.chat.state import MainDialogueState
 pytestmark = pytest.mark.asyncio
 
 _STATE: MainDialogueState = {
-    "session_id": "s1", "child_user_id": "c1", "provider": "deepseek",
     "messages": [], "audit_state": {"crisis_locked": False,
                                      "crisis_detected": False,
                                      "redline_triggered": False,

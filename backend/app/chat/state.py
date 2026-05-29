@@ -29,14 +29,11 @@ class AuditState(TypedDict):
 class MainDialogueState(TypedDict):
     """Per-turn state for the main dialogue LangGraph.
 
-    Scalar fields (session_id / child_user_id / etc.) do NOT need
+    Scalar fields (generated_token_count / client_alive / etc.) do NOT need
     Annotated reducers — LangGraph last-write-wins semantics suffices.
     Only ``messages`` needs add_messages (append-only history).
     """
 
-    session_id: str
-    child_user_id: str
-    provider: str  # 当前对话 provider 名，由 me.py 从 settings.main_provider 填入
     messages: Annotated[list[BaseMessage], add_messages]
     audit_state: AuditState  # M8: load_audit_state 节点填充
     generated_token_count: int

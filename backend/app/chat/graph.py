@@ -31,7 +31,6 @@ from sqlalchemy import select
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.redis_client import _build_arq_redis_url
 from app.chat.context import (
     build_crisis_context,
     build_redline_context,
@@ -56,7 +55,9 @@ from app.models.enums import InterventionType, MessageRole, MessageStatus
 from app.state.audit_signals import AuditSignalsManager
 
 if TYPE_CHECKING:
+    from arq.connections import ArqRedis
     from langgraph.runtime import Runtime
+    from redis.asyncio import Redis
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,8 @@ async def persist_ai_turn(
 
 
 async def enqueue_audit(
+    arq_pool: ArqRedis,
+    audit_redis: Redis,
     sid: uuid.UUID,
     db: AsyncSession,
     turn_number: int,
@@ -117,48 +120,16 @@ async def enqueue_audit(
 ) -> None:
     """SET Redis pending + ARQ enqueue 触发异步审查。
 
-    D4 决议：先 SET pending 再 enqueue 再返回。~~5-10ms 延迟换确定性。
-    资源管理：每次调用建立独立 ArqRedis 连接，用后关闭（M14 优化为单例）。
-    T10（D-patch0-7）：child_user_id 参数由 me.py 从 ChatContextSchema 取值下传，
-    供 ARQ worker 构造 AuditContextSchema 使用，避免 worker 内 SELECT 反查。
+    §H.2 单例迁移：arq_pool / audit_redis 由 RuntimeResources 注入，
+    生命周期由 teardown_runtime 独占关闭，helper 内只用不关。
     """
-    from arq import create_pool
-    from arq.connections import RedisSettings
-    from redis.asyncio import Redis
+    manager = AuditSignalsManager(audit_redis, ttl=settings.audit_redis_ttl_seconds)
+    await manager.set_pending(str(sid), turn_number, started_at=datetime.now(UTC).isoformat())
 
-    # T13（γ-2）：_build_arq_redis_url 是单一来源 helper，
-    # auth/redis_client.py 中定义，runtime.py:45 共享调用。
-    _audit_redis_url = _build_arq_redis_url()
-    redis = Redis.from_url(_audit_redis_url, encoding="utf-8", decode_responses=True)
-
-    # 提取 ARQ 连接参数（需在 redis.aclose() 之前，否则 connection_pool 变为 None）
-    _arq_host = str(redis.connection_pool.connection_kwargs.get("host", "localhost"))
-    _arq_port = int(redis.connection_pool.connection_kwargs.get("port", 6379))
-    _arq_password = redis.connection_pool.connection_kwargs.get("password")
-
-    try:
-        manager = AuditSignalsManager(redis, ttl=settings.audit_redis_ttl_seconds)
-        await manager.set_pending(str(sid), turn_number, started_at=datetime.now(UTC).isoformat())
-    finally:
-        await redis.aclose()
-
-    # 2) ARQ enqueue
-    arq_pool = await create_pool(
-        RedisSettings(
-            host=_arq_host,
-            port=_arq_port,
-            password=_arq_password,
-            database=settings.arq_redis_db,
-        ),
+    await arq_pool.enqueue_job(
+        "run_audit", str(sid), turn_number, str(child_user_id), str(target_message_id),
+        _job_id=f"audit:{sid}:{turn_number}",
     )
-    try:
-        await arq_pool.enqueue_job(
-            "run_audit", str(sid), turn_number, str(child_user_id), str(target_message_id),
-            _job_id=f"audit:{sid}:{turn_number}",
-        )
-    finally:
-        await arq_pool.close()
-        await arq_pool.connection_pool.disconnect()  # type: ignore[attr-defined] — arq stubs
 
     logger.info("audit.enqueued sid=%s turn=%s", sid, turn_number)
 

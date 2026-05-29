@@ -57,9 +57,6 @@ def _make_state(
 ) -> MainDialogueState:
     """Minimal initial state for graph node unit tests."""
     return {
-        "session_id": "550e8400-e29b-41d4-a716-446655440000",
-        "child_user_id": "child-uuid",
-        "provider": provider,
         "messages": messages or [],
         "audit_state": audit_state or _ALL_FALSE_AUDIT,
         "generated_token_count": 0,

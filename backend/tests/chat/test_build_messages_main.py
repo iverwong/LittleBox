@@ -46,7 +46,6 @@ async def test_build_messages_main_assembles_system_and_history():
         audit_redis=MagicMock(),
     )
     state: MainDialogueState = {
-        "session_id": "s1", "child_user_id": "c1", "provider": "deepseek",
         "messages": [], "audit_state": {"crisis_locked": False,
                                          "crisis_detected": False,
                                          "redline_triggered": False,
@@ -92,7 +91,6 @@ async def test_build_messages_main_with_guidance():
         audit_redis=MagicMock(),
     )
     state: MainDialogueState = {
-        "session_id": "s1", "child_user_id": "c1", "provider": "deepseek",
         "messages": [], "audit_state": {"crisis_locked": False,
                                          "crisis_detected": False,
                                          "redline_triggered": False,

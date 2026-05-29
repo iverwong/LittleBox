@@ -254,7 +254,9 @@ async def test_stop_no_ai(
     async def fake_astream_no_content(initial_state, stream_mode="custom", **kwargs):
         # Generator registered its event in running_streams before calling astream;
         # look it up and set it before yielding any content-bearing payload.
-        sid = initial_state["session_id"]
+        # §H.1: session_id 从 context kwarg 取（MainDialogueState 已删 session_id 字段）
+        ctx = kwargs.get("context")
+        sid = str(ctx.session_id) if ctx else None
         ev = running_streams.get(sid)
         if ev is not None:
             ev.set()
@@ -325,7 +327,8 @@ async def test_stop_with_ai(
         # Generator processes this payload (accumulate, yield SSE),
         # then calls __anext__() — resume here.
         # Set the stop event BEFORE yielding the next payload.
-        sid = initial_state["session_id"]
+        ctx = kwargs.get("context")
+        sid = str(ctx.session_id) if ctx else None
         ev = running_streams.get(sid)
         if ev is not None:
             ev.set()

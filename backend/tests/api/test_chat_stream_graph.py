@@ -1294,11 +1294,11 @@ async def test_enqueue_audit_target_message_id_equals_aid(
     )
     assert aid is not None, "SSE end frame must contain aid"
 
-    # enqueue_audit(sid, db, _turn_number, current.id, aid)
-    # target_message_id is positional arg #4 (0-indexed) or #5 (1-indexed)
+    # enqueue_audit(arq_pool, audit_redis, sid, db, _turn_number, current.id, aid)
+    # target_message_id is positional arg #6 (0-indexed) / #7 (1-indexed)
     call_args = enqueue_spy.call_args[0]
-    assert len(call_args) >= 5, f"Expected 5+ positional args, got {len(call_args)}"
-    str_target = str(call_args[4])  # target_message_id
+    assert len(call_args) >= 7, f"Expected 7 positional args, got {len(call_args)}"
+    str_target = str(call_args[6])  # target_message_id
     assert str_target == aid, (
         f"enqueue_audit target_message_id({str_target}) != SSE aid({aid})"
     )
