@@ -6,8 +6,13 @@
 - build_system_prompt — 主对话 5 段 system prompt（年龄 + 性别驱动）
 - COMPRESSION_PROMPT_STUB — M8 上下文压缩 prompt 占位
 - build_compression_prompt — 同上，返回 SystemMessage 包装
+- build_crisis_system_prompt — 危机接管 system prompt（tier/gender 复用主对话分段）
+- build_redline_system_prompt — 红线接管 system prompt（同上）
+- format_reentry_wrapper_crisis — crisis 重入 wrapper（{user_input} 占位）
+- format_reentry_wrapper_redline — redline 重入 wrapper（{user_input} 占位）
+- format_guidance_wrapper — 引导注入 wrapper（{user_input} + {guidance} 占位）
 
-9 个 TODO(prompts-content) slot 待专人审核后填充。
+14 个 prompt 占位 slot 待专人审核后填充。
 """
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -24,7 +29,7 @@ STUB_TIER_TEEN = "[STUB tier:teen]"
 STUB_TIER_YOUNG_ADULT = "[STUB tier:young_adult]"
 STUB_GENDER_MALE = "[STUB gender:male]"
 STUB_GENDER_FEMALE = "[STUB gender:female]"
-# Total: 9 TODO(prompts-content) slots
+# Total: 14 prompt slots
 
 
 def compute_age(birth_date: date, tz: str = "Asia/Shanghai") -> int:
@@ -113,4 +118,85 @@ COMPRESSION_PROMPT_STUB = (
     "保留聊过的话题、对方分享过的事和喜好、提到的人或物、约定要一起做的事。"
     "不复述完整对白。"
 )
+
+
+# ---- M9 crisis anchor_window 前缀（§D.1，供 context.py 引用） ----
+
+ANCHOR_WINDOW_PREFIX = "[anchor 窗口]"
+
+# ---- M9 三级干预 STUB prompt + wrapper（14 个 TODO slot 中新增的 5 个） ----
+
+# C.1
+STUB_CRISIS_SYSTEM_PROMPT = (
+    "# TODO(prompts-content): crisis 接管身份与安全底线\n"
+    "[STUB crisis intervention system prompt]"
+)
+
+# C.2
+STUB_REDLINE_SYSTEM_PROMPT = (
+    "# TODO(prompts-content): redline 接管身份与安全底线\n"
+    "[STUB redline intervention system prompt]"
+)
+
+# C.3
+STUB_REENTRY_WRAPPER_CRISIS = (
+    "TODO(prompts-content): crisis 重入 wrapper\n"
+    "用户输入：{user_input}"
+)
+
+# C.4
+STUB_REENTRY_WRAPPER_REDLINE = (
+    "TODO(prompts-content): redline 重入 wrapper\n"
+    "用户输入：{user_input}"
+)
+
+# C.5（guidance 为空时透传 user_input，不包装）
+STUB_GUIDANCE_WRAPPER = (
+    "TODO(prompts-content): 引导注入 wrapper\n"
+    "用户输入：{user_input}\n"
+    "引导建议：{guidance}"
+)
+
+
+def build_crisis_system_prompt(age: int, gender: str | None) -> SystemMessage:
+    """危机接管 system prompt，5 段结构同 build_system_prompt。"""
+    parts: list[str] = []
+    parts.append(f"# 身份与原则\n{STUB_CRISIS_SYSTEM_PROMPT}")
+    parts.append(f"# 安全底线\n{STUB_CRISIS_SYSTEM_PROMPT}")
+    parts.append(f"# 对话风格\n{_tier_block(age)}")
+    g = _gender_block(gender)
+    if g is not None:
+        parts.append(f"# 关于对方的性别\n{g}")
+    parts.append(f"# 当前对话上下文\n对方今年 {age} 岁。")
+    return SystemMessage(content="\n\n".join(parts))
+
+
+def build_redline_system_prompt(age: int, gender: str | None) -> SystemMessage:
+    """红线接管 system prompt，5 段结构同 build_system_prompt。"""
+    parts: list[str] = []
+    parts.append(f"# 身份与原则\n{STUB_REDLINE_SYSTEM_PROMPT}")
+    parts.append(f"# 安全底线\n{STUB_REDLINE_SYSTEM_PROMPT}")
+    parts.append(f"# 对话风格\n{_tier_block(age)}")
+    g = _gender_block(gender)
+    if g is not None:
+        parts.append(f"# 关于对方的性别\n{g}")
+    parts.append(f"# 当前对话上下文\n对方今年 {age} 岁。")
+    return SystemMessage(content="\n\n".join(parts))
+
+
+def format_reentry_wrapper_crisis(user_input: str) -> str:
+    """crisis 重入 wrapper：包装用户输入后送入 crisis LLM。"""
+    return STUB_REENTRY_WRAPPER_CRISIS.format(user_input=user_input)
+
+
+def format_reentry_wrapper_redline(user_input: str) -> str:
+    """redline 重入 wrapper：包装用户输入后送入 redline LLM。"""
+    return STUB_REENTRY_WRAPPER_REDLINE.format(user_input=user_input)
+
+
+def format_guidance_wrapper(user_input: str, guidance: str | None) -> str:
+    """引导注入 wrapper：guidance 为空时透传 user_input。"""
+    if not guidance:
+        return user_input
+    return STUB_GUIDANCE_WRAPPER.format(user_input=user_input, guidance=guidance)
 

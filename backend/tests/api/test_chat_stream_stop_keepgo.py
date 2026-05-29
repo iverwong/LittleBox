@@ -246,7 +246,7 @@ def _make_delta_frame(text: str) -> bytes:
 
 @pytest.mark.asyncio
 async def test_stop_no_ai(
-    api_client_with_eval, auth_headers_child, db_session, redis_client,
+    app_with_eval, api_client_with_eval, auth_headers_child, db_session, redis_client,
 ):
     """StopNoAi: event set before graph yields content → stopped without aid, DB human only."""
     headers, child = auth_headers_child
@@ -254,19 +254,21 @@ async def test_stop_no_ai(
     async def fake_astream_no_content(initial_state, stream_mode="custom", **kwargs):
         # Generator registered its event in running_streams before calling astream;
         # look it up and set it before yielding any content-bearing payload.
-        sid = initial_state["session_id"]
+        # §H.1: session_id 从 context kwarg 取（MainDialogueState 已删 session_id 字段）
+        ctx = kwargs.get("context")
+        sid = str(ctx.session_id) if ctx else None
         ev = running_streams.get(sid)
         if ev is not None:
             ev.set()
         yield {"finish_reason": "stop"}  # no delta → has_emitted_content stays False
 
-    with patch("app.api.me._main_graph.astream",fake_astream_no_content):
-        body = make_payload(content="Hello")
-        resp = await api_client_with_eval.post(
-            "/api/v1/me/chat/stream", json=body, headers=headers,
-        )
-        assert resp.status_code == 200
-        await resp.aclose()
+    app_with_eval.state.resources.main_graph.astream = fake_astream_no_content
+    body = make_payload(content="Hello")
+    resp = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body, headers=headers,
+    )
+    assert resp.status_code == 200
+    await resp.aclose()
 
     frames = _parse_sse_frames(resp.text)
     frame_types = [f["type"] for f in frames]
@@ -315,7 +317,7 @@ async def test_stop_no_ai(
 
 @pytest.mark.asyncio
 async def test_stop_with_ai(
-    api_client_with_eval, auth_headers_child, db_session, redis_client,
+    app_with_eval, api_client_with_eval, auth_headers_child, db_session, redis_client,
 ):
     """StopWithAi: event set after first delta → stopped with aid + DB ai + 'user_stopped'."""
     headers, child = auth_headers_child
@@ -325,20 +327,21 @@ async def test_stop_with_ai(
         # Generator processes this payload (accumulate, yield SSE),
         # then calls __anext__() — resume here.
         # Set the stop event BEFORE yielding the next payload.
-        sid = initial_state["session_id"]
+        ctx = kwargs.get("context")
+        sid = str(ctx.session_id) if ctx else None
         ev = running_streams.get(sid)
         if ev is not None:
             ev.set()
         yield {"finish_reason": "stop"}
         # Generator: no delta, stop check fires → StopWithAi
 
-    with patch("app.api.me._main_graph.astream",fake_astream_with_stop):
-        body = make_payload(content="Hi")
-        resp = await api_client_with_eval.post(
-            "/api/v1/me/chat/stream", json=body, headers=headers,
-        )
-        assert resp.status_code == 200
-        await resp.aclose()
+    app_with_eval.state.resources.main_graph.astream = fake_astream_with_stop
+    body = make_payload(content="Hi")
+    resp = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body, headers=headers,
+    )
+    assert resp.status_code == 200
+    await resp.aclose()
 
     frames = _parse_sse_frames(resp.text)
     frame_types = [f["type"] for f in frames]
@@ -392,7 +395,7 @@ async def test_stop_with_ai(
 
 @pytest.mark.asyncio
 async def test_keepgo_connection_error(
-    api_client_with_eval, auth_headers_child, db_session, redis_client,
+    app_with_eval, api_client_with_eval, auth_headers_child, db_session, redis_client,
 ):
     """ConnectionError at SSE yield → LLM stream continues, all chunks consumed, DB written."""
     headers, child = auth_headers_child
@@ -421,14 +424,14 @@ async def test_keepgo_connection_error(
                 raise ConnectionError("mock client disconnect")
             yield _make_delta_frame(p.get("delta", ""))
 
-    with patch("app.api.me._main_graph.astream",fake_astream):
-        with patch("app.api.me.stream_graph_to_sse", mock_stream_to_sse):
-            body = make_payload(content="Hi")
-            resp = await api_client_with_eval.post(
-                "/api/v1/me/chat/stream", json=body, headers=headers,
-            )
-            assert resp.status_code == 200
-            await resp.aclose()
+    app_with_eval.state.resources.main_graph.astream = fake_astream
+    with patch("app.api.me.stream_graph_to_sse", mock_stream_to_sse):
+        body = make_payload(content="Hi")
+        resp = await api_client_with_eval.post(
+            "/api/v1/me/chat/stream", json=body, headers=headers,
+        )
+        assert resp.status_code == 200
+        await resp.aclose()
 
     # 关注点4+6: 所有 fake stream chunk 均被消费（不 cancel 语义）
     assert consumed_count == len(fake_payloads), (
@@ -470,7 +473,7 @@ async def test_keepgo_connection_error(
 
 @pytest.mark.asyncio
 async def test_running_streams_cleaned_after_normal_end(
-    api_client_with_eval, auth_headers_child, db_session,
+    app_with_eval, api_client_with_eval, auth_headers_child, db_session,
 ):
     """Natural stream end: running_streams entry is removed in finally."""
     headers, child = auth_headers_child
@@ -479,13 +482,13 @@ async def test_running_streams_cleaned_after_normal_end(
         yield {"delta": "Normal"}
         yield {"finish_reason": "stop"}
 
-    with patch("app.api.me._main_graph.astream",fake_astream):
-        body = make_payload(content="Hi")
-        resp = await api_client_with_eval.post(
-            "/api/v1/me/chat/stream", json=body, headers=headers,
-        )
-        assert resp.status_code == 200
-        await resp.aclose()
+    app_with_eval.state.resources.main_graph.astream = fake_astream
+    body = make_payload(content="Hi")
+    resp = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body, headers=headers,
+    )
+    assert resp.status_code == 200
+    await resp.aclose()
 
     frames = _parse_sse_frames(resp.text)
     sid = frames[0]["data"]["session_id"]
@@ -501,7 +504,7 @@ async def test_running_streams_cleaned_after_normal_end(
 
 @pytest.mark.asyncio
 async def test_running_streams_cleaned_after_error(
-    api_client_with_eval, auth_headers_child, db_session,
+    app_with_eval, api_client_with_eval, auth_headers_child, db_session,
 ):
     """Error path: running_streams entry is removed in finally."""
     headers, child = auth_headers_child
@@ -510,13 +513,13 @@ async def test_running_streams_cleaned_after_error(
         yield {"delta": "before error"}
         raise RuntimeError("graph failure")
 
-    with patch("app.api.me._main_graph.astream",fake_astream_broken):
-        body = make_payload(content="Hi")
-        resp = await api_client_with_eval.post(
-            "/api/v1/me/chat/stream", json=body, headers=headers,
-        )
-        assert resp.status_code == 200
-        await resp.aclose()
+    app_with_eval.state.resources.main_graph.astream = fake_astream_broken
+    body = make_payload(content="Hi")
+    resp = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body, headers=headers,
+    )
+    assert resp.status_code == 200
+    await resp.aclose()
 
     frames = _parse_sse_frames(resp.text)
     sid = frames[0]["data"]["session_id"]
@@ -543,7 +546,7 @@ async def test_running_streams_cleaned_after_error(
 
 @pytest.mark.asyncio
 async def test_keepgo_inner_yield_connection_error(
-    api_client_with_eval, auth_headers_child, db_session, redis_client,
+    app_with_eval, api_client_with_eval, auth_headers_child, db_session, redis_client,
 ):
     """Inner ``yield frame`` catches BrokenResourceError via athrow → client_alive=False.
 
@@ -577,14 +580,14 @@ async def test_keepgo_inner_yield_connection_error(
         self.body_iterator = _BrokenOnCall(self.body_iterator, break_after=2)
 
     with patch.object(StreamingResponse, "__init__", patched_sr_init):
-        with patch("app.api.me._main_graph.astream",fake_astream):
-            body = {"content": "Hi"}
-            resp = await api_client_with_eval.post(
-                "/api/v1/me/chat/stream", json=body, headers=headers,
-            )
-            assert resp.status_code == 200
-            # 读取完整 body — 生成器在后台处理所有 payload 后结束
-            _ = resp.text
+        app_with_eval.state.resources.main_graph.astream = fake_astream
+        body = {"content": "Hi"}
+        resp = await api_client_with_eval.post(
+            "/api/v1/me/chat/stream", json=body, headers=headers,
+        )
+        assert resp.status_code == 200
+        # 读取完整 body — 生成器在后台处理所有 payload 后结束
+        _ = resp.text
 
     # 断言 1: LLM 流全部消费完
     assert consumed_count == len(fake_payloads), (

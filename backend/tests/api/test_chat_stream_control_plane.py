@@ -193,7 +193,9 @@ def _make_fake_graph_astream(fake_payloads: list[dict]):
 
 
 @pytest.mark.asyncio
-async def test_decision_row1_first_turn(api_client_with_eval, auth_headers_child, db_session):
+async def test_decision_row1_first_turn(
+    app_with_eval, api_client_with_eval, auth_headers_child, db_session,
+):
     """Row 1: first turn (session resolved via policy) creates human active, returns 200."""
     headers, child = auth_headers_child
     body = make_payload(content="Hello world")
@@ -202,25 +204,25 @@ async def test_decision_row1_first_turn(api_client_with_eval, auth_headers_child
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch("app.api.me._main_graph.astream",fake_astream):
-        resp = await api_client_with_eval.post(
-            "/api/v1/me/chat/stream", json=body, headers=headers
-        )
-        assert resp.status_code == 200
+    app_with_eval.state.resources.main_graph.astream = fake_astream
+    resp = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body, headers=headers
+    )
+    assert resp.status_code == 200
 
-        # SSE frames: session_meta + delta + end
-        frames = _parse_sse_stream(resp.text)
-        assert frames[0]["type"] == "session_meta"
-        sid = frames[0]["data"]["session_id"]
-        assert frames[1]["type"] == "delta"
-        assert frames[2]["type"] == "end"
+    # SSE frames: session_meta + delta + end
+    frames = _parse_sse_stream(resp.text)
+    assert frames[0]["type"] == "session_meta"
+    sid = frames[0]["data"]["session_id"]
+    assert frames[1]["type"] == "delta"
+    assert frames[2]["type"] == "end"
 
-        # DB: session active + human active
-        session_row = await db_session.get(SessionModel, sid)
-        assert session_row is not None
-        assert session_row.status == MessageStatus.active
-        assert session_row.child_user_id == child.id
-        assert "周" in session_row.title and "月" in session_row.title
+    # DB: session active + human active
+    session_row = await db_session.get(SessionModel, sid)
+    assert session_row is not None
+    assert session_row.status == MessageStatus.active
+    assert session_row.child_user_id == child.id
+    assert "周" in session_row.title and "月" in session_row.title
 
     msgs = (
         (
@@ -264,7 +266,9 @@ async def test_decision_row2_regen_on_empty_session(api_client_with_eval, auth_h
 
 
 @pytest.mark.asyncio
-async def test_decision_row3_ai_continuation(api_client_with_eval, auth_headers_child, db_session):
+async def test_decision_row3_ai_continuation(
+    app_with_eval, api_client_with_eval, auth_headers_child, db_session,
+):
     """Row 3: last message is AI, insert new human."""
     headers, child = auth_headers_child
 
@@ -284,11 +288,11 @@ async def test_decision_row3_ai_continuation(api_client_with_eval, auth_headers_
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch("app.api.me._main_graph.astream",fake_astream):
-        resp = await api_client_with_eval.post(
-            "/api/v1/me/chat/stream", json=body, headers=headers
-        )
-        assert resp.status_code == 200
+    app_with_eval.state.resources.main_graph.astream = fake_astream
+    resp = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body, headers=headers
+    )
+    assert resp.status_code == 200
 
     msgs = (
         (
@@ -346,7 +350,7 @@ async def test_decision_row4_ai_regen_invalid(api_client_with_eval, auth_headers
 
 @pytest.mark.asyncio
 async def test_decision_row5_orphan_regen_null(
-    api_client_with_eval, auth_headers_child, db_session
+    app_with_eval, api_client_with_eval, auth_headers_child, db_session
 ):
     """Row 5: orphan human + null → UPDATE old discarded + INSERT new human; both in same tx."""
     headers, child = auth_headers_child
@@ -368,11 +372,11 @@ async def test_decision_row5_orphan_regen_null(
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch("app.api.me._main_graph.astream",fake_astream):
-        resp = await api_client_with_eval.post(
-            "/api/v1/me/chat/stream", json=body, headers=headers
-        )
-        assert resp.status_code == 200
+    app_with_eval.state.resources.main_graph.astream = fake_astream
+    resp = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body, headers=headers
+    )
+    assert resp.status_code == 200
 
     msgs = (
         (
@@ -408,7 +412,7 @@ async def test_decision_row5_orphan_regen_null(
 
 @pytest.mark.asyncio
 async def test_decision_row6_orphan_reuse(
-    api_client_with_eval, auth_headers_child, db_session
+    app_with_eval, api_client_with_eval, auth_headers_child, db_session
 ):
     """Row 6: orphan + =hid → reuse orphan row (no INSERT, no content update)."""
     headers, child = auth_headers_child
@@ -433,11 +437,11 @@ async def test_decision_row6_orphan_reuse(
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch("app.api.me._main_graph.astream",fake_astream):
-        resp = await api_client_with_eval.post(
-            "/api/v1/me/chat/stream", json=body, headers=headers
-        )
-        assert resp.status_code == 200
+    app_with_eval.state.resources.main_graph.astream = fake_astream
+    resp = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body, headers=headers
+    )
+    assert resp.status_code == 200
 
     frames = _parse_sse_stream(resp.text)
     hid_in_meta = frames[0]["data"]["hid"]
@@ -525,7 +529,7 @@ async def test_decision_row7_orphan_history_regen(
 
 @pytest.mark.asyncio
 async def test_decision_row3_with_prior_human(
-    api_client_with_eval, auth_headers_child, db_session
+    app_with_eval, api_client_with_eval, auth_headers_child, db_session
 ):
     """Row 3 sub-scenario: session has H1 + AI already, insert new human (H2).
 
@@ -556,11 +560,11 @@ async def test_decision_row3_with_prior_human(
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch("app.api.me._main_graph.astream",fake_astream):
-        resp = await api_client_with_eval.post(
-            "/api/v1/me/chat/stream", json=body, headers=headers
-        )
-        assert resp.status_code == 200
+    app_with_eval.state.resources.main_graph.astream = fake_astream
+    resp = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body, headers=headers
+    )
+    assert resp.status_code == 200
 
     msgs = (
         (
@@ -587,7 +591,7 @@ async def test_decision_row3_with_prior_human(
 
 @pytest.mark.asyncio
 async def test_decision_row5_with_prior_ai(
-    api_client_with_eval, auth_headers_child, db_session
+    app_with_eval, api_client_with_eval, auth_headers_child, db_session
 ):
     """Row 5: H1 + A1 + H2 active, regen=null → UPDATE H2 discarded + INSERT H3 active.
 
@@ -622,11 +626,11 @@ async def test_decision_row5_with_prior_ai(
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch("app.api.me._main_graph.astream",fake_astream):
-        resp = await api_client_with_eval.post(
-            "/api/v1/me/chat/stream", json=body, headers=headers
-        )
-        assert resp.status_code == 200
+    app_with_eval.state.resources.main_graph.astream = fake_astream
+    resp = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body, headers=headers
+    )
+    assert resp.status_code == 200
 
     frames = _parse_sse_stream(resp.text)
     hid_in_meta = frames[0]["data"]["hid"]
@@ -653,7 +657,7 @@ async def test_decision_row5_with_prior_ai(
 
 @pytest.mark.asyncio
 async def test_decision_row6_with_prior_ai_reuse(
-    api_client_with_eval, auth_headers_child, db_session
+    app_with_eval, api_client_with_eval, auth_headers_child, db_session
 ):
     """Row 6: H1 + A1 + H2 active, regen=H2.id + content="" → reuse H2 (no new row).
 
@@ -688,11 +692,11 @@ async def test_decision_row6_with_prior_ai_reuse(
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch("app.api.me._main_graph.astream",fake_astream):
-        resp = await api_client_with_eval.post(
-            "/api/v1/me/chat/stream", json=body, headers=headers
-        )
-        assert resp.status_code == 200
+    app_with_eval.state.resources.main_graph.astream = fake_astream
+    resp = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body, headers=headers
+    )
+    assert resp.status_code == 200
 
     frames = _parse_sse_stream(resp.text)
     assert frames[0]["data"]["hid"] == str(h2_id)  # hid unchanged
@@ -713,26 +717,26 @@ async def test_decision_row6_with_prior_ai_reuse(
 
 
 @pytest.mark.asyncio
-async def test_throttle_lock_rejects_second_request(api_client_with_eval, auth_headers_child):
+async def test_throttle_lock_rejects_second_request(app_with_eval, api_client_with_eval, auth_headers_child):
     """1 s 内连发两次 → 第二次 429 RequestThrottled (throttle TTL 自然过期)."""
     headers, _ = auth_headers_child
     body = make_payload(content="first")
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch("app.api.me._main_graph.astream",fake_astream):
-        resp1 = await api_client_with_eval.post(
-            "/api/v1/me/chat/stream", json=body, headers=headers
-        )
-        assert resp1.status_code == 200
+    app_with_eval.state.resources.main_graph.astream = fake_astream
+    resp1 = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body, headers=headers
+    )
+    assert resp1.status_code == 200
 
-        # Immediately send second request (within 1.5s TTL)
-        body2 = make_payload(content="second")
-        resp2 = await api_client_with_eval.post(
-            "/api/v1/me/chat/stream", json=body2, headers=headers
-        )
-        assert resp2.status_code == 429
-        assert "RequestThrottled" in resp2.text
+    # Immediately send second request (within 1.5s TTL)
+    body2 = make_payload(content="second")
+    resp2 = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body2, headers=headers
+    )
+    assert resp2.status_code == 429
+    assert "RequestThrottled" in resp2.text
 
 
 # ---------------------------------------------------------------------------
@@ -780,7 +784,7 @@ async def test_session_lock_rejects_concurrent(
 
 @pytest.mark.asyncio
 async def test_400_releases_session_lock(
-    api_client_with_eval, auth_headers_child, redis_client, db_session
+    app_with_eval, api_client_with_eval, auth_headers_child, redis_client, db_session
 ):
     """HTTPException 400 before StreamingResponse → session lock explicitly released."""
     headers, child = auth_headers_child
@@ -811,16 +815,16 @@ async def test_400_releases_session_lock(
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch("app.api.me._main_graph.astream",fake_astream):
-        resp2 = await api_client_with_eval.post(
-            "/api/v1/me/chat/stream", json=body2, headers=headers
-        )
-        assert resp2.status_code == 200
+    app_with_eval.state.resources.main_graph.astream = fake_astream
+    resp2 = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body2, headers=headers
+    )
+    assert resp2.status_code == 200
 
 
 @pytest.mark.asyncio
 async def test_throttle_lock_self_expires(
-    api_client_with_eval, auth_headers_child, redis_client
+    app_with_eval, api_client_with_eval, auth_headers_child, redis_client
 ):
     """Throttle key uses TTL (SETNX px=1500), not actively deleted."""
     headers, child = auth_headers_child
@@ -828,11 +832,11 @@ async def test_throttle_lock_self_expires(
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch("app.api.me._main_graph.astream",fake_astream):
-        resp1 = await api_client_with_eval.post(
-            "/api/v1/me/chat/stream", json=body, headers=headers
-        )
-        assert resp1.status_code == 200
+    app_with_eval.state.resources.main_graph.astream = fake_astream
+    resp1 = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body, headers=headers
+    )
+    assert resp1.status_code == 200
 
     # Key exists with TTL ~1500ms
     throttle_key = f"chat:throttle:{child.id}"
@@ -846,20 +850,20 @@ async def test_throttle_lock_self_expires(
 
 
 @pytest.mark.asyncio
-async def test_title_12_graphemes_ascii(api_client_with_eval, auth_headers_child, db_session):
+async def test_title_12_graphemes_ascii(app_with_eval, api_client_with_eval, auth_headers_child, db_session):
     """Unicode TR29 grapheme cluster: 12-grapheme title truncation (ZWJ = 1 cluster)."""
     headers, _ = auth_headers_child
     body = make_payload(content="Hello 你好 👨‍👩‍👧 abcdef")
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch("app.api.me._main_graph.astream",fake_astream):
-        resp = await api_client_with_eval.post(
-            "/api/v1/me/chat/stream", json=body, headers=headers
-        )
-        assert resp.status_code == 200
+    app_with_eval.state.resources.main_graph.astream = fake_astream
+    resp = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body, headers=headers
+    )
+    assert resp.status_code == 200
 
-        sid = _parse_sse_stream(resp.text)[0]["data"]["session_id"]
+    sid = _parse_sse_stream(resp.text)[0]["data"]["session_id"]
     session = await db_session.get(SessionModel, sid)
     # M6-patch3 Step 6: session title = today_session_title() 中文日期格式
     assert session.title is not None
@@ -868,7 +872,7 @@ async def test_title_12_graphemes_ascii(api_client_with_eval, auth_headers_child
 
 @pytest.mark.asyncio
 async def test_title_zwj_emoji_counts_as_one_grapheme(
-    api_client_with_eval, auth_headers_child, db_session
+    app_with_eval, api_client_with_eval, auth_headers_child, db_session
 ):
     """TR29 ZWJ emoji family = 1 grapheme cluster (not 3), anchored to prevent regression."""
     headers, _ = auth_headers_child
@@ -876,13 +880,13 @@ async def test_title_zwj_emoji_counts_as_one_grapheme(
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch("app.api.me._main_graph.astream",fake_astream):
-        resp = await api_client_with_eval.post(
-            "/api/v1/me/chat/stream", json=body, headers=headers
-        )
-        assert resp.status_code == 200
+    app_with_eval.state.resources.main_graph.astream = fake_astream
+    resp = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body, headers=headers
+    )
+    assert resp.status_code == 200
 
-        sid = _parse_sse_stream(resp.text)[0]["data"]["session_id"]
+    sid = _parse_sse_stream(resp.text)[0]["data"]["session_id"]
     session = await db_session.get(SessionModel, sid)
     # M6-patch3 Step 6: session title = today_session_title() 中文日期格式
     assert session.title is not None
@@ -896,7 +900,7 @@ async def test_title_zwj_emoji_counts_as_one_grapheme(
 
 @pytest.mark.asyncio
 async def test_lock_released_in_generator_finally(
-    api_client_with_eval, auth_headers_child, redis_client
+    app_with_eval, api_client_with_eval, auth_headers_child, redis_client
 ):
     """Successful request → session lock released in generator finally."""
     headers, _ = auth_headers_child
@@ -904,12 +908,12 @@ async def test_lock_released_in_generator_finally(
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    with patch("app.api.me._main_graph.astream",fake_astream):
-        resp = await api_client_with_eval.post(
-            "/api/v1/me/chat/stream", json=body, headers=headers
-        )
-        assert resp.status_code == 200
-        await resp.aclose()  # ensure response fully consumed
+    app_with_eval.state.resources.main_graph.astream = fake_astream
+    resp = await api_client_with_eval.post(
+        "/api/v1/me/chat/stream", json=body, headers=headers
+    )
+    assert resp.status_code == 200
+    await resp.aclose()  # ensure response fully consumed
 
     # After response closes, lock should be gone
     from app.chat.locks import acquire_session_lock

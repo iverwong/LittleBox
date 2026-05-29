@@ -57,16 +57,6 @@ from app.schemas.sessions import (
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/me", tags=["me"])
 
-# T8 后生产路径走 app.state.resources.main_graph。
-# 保留模块级 _main_graph（含 astream=None）仅为测试兼容，
-# 供 patch("app.api.me._main_graph.astream", ...) 使用。生成器不走此变量。
-class _MainGraphCompat:
-    """测试 patch 占位 — 生产路径不消费此对象。"""
-    astream: object = None
-
-_main_graph = _MainGraphCompat()
-
-
 @router.get("", response_model=AccountOut)
 async def get_me(
     current: Annotated[CurrentAccount, Depends(get_current_account)],
@@ -531,6 +521,9 @@ async def chat_stream(
             )
         ).scalar_one_or_none()
 
+        # M9: turn_number = 下一轮号（commit① human + commit② ai 共享同号）
+        _turn_number = (session.ai_turn_counter or 0) + 1
+
         hid: UUID  # human 消息 ID，用于 session_meta 事件
         user_msg: Message | None = None  # 追踪本轮新增的 human message，供 commit① 用
 
@@ -544,6 +537,7 @@ async def chat_stream(
                 role=MessageRole.human,
                 status=MessageStatus.active,
                 content=req.content,
+                turn_number=_turn_number,
             )
             db.add(human)
             await db.flush()
@@ -558,6 +552,7 @@ async def chat_stream(
                 role=MessageRole.human,
                 status=MessageStatus.active,
                 content=req.content,
+                turn_number=_turn_number,
             )
             db.add(human)
             await db.flush()
@@ -585,6 +580,7 @@ async def chat_stream(
                         role=MessageRole.human,
                         status=MessageStatus.active,
                         content=req.content,
+                        turn_number=_turn_number,
                     )
                     db.add(new_human)
                     await db.flush()
@@ -624,9 +620,6 @@ async def chat_stream(
 
             from app.chat.state import MainDialogueState
 
-            # M8: ai_turn_counter → turn_number（下一轮号）
-            _turn_number = (session.ai_turn_counter or 0) + 1
-
             ctx = ChatContextSchema(
                 session_id=sid,
                 child_user_id=current.id,
@@ -640,15 +633,13 @@ async def chat_stream(
             )
 
             initial_state: MainDialogueState = {
-                "session_id": str(sid),
-                "child_user_id": str(current.id),
-                "provider": rr.settings.main_provider,
                 "messages": [],  # build_messages_main 节点从 DB 装载
                 "audit_state": {
                     "crisis_locked": False,
                     "crisis_detected": False,
                     "redline_triggered": False,
                     "guidance": None,
+                    "target_message_id": None,
                 },
                 "generated_token_count": 0,
                 "client_alive": True,
@@ -857,6 +848,7 @@ async def chat_stream(
                             content=accumulated,
                             status=MessageStatus.active,
                             finish_reason="user_stopped",
+                            turn_number=_turn_number,
                         )
                         db.add(ai_msg)
                         await db.flush()
@@ -870,7 +862,7 @@ async def chat_stream(
                                 session.needs_compression = True
                         await db.commit()
 
-                        await enqueue_audit(sid, db, _turn_number, current.id)
+                        await enqueue_audit(rr.arq_pool, rr.audit_redis, sid, db, _turn_number, current.id, aid)
 
                         if client_alive:
                             yield _frame_sse_event(
@@ -891,6 +883,7 @@ async def chat_stream(
                         content=accumulated,
                         status=MessageStatus.active,
                         finish_reason=last_finish_reason,
+                        turn_number=_turn_number,
                     )
                     db.add(ai_msg)
                     await db.flush()
@@ -904,7 +897,7 @@ async def chat_stream(
                             session.needs_compression = True
                     await db.commit()
 
-                    await enqueue_audit(sid, db, _turn_number, current.id)
+                    await enqueue_audit(rr.arq_pool, rr.audit_redis, sid, db, _turn_number, current.id, aid)
 
                     if client_alive:
                         yield _frame_sse_event(

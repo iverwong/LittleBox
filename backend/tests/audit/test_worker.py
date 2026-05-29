@@ -22,6 +22,7 @@ pytestmark = pytest.mark.audit
 
 SID = "00000000-0000-0000-0000-000000000001"
 CUID = "00000000-0000-0000-0000-000000000002"
+TARGET_MID = "00000000-0000-0000-0000-000000000003"
 
 _AUDIT_OUTPUT = AuditOutputSchema(
     dimension_scores=AuditDimensionScores(),
@@ -98,7 +99,7 @@ class TestRunAudit:
         fake_rr: MagicMock = ctx["resources"]
         fake_rr.audit_graph.ainvoke = _fake_graph_ainvoke_ok
 
-        await run_audit(ctx, SID, turn_number=1, child_user_id=CUID)
+        await run_audit(ctx, SID, turn_number=1, child_user_id=CUID, target_message_id=TARGET_MID)
 
         # 验证 Redis 状态
         payload = await mgr.get(SID)
@@ -115,7 +116,7 @@ class TestRunAudit:
         fake_rr.audit_graph.ainvoke = _fake_graph_ainvoke_raise
 
         with pytest.raises(RuntimeError, match="LLM error"):
-            await run_audit(ctx, SID, turn_number=2, child_user_id=CUID)
+            await run_audit(ctx, SID, turn_number=2, child_user_id=CUID, target_message_id=TARGET_MID)
 
         # 验证 Redis 状态
         payload = await mgr.get(SID)
@@ -133,11 +134,38 @@ class TestRunAudit:
         fake_rr.audit_graph.ainvoke = _fake_graph_ainvoke_raise
 
         with pytest.raises(RuntimeError, match="LLM error"):
-            await run_audit(ctx, SID, turn_number=2, child_user_id=CUID)
+            await run_audit(ctx, SID, turn_number=2, child_user_id=CUID, target_message_id=TARGET_MID)
 
         # 验证 Redis 状态未写入（key 不存在）
         payload = await mgr.get(SID)
         assert payload is None
+
+    # ---- A4 worker-seam: target_message_id 透传验证 ----
+
+    @pytest.mark.asyncio
+    async def test_target_message_id_passed_to_graph_context(self) -> None:
+        """Given target_message_id str, When run_audit, Then AuditContextSchema.target_message_id
+        传入 audit_graph.ainvoke(context=...)，匹配 uuid.UUID 入参。
+
+        Given/When/Then: 给定 target_message_id → run_audit 将其传给图上下文。
+        """
+        import uuid
+        from unittest.mock import AsyncMock
+
+        expected_tid = uuid.UUID(TARGET_MID)
+        ctx = _make_ctx()
+        ainvoke_spy = AsyncMock(return_value={"structured_output": _AUDIT_OUTPUT})
+        fake_rr: MagicMock = ctx["resources"]
+        fake_rr.audit_graph.ainvoke = ainvoke_spy
+
+        await run_audit(ctx, SID, turn_number=1, child_user_id=CUID, target_message_id=TARGET_MID)
+
+        ainvoke_spy.assert_called_once()
+        _, kwargs = ainvoke_spy.call_args
+        audit_ctx = kwargs["context"]
+        assert audit_ctx.target_message_id == expected_tid, (
+            f"Expected {expected_tid}, got {audit_ctx.target_message_id}"
+        )
 
 
 class TestWorkerSettings:

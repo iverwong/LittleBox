@@ -42,6 +42,7 @@ def _make_fake_runtime() -> object:
     ctx = AuditContextSchema(
         session_id=SID,
         child_user_id=CUID,
+        target_message_id=SID,  # 测试用任意 UUID
         max_iter=5,
         settings=MagicMock(),
         db_session_factory=MagicMock(),

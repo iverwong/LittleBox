@@ -35,6 +35,7 @@ async def write_audit_results(
     structured_output: AuditOutputSchema,
     session_notes_final: str,
     turn_summary: str,
+    target_message_id: uuid.UUID | None = None,
 ) -> None:
     """单事务：INSERT audit_records + upsert rolling_summaries。"""
     sid = uuid.UUID(session_id) if isinstance(session_id, str) else session_id
@@ -62,6 +63,7 @@ async def write_audit_results(
     db.add(AuditRecord(
         session_id=sid,
         turn_number=turn_number,
+        target_message_id=target_message_id,
         dimension_scores=dims,
         crisis_detected=structured_output.crisis_detected,
         crisis_topic=structured_output.crisis_topic,
@@ -80,18 +82,29 @@ async def write_audit_results(
     entry_dict = entry.model_dump()
 
     if rs is None:
-        # 4a: INSERT 新行
+        # 4a: INSERT 新行（crisis_locked_message_id 短路保留：初始命中才写）
         db.add(RollingSummary(
             session_id=sid,
             last_turn=turn_number,
-            crisis_locked=structured_output.crisis_detected,
+            crisis_locked_message_id=(
+                target_message_id if structured_output.crisis_detected else None
+            ),
             session_notes=session_notes_final,
             turn_summaries=[entry_dict],
         ))
     else:
-        # 4b: UPDATE 既有行
+        # 4b: UPDATE 既有行（crisis_locked_message_id 短路保留旧值，粘性不可逆）
         summaries = (rs.turn_summaries or []) + [entry_dict]
         rs.turn_summaries = summaries
         rs.last_turn = turn_number
-        rs.crisis_locked = rs.crisis_locked or structured_output.crisis_detected
+        if rs.crisis_locked_message_id is None and structured_output.crisis_detected:
+            rs.crisis_locked_message_id = target_message_id
         rs.session_notes = session_notes_final
+
+    # F.4 notifications stub（M10+ 替换为真实推送）
+    if structured_output.crisis_detected or structured_output.redline_triggered:
+        notify_type = "crisis" if structured_output.crisis_detected else "redline"
+        logger.info(
+            "notify.stub.%s sid=%s turn=%d target=%s",
+            notify_type, sid, turn_number, target_message_id,
+        )

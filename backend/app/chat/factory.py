@@ -142,7 +142,8 @@ _PROVIDER_REGISTRY: dict[str, Callable[..., Runnable]] = {
         base_url=settings.deepseek_base_url,
         model=settings.deepseek_model,
         timeout=settings.llm_request_timeout_seconds,
-        reasoning_effort=settings.deepseek_reasoning_effort,
+        thinking_enabled=settings.main_thinking_enabled,
+        reasoning_effort=settings.main_reasoning_effort,
     ),
     "openai": lambda settings: _build_chat_openai(
         api_key=settings.bailian_api_key.get_secret_value(),
@@ -210,3 +211,17 @@ def build_main_llm(settings: Any) -> Runnable[LanguageModelInput, BaseMessage]:
     return retryable.with_fallbacks([secondary])
 
 
+def build_crisis_llm(settings: Any) -> Runnable:
+    """crisis 干预 LLM：复用 audit_{main_provider} provider，不绑 tools。
+
+    D2 决议：crisis 推理深度与 audit 一致（thinking=enabled + effort=max）。
+    """
+    return build_provider_llm(f"audit_{settings.main_provider}", settings)
+
+
+def build_redline_llm(settings: Any) -> Runnable:
+    """redline 干预 LLM：复用 audit_{main_provider} provider，不绑 tools。
+
+    D2 决议：redline 推理深度与 audit 一致（thinking=enabled + effort=max）。
+    """
+    return build_provider_llm(f"audit_{settings.main_provider}", settings)

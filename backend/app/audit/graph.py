@@ -377,6 +377,7 @@ async def write_results(
                 structured_output=output,
                 session_notes_final=state["session_notes_working"],
                 turn_summary=output.turn_summary,
+                target_message_id=ctx.target_message_id,
             )
 
     return {"structured_output": output}

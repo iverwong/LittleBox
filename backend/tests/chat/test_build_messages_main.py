@@ -1,10 +1,10 @@
 """build_messages_main 装配产物回归（T15）。
 
-覆盖两种模式：
-1. 正常模式：SystemMessage + 历史消息 + 本轮 human
-2. guidance 模式：末位 HumanMessage 前插入 SystemMessage(guidance)
+覆盖 W1 wrapper 模式：
+1. 正常路径（guidance=None）：末位 HumanMessage.content == ctx.user_input（透传）
+2. guidance 路径（guidance="..."）：末位 HumanMessage.content 含 STUB_GUIDANCE_WRAPPER 标记
 
-依赖：db_session fixture 可用但 mock build_context 避免 DB 查询（C5 隔离铁律）。
+依赖：db_session fixture 可用但 mock load_active_history_for_assembly 避免 DB 查询（C5 隔离铁律）。
 """
 from __future__ import annotations
 
@@ -20,17 +20,16 @@ from app.chat.state import MainDialogueState
 pytestmark = pytest.mark.asyncio
 
 
-def _history(guidance: str | None = None) -> list:
-    """返回 mock 历史消息列表（由 build_context 假返回）。"""
-    msgs = [
+def _history() -> list:
+    """返回 mock 历史消息列表（由 load_active_history_for_assembly 假返回）。"""
+    return [
         HumanMessage(content="昨天我们聊了什么？"),
         HumanMessage(content="今天心情怎么样？"),
     ]
-    return msgs
 
 
 async def test_build_messages_main_assembles_system_and_history():
-    """正常路径：装配产物含 SystemMessage + 历史 HumanMessage。"""
+    """Given guidance=None, When W1 wrapper, Then 末位 HumanMessage.content == user_input（透传）。"""
     from types import SimpleNamespace
 
     from app.chat.context_schema import ChatContextSchema
@@ -47,17 +46,17 @@ async def test_build_messages_main_assembles_system_and_history():
         audit_redis=MagicMock(),
     )
     state: MainDialogueState = {
-        "session_id": "s1", "child_user_id": "c1", "provider": "deepseek",
         "messages": [], "audit_state": {"crisis_locked": False,
                                          "crisis_detected": False,
                                          "redline_triggered": False,
-                                         "guidance": None},
+                                         "guidance": None,
+                                         "target_message_id": None},
         "generated_token_count": 0, "client_alive": True,
         "user_stop_requested": False, "turn_number": 1,
     }
     runtime = SimpleNamespace(context=ctx)
 
-    with patch("app.chat.graph.build_context", return_value=_history()):
+    with patch("app.chat.graph.load_active_history_for_assembly", return_value=_history()):
         result = await build_messages_main(state, runtime)
 
     msgs = result["messages"]
@@ -68,10 +67,14 @@ async def test_build_messages_main_assembles_system_and_history():
                for m in msgs)
     assert any(isinstance(m, HumanMessage) and "今天心情怎么样" in m.content
                for m in msgs)
+    # 末位 HumanMessage.content == user_input（guidance=None 透传）
+    last = msgs[-1]
+    assert isinstance(last, HumanMessage)
+    assert last.content == "我今天很开心"
 
 
 async def test_build_messages_main_with_guidance():
-    """guidance 模式：末位 HumanMessage 前含 guidance SystemMessage。"""
+    """Given guidance 非空, When W1 wrapper, Then 末位 HumanMessage.content 含 guidance 标记 + user_input。"""
     from types import SimpleNamespace
 
     from app.chat.context_schema import ChatContextSchema
@@ -88,27 +91,23 @@ async def test_build_messages_main_with_guidance():
         audit_redis=MagicMock(),
     )
     state: MainDialogueState = {
-        "session_id": "s1", "child_user_id": "c1", "provider": "deepseek",
         "messages": [], "audit_state": {"crisis_locked": False,
                                          "crisis_detected": False,
                                          "redline_triggered": False,
-                                         "guidance": "建议引导到户外活动"},
+                                         "guidance": "建议引导到户外活动",
+                                         "target_message_id": None},
         "generated_token_count": 0, "client_alive": True,
         "user_stop_requested": False, "turn_number": 1,
     }
     runtime = SimpleNamespace(context=ctx)
 
-    with patch("app.chat.graph.build_context", return_value=_history()):
+    with patch("app.chat.graph.load_active_history_for_assembly", return_value=_history()):
         result = await build_messages_main(state, runtime)
 
     msgs = result["messages"]
-    # 找到所有 HumanMessage 索引
-    human_indices = [i for i, m in enumerate(msgs) if isinstance(m, HumanMessage)]
-    assert len(human_indices) >= 1, "至少应有 1 条 HumanMessage"
-
-    # 末位 HumanMessage 前应有一条 SystemMessage 包含 guidance 文案
-    last_human_idx = human_indices[-1]
-    assert last_human_idx > 0, "末位 HumanMessage 不应是首条"
-    guidance_msg = msgs[last_human_idx - 1]
-    assert isinstance(guidance_msg, SystemMessage), "guidance 应包装为 SystemMessage"
-    assert "建议引导到户外活动" in guidance_msg.content
+    # 末位 HumanMessage.content 含 STUB 标记
+    last = msgs[-1]
+    assert isinstance(last, HumanMessage)
+    assert "TODO(prompts-content)" in last.content, "guidance 非空时末位 HumanMessage 应含 STUB 标记"
+    assert "我想玩游戏" in last.content, "user_input 应在 wrapper 内"
+    assert "建议引导到户外活动" in last.content, "guidance 应在 wrapper 内"

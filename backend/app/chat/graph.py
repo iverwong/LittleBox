@@ -23,28 +23,41 @@ from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
     HumanMessage,
-    SystemMessage,
 )
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from sqlalchemy import select
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.redis_client import _build_arq_redis_url
-from app.chat.context import build_context
+from app.chat.context import (
+    build_crisis_context,
+    build_redline_context,
+    load_active_history_for_assembly,
+)
 from app.chat.context_schema import ChatContextSchema
 from app.chat.extractors import extract_finish_reason, extract_reasoning_content, extract_usage
-from app.chat.factory import build_main_llm
-from app.chat.prompts import build_system_prompt
+from app.chat.factory import build_crisis_llm, build_main_llm, build_redline_llm
+from app.chat.prompts import (
+    build_crisis_system_prompt,
+    build_redline_system_prompt,
+    build_system_prompt,
+    format_guidance_wrapper,
+    format_reentry_wrapper_crisis,
+    format_reentry_wrapper_redline,
+)
 from app.chat.state import AuditState, MainDialogueState
 from app.config import settings
+from app.models.audit import RollingSummary
 from app.models.chat import Message, Session
 from app.models.enums import InterventionType, MessageRole, MessageStatus
 from app.state.audit_signals import AuditSignalsManager
 
 if TYPE_CHECKING:
+    from arq.connections import ArqRedis
     from langgraph.runtime import Runtime
+    from redis.asyncio import Redis
 
 logger = logging.getLogger(__name__)
 
@@ -97,55 +110,26 @@ async def persist_ai_turn(
 
 
 async def enqueue_audit(
+    arq_pool: ArqRedis,
+    audit_redis: Redis,
     sid: uuid.UUID,
     db: AsyncSession,
     turn_number: int,
     child_user_id: uuid.UUID,
+    target_message_id: uuid.UUID,
 ) -> None:
     """SET Redis pending + ARQ enqueue 触发异步审查。
 
-    D4 决议：先 SET pending 再 enqueue 再返回。~~5-10ms 延迟换确定性。
-    资源管理：每次调用建立独立 ArqRedis 连接，用后关闭（M14 优化为单例）。
-    T10（D-patch0-7）：child_user_id 参数由 me.py 从 ChatContextSchema 取值下传，
-    供 ARQ worker 构造 AuditContextSchema 使用，避免 worker 内 SELECT 反查。
+    §H.2 单例迁移：arq_pool / audit_redis 由 RuntimeResources 注入，
+    生命周期由 teardown_runtime 独占关闭，helper 内只用不关。
     """
-    from arq import create_pool
-    from arq.connections import RedisSettings
-    from redis.asyncio import Redis
+    manager = AuditSignalsManager(audit_redis, ttl=settings.audit_redis_ttl_seconds)
+    await manager.set_pending(str(sid), turn_number, started_at=datetime.now(UTC).isoformat())
 
-    # T13（γ-2）：_build_arq_redis_url 是单一来源 helper，
-    # auth/redis_client.py 中定义，runtime.py:45 共享调用。
-    _audit_redis_url = _build_arq_redis_url()
-    redis = Redis.from_url(_audit_redis_url, encoding="utf-8", decode_responses=True)
-
-    # 提取 ARQ 连接参数（需在 redis.aclose() 之前，否则 connection_pool 变为 None）
-    _arq_host = str(redis.connection_pool.connection_kwargs.get("host", "localhost"))
-    _arq_port = int(redis.connection_pool.connection_kwargs.get("port", 6379))
-    _arq_password = redis.connection_pool.connection_kwargs.get("password")
-
-    try:
-        manager = AuditSignalsManager(redis, ttl=settings.audit_redis_ttl_seconds)
-        await manager.set_pending(str(sid), turn_number, started_at=datetime.now(UTC).isoformat())
-    finally:
-        await redis.aclose()
-
-    # 2) ARQ enqueue
-    arq_pool = await create_pool(
-        RedisSettings(
-            host=_arq_host,
-            port=_arq_port,
-            password=_arq_password,
-            database=settings.arq_redis_db,
-        ),
+    await arq_pool.enqueue_job(
+        "run_audit", str(sid), turn_number, str(child_user_id), str(target_message_id),
+        _job_id=f"audit:{sid}:{turn_number}",
     )
-    try:
-        await arq_pool.enqueue_job(
-            "run_audit", str(sid), turn_number, str(child_user_id),
-            _job_id=f"audit:{sid}:{turn_number}",
-        )
-    finally:
-        await arq_pool.close()
-        await arq_pool.connection_pool.disconnect()  # type: ignore[attr-defined] — arq stubs
 
     logger.info("audit.enqueued sid=%s turn=%s", sid, turn_number)
 
@@ -155,31 +139,39 @@ async def enqueue_audit(
 # ---------------------------------------------------------------------------
 
 
+async def _pg_crisis_fallback(ctx) -> dict:
+    """查 PG rolling_summaries.crisis_locked_message_id（内部开闭 db session）。
+
+    (b) 路径：ready 和降级分支一致查 PG，rolling_summaries 是 sticky lock 单一真相源。
+    """
+    async with ctx.db_session_factory() as db:
+        rs = await db.scalar(
+            select(RollingSummary).where(RollingSummary.session_id == ctx.session_id).limit(1)
+        )
+    locked_id = rs.crisis_locked_message_id if rs else None
+    return {"crisis_locked": locked_id is not None, "target_message_id": locked_id}
+
+
 async def load_audit_state(
     state: MainDialogueState,
     runtime: Runtime[ChatContextSchema],
 ) -> dict:
-    """加载审查信号（Redis poll_wait 协议 + 首轮快速通道）。
+    """加载审查信号：Redis poll_wait + PG crisis_locked 粘性兜底（M9 双源）。
 
-    首轮（turn_number == 1）：直接返回 all-False，不进等待。
-    非首轮：poll_wait(sid, expected_turn=turn_number-1)。6 分支：
-      ready  → 注入信号
-      failed → 全 False + 日志
-      miss   → 全 False + 日志
-      turn_mismatch → 全 False + 日志
-      timeout → 全 False + 日志
-    （pending 在 poll_wait 内循环等待直到 ready 或超时，不作为一个分支返回）
+    分支拓扑：
+       turn==1       → 早退 all-False（理由：首轮 rs 行不存在，PG 查询纯浪费）
+       ready         → Redis 当轮信号 + PG 粘性 crisis_locked + guidance or None
+       failed/miss/... → PG 粘性 crisis_locked + 当轮 all-False + 日志
 
-    crisis_locked 的 PG 查询留 M9（本 M8 期不读）。
+    PG 查询 _pg_crisis_fallback 在 ready 和降级分支都执行，(b) 单一来源。
     """
     ctx = runtime.context
     turn = state.get("turn_number", 1)
-    sid = str(ctx.session_id)
 
     if turn == 1:
-        # 首轮：不进等待
         return _all_false_audit_state()
 
+    sid = str(ctx.session_id)
     manager = AuditSignalsManager(
         ctx.audit_redis, ttl=ctx.settings.audit_redis_ttl_seconds,
     )
@@ -190,12 +182,14 @@ async def load_audit_state(
 
     if result.kind == "ready" and result.signals is not None:
         logger.info("audit.load.ready sid=%s turn=%s", sid, turn)
+        pg_fb = await _pg_crisis_fallback(ctx)
         return {
             "audit_state": {
-                "crisis_locked": False,
+                "crisis_locked": pg_fb["crisis_locked"],
                 "crisis_detected": result.signals.crisis_detected,
                 "redline_triggered": result.signals.redline_triggered,
-                "guidance": result.signals.guidance,
+                "guidance": result.signals.guidance or None,
+                "target_message_id": pg_fb["target_message_id"],
             },
         }
 
@@ -211,7 +205,16 @@ async def load_audit_state(
     else:  # timeout
         logger.warning("audit.load.timeout sid=%s turn=%s", sid, turn)
 
-    return _all_false_audit_state()
+    pg_fb = await _pg_crisis_fallback(ctx)
+    return {
+        "audit_state": {
+            "crisis_locked": pg_fb["crisis_locked"],
+            "crisis_detected": False,
+            "redline_triggered": False,
+            "guidance": None,
+            "target_message_id": pg_fb["target_message_id"],
+        },
+    }
 
 
 def _all_false_audit_state() -> dict:
@@ -222,6 +225,7 @@ def _all_false_audit_state() -> dict:
             "crisis_detected": False,
             "redline_triggered": False,
             "guidance": None,
+            "target_message_id": None,
         },
     }
 
@@ -257,17 +261,17 @@ async def build_messages_main(
     state: MainDialogueState,
     runtime: Runtime[ChatContextSchema],
 ) -> dict:
-    """从运行时上下装载消息并组装 LLM 输入。
-
-    history 由 build_context 装载，含本轮 human 行（commit① 后 status='active'，
-    ASC by created_at），节点不在末位重复 append。
-    compression 路径（me.py 预装 messages）时本节点跳过装配。
+    """W1 wrapper 模式：load_active_history_for_assembly + 末位 wrapped HumanMessage。
 
     装配顺序：
-      [system_prompt, *history, ?guidance_SystemMessage(末位 HumanMessage 前)]
-    history 末位即为本轮 human（commit① 已 commit，新 session 可见）。
-    guidance 插入位置为末位 HumanMessage 前一位（对齐 M8 期历史装配模式）。
-    不在末位追加 HumanMessage(ctx.user_input) 以避免与 history 末位重复。
+      [system_prompt, *summaries(前缀), *active_messages(不含本轮),
+       HumanMessage(content=format_guidance_wrapper(ctx.user_input, audit.guidance))]
+
+    职责边界：
+    - history 不含本轮 human（由 load_active_history_for_assembly 的 until_turn 过滤）
+    - wrapper 仅作用于 LLM 输入装配层，不回写 messages 表
+    - compression 路径（me.py 预装 messages）时本节点跳过装配
+    - build_context（audit 路径用）保留不删
     """
     ctx = runtime.context
 
@@ -276,41 +280,64 @@ async def build_messages_main(
         return {}
 
     async with ctx.db_session_factory() as db:
-        history = await build_context(ctx.session_id, db)
+        history = await load_active_history_for_assembly(
+            ctx.session_id, state["turn_number"], db,
+        )
     system_prompt = build_system_prompt(ctx.age, ctx.gender)
 
-    messages = [system_prompt, *history]
-
-    # guidance 装配：audit_state.guidance 非 None 时在末位 HumanMessage 前
-    # 插入 SystemMessage（对齐 M8 期历史装配模式）。
-    # load_audit_state 每轮覆盖 audit_state，故无需显式清理 guidance。
-    audit = state.get("audit_state")
-    guidance_text = audit["guidance"] if audit and audit.get("guidance") else None
-    if guidance_text is not None:
-        for i in range(len(messages) - 1, -1, -1):
-            if isinstance(messages[i], HumanMessage):
-                messages.insert(i, SystemMessage(content=guidance_text))
-                break
-        else:
-            messages.append(SystemMessage(content=guidance_text))
-
-    return {"messages": messages}
+    audit = state.get("audit_state", {})
+    return {"messages": [
+        system_prompt,
+        *history,
+        HumanMessage(content=format_guidance_wrapper(
+            ctx.user_input, audit.get("guidance"),
+        )),
+    ]}
 
 
 async def build_messages_crisis(
     state: MainDialogueState,
     runtime: Runtime[ChatContextSchema],
 ) -> dict:
-    """patch0 期委派 build_messages_main；M9 主体 D 层替换为 crisis 专属装配。"""
-    return await build_messages_main(state, runtime)
+    """crisis 专属装配：crisis system prompt → anchor_window → after_anchor → reentry wrapper。"""
+    ctx = runtime.context
+    audit = state.get("audit_state", {})
+
+    target_mid = audit.get("target_message_id")
+    assert target_mid is not None, (
+        "M9 Step 8 前 target_message_id 由 audit 节点必填；"
+        "None 表示 PG 兜底或 Redis 信号尚未就绪"
+    )
+
+    async with ctx.db_session_factory() as db:
+        anchor_system, after_anchor = await build_crisis_context(
+            ctx.session_id, db, target_mid,
+        )
+    return {"messages": [
+        build_crisis_system_prompt(ctx.age, ctx.gender),
+        anchor_system,
+        *after_anchor,
+        HumanMessage(content=format_reentry_wrapper_crisis(ctx.user_input)),
+    ]}
 
 
 async def build_messages_redline(
     state: MainDialogueState,
     runtime: Runtime[ChatContextSchema],
 ) -> dict:
-    """patch0 期委派 build_messages_main；M9 主体 D 层替换为 redline 专属装配。"""
-    return await build_messages_main(state, runtime)
+    """redline 专属装配：redline system prompt → summaries → recent pairs → reentry wrapper。"""
+    ctx = runtime.context
+
+    async with ctx.db_session_factory() as db:
+        summaries_systems, recent_pairs = await build_redline_context(
+            ctx.session_id, state["turn_number"], db,
+        )
+    return {"messages": [
+        build_redline_system_prompt(ctx.age, ctx.gender),
+        *summaries_systems,
+        *recent_pairs,
+        HumanMessage(content=format_reentry_wrapper_redline(ctx.user_input)),
+    ]}
 
 
 # ---------------------------------------------------------------------------
@@ -378,24 +405,80 @@ async def call_crisis_llm(
     state: MainDialogueState,
     runtime: Runtime[ChatContextSchema],
 ) -> dict:
-    """Crisis LLM stub — patch0 回退到主 LLM。
+    """调 crisis 干预 LLM，通过 get_stream_writer() 流式输出 chunk。
 
-    M9 主体 D 层替换为危机干预专属 prompt + 模型。函数体零拓扑 diff。
+    Verbatim copy of call_main_llm，仅替换 builder + provider key。
     """
-    logger.warning("crisis_llm not implemented, falling back to main_llm in patch0")
-    return await call_main_llm(state, runtime)
+    ctx = runtime.context
+    writer = get_stream_writer()
+    llm = build_crisis_llm(ctx.settings)
+    parts: list[str] = []
+
+    llm_messages = list(state["messages"])
+
+    provider = ctx.settings.audit_provider
+
+    async for chunk in llm.astream(llm_messages):
+        _chunk_typed: AIMessageChunk = chunk  # type: ignore[assignment]
+
+        if extract_reasoning_content(_chunk_typed, provider):
+            writer({"reasoning": True})
+
+        text = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
+        if text:
+            writer({"delta": text})
+            parts.append(text)
+
+        fr = extract_finish_reason(_chunk_typed, provider)
+        if fr:
+            writer({"finish_reason": fr})
+
+        if _chunk_typed.usage_metadata is not None:
+            usage = extract_usage(_chunk_typed)
+            if usage:
+                writer({"usage_metadata": usage})
+
+    return {"messages": [AIMessage(content="".join(parts))]}
 
 
 async def call_redline_llm(
     state: MainDialogueState,
     runtime: Runtime[ChatContextSchema],
 ) -> dict:
-    """Redline LLM stub — patch0 回退到主 LLM。
+    """调 redline 干预 LLM，通过 get_stream_writer() 流式输出 chunk。
 
-    M9 主体 D 层替换为红线干预专属 prompt + 模型。函数体零拓扑 diff。
+    Verbatim copy of call_main_llm，仅替换 builder + provider key。
     """
-    logger.warning("redline_llm not implemented, falling back to main_llm in patch0")
-    return await call_main_llm(state, runtime)
+    ctx = runtime.context
+    writer = get_stream_writer()
+    llm = build_redline_llm(ctx.settings)
+    parts: list[str] = []
+
+    llm_messages = list(state["messages"])
+
+    provider = ctx.settings.audit_provider
+
+    async for chunk in llm.astream(llm_messages):
+        _chunk_typed: AIMessageChunk = chunk  # type: ignore[assignment]
+
+        if extract_reasoning_content(_chunk_typed, provider):
+            writer({"reasoning": True})
+
+        text = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
+        if text:
+            writer({"delta": text})
+            parts.append(text)
+
+        fr = extract_finish_reason(_chunk_typed, provider)
+        if fr:
+            writer({"finish_reason": fr})
+
+        if _chunk_typed.usage_metadata is not None:
+            usage = extract_usage(_chunk_typed)
+            if usage:
+                writer({"usage_metadata": usage})
+
+    return {"messages": [AIMessage(content="".join(parts))]}
 
 
 # ---------------------------------------------------------------------------

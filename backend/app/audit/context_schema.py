@@ -23,8 +23,9 @@ class AuditContextSchema:
     # 身份字段
     session_id: uuid.UUID     # 被审查的对话 session UUID
     child_user_id: uuid.UUID  # 被审查的青少年用户 ID
+    target_message_id: uuid.UUID  # 被审查的 ai_msg id（本轮审查锚点，必非空）
     # 业务字段
-    max_iter: int             # tool agentic loop 硬上限（D-patch0-1：不引入 target_message_id）
+    max_iter: int             # tool agentic loop 硬上限
     # 三资源
     settings: Settings                    # 应用配置
     db_session_factory: async_sessionmaker[AsyncSession]  # DB 会话工厂

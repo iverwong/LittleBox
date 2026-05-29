@@ -21,6 +21,12 @@ class AuditRecord(BaseMixin, Base):
         nullable=False,
     )
     turn_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        comment="被审查的 ai_msg id（本轮审查锚点）。M9 新增，"
+        "由 enqueue_audit 从 me.py generator 传入",
+    )
     dimension_scores: Mapped[Optional[dict]] = mapped_column(
         JSONB,
         nullable=True,
@@ -68,13 +74,12 @@ class RollingSummary(BaseMixin, Base):
         nullable=False,
     )
     last_turn: Mapped[int] = mapped_column(Integer, nullable=False)
-    crisis_locked: Mapped[bool] = mapped_column(
-        Boolean,
-        server_default=text("false"),
-        nullable=False,
-        comment="crisis 粘性接管标志。一旦命中 crisis 置 true，"
-        "该 session 剩余轮次全部由危机 LLM 接管；"
-        "session 内不可逆，仅开启新 session 可重置。redline 不粘性，每轮重评估。",
+    crisis_locked_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        comment="crisis 粘性接管锚点消息 ID。非空=粘性锁定中，"
+        "指向触发 crisis 的首条 ai_msg id；"
+        "空=未锁定。session 内不可逆，仅开启新 session 可重置。",
     )
     session_notes: Mapped[Optional[str]] = mapped_column(
         Text,

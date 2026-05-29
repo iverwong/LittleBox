@@ -21,7 +21,13 @@ class Settings(BaseSettings):
     main_provider: str = "deepseek"
     fallback_provider: str | None = "deepseek"
     enable_fallback: bool = True
-    deepseek_reasoning_effort: str = "high"
+    # M9 main LLM 推理深度和思考模式（统一高，提升主对话推理深度）
+    main_thinking_enabled: bool = True
+    main_reasoning_effort: str = "max"
+    # M9 三级干预上下文参数
+    crisis_context_recent_turns: int = 5  # crisis anchor_window 对数（含触发轮）
+    redline_context_recent_turns: int = 10  # 红线最近活跃对数
+    redline_turn_summaries_window: int = 50  # 红线摘要窗口条数
     llm_request_timeout_seconds: float = 60.0
     # M5 hotfix: family child count limit
     max_children_per_family: int = 3

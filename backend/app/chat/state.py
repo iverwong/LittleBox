@@ -7,6 +7,7 @@ M6 Step 6: replaces the M3 skeleton.
 
 from __future__ import annotations
 
+import uuid
 from typing import Annotated, TypedDict
 
 from langchain_core.messages import BaseMessage
@@ -15,10 +16,11 @@ from langgraph.graph import add_messages
 
 class AuditState(TypedDict):
     """load_audit_state 节点输出的审查信号状态。"""
-    crisis_locked: bool       # 危机锁定（sticky，M9 才会真写）
+    crisis_locked: bool       # 危机锁定（sticky）
     crisis_detected: bool     # 本轮危机检测
     redline_triggered: bool   # 本轮红线检测
     guidance: str | None      # 引导注入文本
+    target_message_id: uuid.UUID | None  # M9: 被审查的 ai_msg id（main 图 PG 兜底路径可空）
 
 
 # ---- TypedDict ----
@@ -27,14 +29,11 @@ class AuditState(TypedDict):
 class MainDialogueState(TypedDict):
     """Per-turn state for the main dialogue LangGraph.
 
-    Scalar fields (session_id / child_user_id / etc.) do NOT need
+    Scalar fields (generated_token_count / client_alive / etc.) do NOT need
     Annotated reducers — LangGraph last-write-wins semantics suffices.
     Only ``messages`` needs add_messages (append-only history).
     """
 
-    session_id: str
-    child_user_id: str
-    provider: str  # 当前对话 provider 名，由 me.py 从 settings.main_provider 填入
     messages: Annotated[list[BaseMessage], add_messages]
     audit_state: AuditState  # M8: load_audit_state 节点填充
     generated_token_count: int

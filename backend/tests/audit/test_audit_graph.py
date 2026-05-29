@@ -25,6 +25,7 @@ pytestmark = [
 
 SID = "00000000-0000-0000-0000-000000000001"
 CUID = "00000000-0000-0000-0000-000000000002"
+TARGET_MID = "00000000-0000-0000-0000-000000000003"
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +118,7 @@ def _make_fake_runtime(max_iter: int = 5) -> object:
     ctx = AuditContextSchema(
         session_id=SID,
         child_user_id=CUID,
+        target_message_id=TARGET_MID,
         max_iter=max_iter,
         settings=MagicMock(),
         db_session_factory=MagicMock(),
