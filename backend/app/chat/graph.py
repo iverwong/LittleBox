@@ -27,7 +27,7 @@ from langchain_core.messages import (
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.redis_client import _build_arq_redis_url
@@ -49,6 +49,7 @@ from app.chat.prompts import (
 )
 from app.chat.state import AuditState, MainDialogueState
 from app.config import settings
+from app.models.audit import RollingSummary
 from app.models.chat import Message, Session
 from app.models.enums import InterventionType, MessageRole, MessageStatus
 from app.state.audit_signals import AuditSignalsManager
@@ -166,31 +167,39 @@ async def enqueue_audit(
 # ---------------------------------------------------------------------------
 
 
+async def _pg_crisis_fallback(ctx) -> dict:
+    """查 PG rolling_summaries.crisis_locked_message_id（内部开闭 db session）。
+
+    (b) 路径：ready 和降级分支一致查 PG，rolling_summaries 是 sticky lock 单一真相源。
+    """
+    async with ctx.db_session_factory() as db:
+        rs = await db.scalar(
+            select(RollingSummary).where(RollingSummary.session_id == ctx.session_id).limit(1)
+        )
+    locked_id = rs.crisis_locked_message_id if rs else None
+    return {"crisis_locked": locked_id is not None, "target_message_id": locked_id}
+
+
 async def load_audit_state(
     state: MainDialogueState,
     runtime: Runtime[ChatContextSchema],
 ) -> dict:
-    """加载审查信号（Redis poll_wait 协议 + 首轮快速通道）。
+    """加载审查信号：Redis poll_wait + PG crisis_locked 粘性兜底（M9 双源）。
 
-    首轮（turn_number == 1）：直接返回 all-False，不进等待。
-    非首轮：poll_wait(sid, expected_turn=turn_number-1)。6 分支：
-      ready  → 注入信号
-      failed → 全 False + 日志
-      miss   → 全 False + 日志
-      turn_mismatch → 全 False + 日志
-      timeout → 全 False + 日志
-    （pending 在 poll_wait 内循环等待直到 ready 或超时，不作为一个分支返回）
+    分支拓扑：
+       turn==1       → 早退 all-False（理由：首轮 rs 行不存在，PG 查询纯浪费）
+       ready         → Redis 当轮信号 + PG 粘性 crisis_locked + guidance or None
+       failed/miss/... → PG 粘性 crisis_locked + 当轮 all-False + 日志
 
-    crisis_locked 的 PG 查询留 M9（本 M8 期不读）。
+    PG 查询 _pg_crisis_fallback 在 ready 和降级分支都执行，(b) 单一来源。
     """
     ctx = runtime.context
     turn = state.get("turn_number", 1)
-    sid = str(ctx.session_id)
 
     if turn == 1:
-        # 首轮：不进等待
         return _all_false_audit_state()
 
+    sid = str(ctx.session_id)
     manager = AuditSignalsManager(
         ctx.audit_redis, ttl=ctx.settings.audit_redis_ttl_seconds,
     )
@@ -201,13 +210,14 @@ async def load_audit_state(
 
     if result.kind == "ready" and result.signals is not None:
         logger.info("audit.load.ready sid=%s turn=%s", sid, turn)
+        pg_fb = await _pg_crisis_fallback(ctx)
         return {
             "audit_state": {
-                "crisis_locked": False,
+                "crisis_locked": pg_fb["crisis_locked"],
                 "crisis_detected": result.signals.crisis_detected,
                 "redline_triggered": result.signals.redline_triggered,
-                "guidance": result.signals.guidance,
-                "target_message_id": None,  # M9 Step 8 信号协议扩展后从 signals 读取
+                "guidance": result.signals.guidance or None,
+                "target_message_id": pg_fb["target_message_id"],
             },
         }
 
@@ -223,7 +233,16 @@ async def load_audit_state(
     else:  # timeout
         logger.warning("audit.load.timeout sid=%s turn=%s", sid, turn)
 
-    return _all_false_audit_state()
+    pg_fb = await _pg_crisis_fallback(ctx)
+    return {
+        "audit_state": {
+            "crisis_locked": pg_fb["crisis_locked"],
+            "crisis_detected": False,
+            "redline_triggered": False,
+            "guidance": None,
+            "target_message_id": pg_fb["target_message_id"],
+        },
+    }
 
 
 def _all_false_audit_state() -> dict:
