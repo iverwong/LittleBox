@@ -45,6 +45,7 @@ _ALL_FALSE_AUDIT = {
     "crisis_detected": False,
     "redline_triggered": False,
     "guidance": None,
+    "target_message_id": None,
 }
 
 

@@ -649,6 +649,7 @@ async def chat_stream(
                     "crisis_detected": False,
                     "redline_triggered": False,
                     "guidance": None,
+                    "target_message_id": None,
                 },
                 "generated_token_count": 0,
                 "client_alive": True,
@@ -870,7 +871,7 @@ async def chat_stream(
                                 session.needs_compression = True
                         await db.commit()
 
-                        await enqueue_audit(sid, db, _turn_number, current.id)
+                        await enqueue_audit(sid, db, _turn_number, current.id, aid)
 
                         if client_alive:
                             yield _frame_sse_event(
@@ -904,7 +905,7 @@ async def chat_stream(
                             session.needs_compression = True
                     await db.commit()
 
-                    await enqueue_audit(sid, db, _turn_number, current.id)
+                    await enqueue_audit(sid, db, _turn_number, current.id, aid)
 
                     if client_alive:
                         yield _frame_sse_event(

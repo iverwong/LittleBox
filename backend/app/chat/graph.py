@@ -101,6 +101,7 @@ async def enqueue_audit(
     db: AsyncSession,
     turn_number: int,
     child_user_id: uuid.UUID,
+    target_message_id: uuid.UUID,
 ) -> None:
     """SET Redis pending + ARQ enqueue 触发异步审查。
 
@@ -140,7 +141,7 @@ async def enqueue_audit(
     )
     try:
         await arq_pool.enqueue_job(
-            "run_audit", str(sid), turn_number, str(child_user_id),
+            "run_audit", str(sid), turn_number, str(child_user_id), str(target_message_id),
             _job_id=f"audit:{sid}:{turn_number}",
         )
     finally:
@@ -196,6 +197,7 @@ async def load_audit_state(
                 "crisis_detected": result.signals.crisis_detected,
                 "redline_triggered": result.signals.redline_triggered,
                 "guidance": result.signals.guidance,
+                "target_message_id": None,  # M9 Step 8 信号协议扩展后从 signals 读取
             },
         }
 
@@ -222,6 +224,7 @@ def _all_false_audit_state() -> dict:
             "crisis_detected": False,
             "redline_triggered": False,
             "guidance": None,
+            "target_message_id": None,
         },
     }
 

@@ -113,6 +113,7 @@ async def run_audit(
     sid: str,
     turn_number: int,
     child_user_id: str,
+    target_message_id: str,
 ) -> None:
     """执行一次审查（ARQ job function）。
 
@@ -138,6 +139,7 @@ async def run_audit(
         audit_ctx = AuditContextSchema(
             session_id=uuid.UUID(sid),
             child_user_id=uuid.UUID(child_user_id),
+            target_message_id=uuid.UUID(target_message_id),
             max_iter=rr.settings.max_audit_tool_iterations,
             settings=rr.settings,
             db_session_factory=rr.db_session_factory,

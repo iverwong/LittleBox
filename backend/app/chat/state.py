@@ -7,6 +7,7 @@ M6 Step 6: replaces the M3 skeleton.
 
 from __future__ import annotations
 
+import uuid
 from typing import Annotated, TypedDict
 
 from langchain_core.messages import BaseMessage
@@ -15,10 +16,11 @@ from langgraph.graph import add_messages
 
 class AuditState(TypedDict):
     """load_audit_state 节点输出的审查信号状态。"""
-    crisis_locked: bool       # 危机锁定（sticky，M9 才会真写）
+    crisis_locked: bool       # 危机锁定（sticky）
     crisis_detected: bool     # 本轮危机检测
     redline_triggered: bool   # 本轮红线检测
     guidance: str | None      # 引导注入文本
+    target_message_id: uuid.UUID | None  # M9: 被审查的 ai_msg id（main 图 PG 兜底路径可空）
 
 
 # ---- TypedDict ----

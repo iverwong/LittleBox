@@ -71,7 +71,7 @@ async def test_e2e_enqueue_to_ready(concurrent_db_sessions):
         patch("redis.asyncio.Redis.from_url", return_value=shared_redis),
         patch("arq.create_pool", return_value=mock_arq),
     ):
-        await enqueue_audit(sid, db, turn_number=1, child_user_id=child.id)
+        await enqueue_audit(sid, db, turn_number=1, child_user_id=child.id, target_message_id=sid)
 
     payload = await real_manager.get(str(sid))
     assert payload is not None
@@ -97,7 +97,7 @@ async def test_e2e_enqueue_to_ready(concurrent_db_sessions):
         "resources": fake_rr,
         "signals_manager": AuditSignalsManager(shared_redis, ttl=86400),
     }
-    await run_audit(worker_ctx, str(sid), 1, str(child.id))
+    await run_audit(worker_ctx, str(sid), 1, str(child.id), str(sid))
 
     payload = await real_manager.get(str(sid))
     assert payload is not None

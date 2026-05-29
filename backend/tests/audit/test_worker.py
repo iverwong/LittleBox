@@ -22,6 +22,7 @@ pytestmark = pytest.mark.audit
 
 SID = "00000000-0000-0000-0000-000000000001"
 CUID = "00000000-0000-0000-0000-000000000002"
+TARGET_MID = "00000000-0000-0000-0000-000000000003"
 
 _AUDIT_OUTPUT = AuditOutputSchema(
     dimension_scores=AuditDimensionScores(),
@@ -98,7 +99,7 @@ class TestRunAudit:
         fake_rr: MagicMock = ctx["resources"]
         fake_rr.audit_graph.ainvoke = _fake_graph_ainvoke_ok
 
-        await run_audit(ctx, SID, turn_number=1, child_user_id=CUID)
+        await run_audit(ctx, SID, turn_number=1, child_user_id=CUID, target_message_id=TARGET_MID)
 
         # 验证 Redis 状态
         payload = await mgr.get(SID)
@@ -115,7 +116,7 @@ class TestRunAudit:
         fake_rr.audit_graph.ainvoke = _fake_graph_ainvoke_raise
 
         with pytest.raises(RuntimeError, match="LLM error"):
-            await run_audit(ctx, SID, turn_number=2, child_user_id=CUID)
+            await run_audit(ctx, SID, turn_number=2, child_user_id=CUID, target_message_id=TARGET_MID)
 
         # 验证 Redis 状态
         payload = await mgr.get(SID)
@@ -133,7 +134,7 @@ class TestRunAudit:
         fake_rr.audit_graph.ainvoke = _fake_graph_ainvoke_raise
 
         with pytest.raises(RuntimeError, match="LLM error"):
-            await run_audit(ctx, SID, turn_number=2, child_user_id=CUID)
+            await run_audit(ctx, SID, turn_number=2, child_user_id=CUID, target_message_id=TARGET_MID)
 
         # 验证 Redis 状态未写入（key 不存在）
         payload = await mgr.get(SID)
