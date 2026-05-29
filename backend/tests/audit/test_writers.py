@@ -70,7 +70,7 @@ class TestWriteAuditResults:
 
         ar = (
             await db_session.execute(
-                text("SELECT turn_number, crisis_detected, guidance_injection, notify_sent "
+                text("SELECT turn_number, crisis_detected, guidance_injection, notify_sent, target_message_id "
                      "FROM audit_records WHERE session_id=:sid"),
                 {"sid": sid},
             )
@@ -80,6 +80,7 @@ class TestWriteAuditResults:
         assert ar.crisis_detected is False
         assert ar.guidance_injection == "观察社交互动"
         assert ar.notify_sent is False
+        assert ar.target_message_id is None, "未传 target_message_id 时应为 None"
 
         rs = (
             await db_session.execute(
@@ -152,13 +153,21 @@ class TestWriteAuditResults:
         await write_audit_results(db_session, str(sid), 3, _BASE_OUTPUT, "第3轮", "摘要3",
                                   target_message_id=target_id)
 
+        # 断言 rolling_summaries.crisis_locked_message_id 短路保留
         rs = (await db_session.execute(
             text("SELECT crisis_locked_message_id FROM rolling_summaries WHERE session_id=:sid"),
             {"sid": sid},
         )).fetchone()
-        # 第 2 轮命中 crisis → crisis_locked_message_id 非空
         assert rs.crisis_locked_message_id is not None
         assert rs.crisis_locked_message_id == target_id
+
+        # 断言 audit_records.target_message_id 逐轮写入
+        ars = (await db_session.execute(
+            text("SELECT turn_number, target_message_id FROM audit_records WHERE session_id=:sid ORDER BY turn_number"),
+            {"sid": sid},
+        )).fetchall()
+        for ar in ars:
+            assert ar.target_message_id == target_id, f"turn={ar.turn_number} target_message_id 未透传"
 
     async def test_multiple_turns(self, db_session, sid):
         """3 轮正确累积 + 无回退告警。"""
@@ -210,3 +219,46 @@ class TestWriteAuditResults:
             {"sid": sid},
         )).scalar()
         assert count == 0, "upsert 失败后 audit_records 应被整体回滚"
+
+    # ---- F.4 notify stub 测试 ----
+
+    async def test_notify_stub_crisis(self, db_session, sid, caplog):
+        """crisis_detected=True → logger 输出 notify.stub.crisis。"""
+        crisis_out = _BASE_OUTPUT.model_copy(
+            update={"crisis_detected": True, "crisis_topic": "自残倾向"},
+        )
+        import logging
+        caplog.set_level(logging.INFO, logger="audit.db")
+
+        await write_audit_results(
+            db_session, str(sid), 1, crisis_out, "crisis笔记", "crisis摘要",
+            target_message_id=uuid.uuid4(),
+        )
+        await db_session.flush()
+
+        assert any("notify.stub.crisis" in msg for msg in caplog.messages)
+
+    async def test_notify_stub_redline(self, db_session, sid, caplog):
+        """redline_triggered=True + crisis_detected=False → logger 输出 notify.stub.redline。"""
+        redline_out = _BASE_OUTPUT.model_copy(
+            update={"redline_triggered": True, "redline_detail": "涉黄"},
+        )
+        import logging
+        caplog.set_level(logging.INFO, logger="audit.db")
+
+        await write_audit_results(
+            db_session, str(sid), 1, redline_out, "redline笔记", "redline摘要",
+        )
+
+        assert any("notify.stub.redline" in msg for msg in caplog.messages)
+
+    async def test_notify_stub_skip_when_pass(self, db_session, sid, caplog):
+        """crisis_detected=False + redline_triggered=False → logger 不输出 notify.stub。"""
+        import logging
+        caplog.set_level(logging.INFO, logger="audit.db")
+
+        await write_audit_results(
+            db_session, str(sid), 1, _BASE_OUTPUT, "正常笔记", "正常摘要",
+        )
+
+        assert not any("notify.stub" in msg for msg in caplog.messages)
