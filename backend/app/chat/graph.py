@@ -32,11 +32,11 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.redis_client import _build_arq_redis_url
-from app.chat.context import build_context
+from app.chat.context import build_context, load_active_history_for_assembly
 from app.chat.context_schema import ChatContextSchema
 from app.chat.extractors import extract_finish_reason, extract_reasoning_content, extract_usage
 from app.chat.factory import build_main_llm
-from app.chat.prompts import build_system_prompt
+from app.chat.prompts import build_system_prompt, format_guidance_wrapper
 from app.chat.state import AuditState, MainDialogueState
 from app.config import settings
 from app.models.chat import Message, Session
@@ -260,17 +260,17 @@ async def build_messages_main(
     state: MainDialogueState,
     runtime: Runtime[ChatContextSchema],
 ) -> dict:
-    """从运行时上下装载消息并组装 LLM 输入。
-
-    history 由 build_context 装载，含本轮 human 行（commit① 后 status='active'，
-    ASC by created_at），节点不在末位重复 append。
-    compression 路径（me.py 预装 messages）时本节点跳过装配。
+    """W1 wrapper 模式：load_active_history_for_assembly（不含本轮 human）+ 末位 wrapped HumanMessage。
 
     装配顺序：
-      [system_prompt, *history, ?guidance_SystemMessage(末位 HumanMessage 前)]
-    history 末位即为本轮 human（commit① 已 commit，新 session 可见）。
-    guidance 插入位置为末位 HumanMessage 前一位（对齐 M8 期历史装配模式）。
-    不在末位追加 HumanMessage(ctx.user_input) 以避免与 history 末位重复。
+      [system_prompt, *summaries(前缀), *active_messages(不含本轮),
+       HumanMessage(content=format_guidance_wrapper(ctx.user_input, audit.guidance))]
+
+    职责边界：
+    - history 不含本轮 human（由 load_active_history_for_assembly 的 until_turn 过滤）
+    - wrapper 仅作用于 LLM 输入装配层，不回写 messages 表
+    - compression 路径（me.py 预装 messages）时本节点跳过装配
+    - build_context（audit 路径用）保留不删
     """
     ctx = runtime.context
 
@@ -279,25 +279,19 @@ async def build_messages_main(
         return {}
 
     async with ctx.db_session_factory() as db:
-        history = await build_context(ctx.session_id, db)
+        history = await load_active_history_for_assembly(
+            ctx.session_id, state["turn_number"], db,
+        )
     system_prompt = build_system_prompt(ctx.age, ctx.gender)
 
-    messages = [system_prompt, *history]
-
-    # guidance 装配：audit_state.guidance 非 None 时在末位 HumanMessage 前
-    # 插入 SystemMessage（对齐 M8 期历史装配模式）。
-    # load_audit_state 每轮覆盖 audit_state，故无需显式清理 guidance。
-    audit = state.get("audit_state")
-    guidance_text = audit["guidance"] if audit and audit.get("guidance") else None
-    if guidance_text is not None:
-        for i in range(len(messages) - 1, -1, -1):
-            if isinstance(messages[i], HumanMessage):
-                messages.insert(i, SystemMessage(content=guidance_text))
-                break
-        else:
-            messages.append(SystemMessage(content=guidance_text))
-
-    return {"messages": messages}
+    audit = state.get("audit_state", {})
+    return {"messages": [
+        system_prompt,
+        *history,
+        HumanMessage(content=format_guidance_wrapper(
+            ctx.user_input, audit.get("guidance"),
+        )),
+    ]}
 
 
 async def build_messages_crisis(

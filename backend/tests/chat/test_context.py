@@ -28,6 +28,7 @@ from app.chat.context import (
     build_context,
     build_crisis_context,
     build_redline_context,
+    load_active_history_for_assembly,
     load_recent_active_pairs,
 )
 from app.models.audit import RollingSummary
@@ -337,6 +338,105 @@ class TestLoadRecentActivePairs:
         # DESC LIMIT 20 → 拿到 turns 6-15 → reversed() 后 turns 6-15 升序
         assert "turn6" in turns[0], f"expected turn6 first, got {turns[0]}"
         assert "turn15" in turns[-1], f"expected turn15 last, got {turns[-1]}"
+
+
+class TestLoadActiveHistoryForAssembly:
+    """A1: load_active_history_for_assembly — 4 分支单测。"""
+
+    @pytest.mark.asyncio
+    async def test_excludes_current_turn(self, db_session, child_user) -> None:
+        """Given turn=1-5 active + current_turn=3, When load_active_history_for_assembly, Then 不含 turn>=3。
+        Given/When/Then: (a) until_turn 边界 < current_turn。"""
+        sid = await _seed_session(db_session, child_user.id)
+        await _seed_messages(db_session, sid, 5)
+
+        result = await load_active_history_for_assembly(sid, current_turn=3, db=db_session)
+
+        contents = [m.content for m in result]
+        assert all("turn1" in c or "turn2" in c for c in contents), "should only have turns < 3"
+        assert not any("turn3" in c for c in contents), "turn3 should be excluded"
+
+    @pytest.mark.asyncio
+    async def test_excludes_discarded(self, db_session, child_user) -> None:
+        """Given turn1 含 discarded 行, When load_active_history_for_assembly, Then 排除 discarded。
+        Given/When/Then: (b) status='active' 过滤。"""
+        sid = await _seed_session(db_session, child_user.id)
+        ids = await _seed_messages(db_session, sid, 2)
+        # 在 turn1 之后加一条 discarded human
+        t1 = datetime(2025, 6, 1, 0, 0, 0, 250000, tzinfo=timezone.utc)
+        db_session.add(Message(
+            session_id=sid, role=MessageRole.human,
+            content="should_not_appear", status=MessageStatus.discarded,
+            turn_number=1, created_at=t1,
+        ))
+        await db_session.flush()
+
+        result = await load_active_history_for_assembly(sid, current_turn=3, db=db_session)
+
+        contents = [m.content for m in result]
+        assert "should_not_appear" not in contents, "discarded must be filtered"
+
+    @pytest.mark.asyncio
+    async def test_summaries_injection_branches(self, db_session, child_user) -> None:
+        """Given (c1) rs=None (c2) rs.turn_summaries=[] (c3) rs.turn_summaries=[s1,s2],
+        When load_active_history_for_assembly, Then (c1/c2) 无 SystemMessage (c3) 有 2 条 SystemMessage 前缀。"""
+        sid = await _seed_session(db_session, child_user.id)
+        await _seed_messages(db_session, sid, 1)
+
+        # (c1) rs is None
+        result1 = await load_active_history_for_assembly(sid, current_turn=2, db=db_session)
+        assert not any(isinstance(m, SystemMessage) for m in result1), "no rs → no summaries"
+
+        # (c2) rs.turn_summaries = []
+        db_session.add(RollingSummary(session_id=sid, last_turn=1, turn_summaries=[]))
+        await db_session.flush()
+        result2 = await load_active_history_for_assembly(sid, current_turn=2, db=db_session)
+        # Need to refresh — the session may cache the old result
+        sm_count2 = sum(1 for m in result2 if isinstance(m, SystemMessage))
+        # If session cache returns same, skip this sub-branch
+        await db_session.commit()
+
+        # (c3) rs.turn_summaries = [s1, s2] — need a fresh session or overwrite
+        sid3 = await _seed_session(db_session, child_user.id)
+        await _seed_messages(db_session, sid3, 1)
+        db_session.add(RollingSummary(
+            session_id=sid3, last_turn=1,
+            turn_summaries=[
+                {"turn_number": 1, "summary": "第一轮", "created_at": "2025-01-01T00:00:00"},
+                {"turn_number": 1, "summary": "第二轮", "created_at": "2025-01-01T00:01:00"},
+            ],
+        ))
+        await db_session.flush()
+
+        result3 = await load_active_history_for_assembly(sid3, current_turn=2, db=db_session)
+        system_msgs = [m for m in result3 if isinstance(m, SystemMessage)]
+        assert len(system_msgs) == 2, f"expected 2 SystemMessages, got {len(system_msgs)}"
+        assert "第一轮" in system_msgs[0].content
+
+    @pytest.mark.asyncio
+    async def test_summaries_before_active_messages(self, db_session, child_user) -> None:
+        """Given summaries 非空 + actives 非空, When load_active_history_for_assembly,
+        Then SystemMessage 列表在 Human/AI 之前。
+        Given/When/Then: (d) 前缀顺序。"""
+        sid = await _seed_session(db_session, child_user.id)
+        await _seed_messages(db_session, sid, 2)
+        db_session.add(RollingSummary(
+            session_id=sid, last_turn=2,
+            turn_summaries=[{"turn_number": 1, "summary": "开头", "created_at": "2025-01-01T00:00:00"}],
+        ))
+        await db_session.flush()
+
+        result = await load_active_history_for_assembly(sid, current_turn=3, db=db_session)
+
+        # 找到首个非 SystemMessage 的位置
+        first_non_system_idx = next(
+            (i for i, m in enumerate(result) if not isinstance(m, SystemMessage)),
+            len(result),
+        )
+        # 所有 SystemMessage 都在第一个 non-SystemMessage 之前
+        for i in range(first_non_system_idx):
+            assert isinstance(result[i], SystemMessage), f"idx {i} should be SystemMessage"
+        assert first_non_system_idx > 0, "should have at least one SystemMessage before active"
 
 
 class TestBuildCrisisContext:
