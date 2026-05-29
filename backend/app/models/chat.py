@@ -83,6 +83,13 @@ class Message(BaseMixin, Base):
         nullable=True,
         comment="LLM finish_reason: stop/length/content_filter/user_stopped 等",
     )
+    turn_number: Mapped[int] = mapped_column(
+        default=0,
+        server_default="0",
+        nullable=False,
+        comment="对话轮次编号。human/ai 同轮共享同号；summary/discarded 行保持 0。"
+        "由 Step 3 commit①/commit② 与 backfill SQL 共同维护",
+    )
 
     # relationships
     session: Mapped["Session"] = relationship(back_populates="messages")

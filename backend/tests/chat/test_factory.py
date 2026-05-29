@@ -37,7 +37,8 @@ class _FakeSettings:
         self.deepseek_api_key = SecretStr(kwargs.get("deepseek_api_key", "sk-ds-test"))
         self.deepseek_base_url = kwargs.get("deepseek_base_url", "https://api.deepseek.com/v1")
         self.deepseek_model = kwargs.get("deepseek_model", "deepseek-v4-flash")
-        self.deepseek_reasoning_effort = kwargs.get("deepseek_reasoning_effort", "high")
+        self.main_thinking_enabled = kwargs.get("main_thinking_enabled", True)
+        self.main_reasoning_effort = kwargs.get("main_reasoning_effort", "max")
         self.bailian_api_key = SecretStr(kwargs.get("bailian_api_key", "sk-bl-test"))
         self.bailian_base_url = kwargs.get(
             "bailian_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -191,7 +192,7 @@ class TestChatDeepSeekConstruction:
         assert captured.get("model") == "deepseek-v4-flash"
         assert captured.get("extra_body") == {
             "thinking": {"type": "enabled"},
-            "reasoning_effort": "high",
+            "reasoning_effort": "max",
         }
 
     def test_openai_construction_params(self) -> None:

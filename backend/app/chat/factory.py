@@ -142,7 +142,8 @@ _PROVIDER_REGISTRY: dict[str, Callable[..., Runnable]] = {
         base_url=settings.deepseek_base_url,
         model=settings.deepseek_model,
         timeout=settings.llm_request_timeout_seconds,
-        reasoning_effort=settings.deepseek_reasoning_effort,
+        thinking_enabled=settings.main_thinking_enabled,
+        reasoning_effort=settings.main_reasoning_effort,
     ),
     "openai": lambda settings: _build_chat_openai(
         api_key=settings.bailian_api_key.get_secret_value(),

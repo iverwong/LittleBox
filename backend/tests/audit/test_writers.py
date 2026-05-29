@@ -1,4 +1,4 @@
-"""DB 写入路径测试：audit_records INSERT + rolling_summaries upsert（6 条）。"""
+"""DB 写入路径测试：audit_records INSERT + rolling_summaries upsert（6 条 + crisis_locked_message_id 短路）。"""
 from __future__ import annotations
 
 import uuid
@@ -83,13 +83,13 @@ class TestWriteAuditResults:
 
         rs = (
             await db_session.execute(
-                text("SELECT last_turn, crisis_locked, session_notes FROM rolling_summaries WHERE session_id=:sid"),
+                text("SELECT last_turn, crisis_locked_message_id, session_notes FROM rolling_summaries WHERE session_id=:sid"),
                 {"sid": sid},
             )
         ).fetchone()
         assert rs is not None
         assert rs.last_turn == 1
-        assert rs.crisis_locked is False
+        assert rs.crisis_locked_message_id is None
         assert rs.session_notes == "用户今天情绪稳定。"
 
     async def test_second_update(self, db_session, sid):
@@ -136,23 +136,29 @@ class TestWriteAuditResults:
         )).scalar()
         assert count == 1  # 仅 turn=5, 无 turn=3
 
-    async def test_crisis_locked_accumulation(self, db_session, sid):
-        """crisis_locked 一旦为 true 不可被 false 回退。"""
+    async def test_crisis_locked_short_circuit(self, db_session, sid):
+        """crisis_locked_message_id 短路保留：命中后非空；后续轮 crisis_detected=False 但旧值保留。"""
         crisis_out = _BASE_OUTPUT.model_copy(
             update={"crisis_detected": True, "crisis_topic": "自残倾向"},
         )
+        target_id = uuid.uuid4()
 
-        await write_audit_results(db_session, str(sid), 1, _BASE_OUTPUT, "第1轮", "摘要1")
+        await write_audit_results(db_session, str(sid), 1, _BASE_OUTPUT, "第1轮", "摘要1",
+                                  target_message_id=target_id)
         await db_session.flush()
-        await write_audit_results(db_session, str(sid), 2, crisis_out, "第2轮", "摘要2")
+        await write_audit_results(db_session, str(sid), 2, crisis_out, "第2轮", "摘要2",
+                                  target_message_id=target_id)
         await db_session.flush()
-        await write_audit_results(db_session, str(sid), 3, _BASE_OUTPUT, "第3轮", "摘要3")
+        await write_audit_results(db_session, str(sid), 3, _BASE_OUTPUT, "第3轮", "摘要3",
+                                  target_message_id=target_id)
 
         rs = (await db_session.execute(
-            text("SELECT crisis_locked FROM rolling_summaries WHERE session_id=:sid"),
+            text("SELECT crisis_locked_message_id FROM rolling_summaries WHERE session_id=:sid"),
             {"sid": sid},
         )).fetchone()
-        assert rs.crisis_locked is True  # 不可回 false
+        # 第 2 轮命中 crisis → crisis_locked_message_id 非空
+        assert rs.crisis_locked_message_id is not None
+        assert rs.crisis_locked_message_id == target_id
 
     async def test_multiple_turns(self, db_session, sid):
         """3 轮正确累积 + 无回退告警。"""
