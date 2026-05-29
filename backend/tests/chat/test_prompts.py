@@ -13,16 +13,25 @@ from unittest.mock import patch
 
 import pytest
 
+from langchain_core.messages import SystemMessage
+
 from app.chat.prompts import (
+    STUB_CRISIS_SYSTEM_PROMPT,
     STUB_GENDER_FEMALE,
     STUB_GENDER_MALE,
+    STUB_REDLINE_SYSTEM_PROMPT,
     STUB_TIER_EARLY_CHILDHOOD,
     STUB_TIER_LATE_CHILDHOOD,
     STUB_TIER_PRE_TEEN,
     STUB_TIER_TEEN,
     STUB_TIER_YOUNG_ADULT,
+    build_crisis_system_prompt,
+    build_redline_system_prompt,
     build_system_prompt,
     compute_age,
+    format_guidance_wrapper,
+    format_reentry_wrapper_crisis,
+    format_reentry_wrapper_redline,
 )
 
 
@@ -214,16 +223,15 @@ class TestBuildSystemPrompt:
 
 
 class TestStubCount:
-    """关注点 6：TODO(prompts-content) grep 命中 12 处"""
+    """关注点：TODO(prompts-content) slot 计数。"""
 
     def test_todo_content_slots_count(self) -> None:
-        """实际 slot 数：9 处 stub 函数注释 + 2 处说明性文字 + 1 COMPRESSION_PROMPT_STUB = 12。
+        """M9 Step 4：9 个原有 + 5 个新增 = 14。
 
-        关注点 6 要求 "grep 命中数与实际 stub 函数数一致"——
-        9 个 stub 函数（_identity_block/_safety_block 各1 + _tier_block 5档 + _gender_block 2状态）
-        均在函数体内有 # TODO(prompts-content) 行。
-        M6-patch3 Step 2 新增 COMPRESSION_PROMPT_STUB 含第 12 处。
-        M8 fix: COMPRESSION_PROMPT_STUB 填实后移除，退回 11。
+        原有（9）：_identity_block(1) + _safety_block(1) + _tier_block(5) + _gender_block(2)
+        新增（5）：STUB_CRISIS_SYSTEM_PROMPT + STUB_REDLINE_SYSTEM_PROMPT +
+                  STUB_REENTRY_WRAPPER_CRISIS + STUB_REENTRY_WRAPPER_REDLINE +
+                  STUB_GUIDANCE_WRAPPER
         """
         import subprocess
 
@@ -234,6 +242,84 @@ class TestStubCount:
             cwd="/app",
         )
         count = int(result.stdout.strip())
-        # 9 stub function body comments + 2 explanatory = 11 (COMPRESSION_PROMPT_STUB now real content)
-        assert count == 11, f"expected 11 TODO(prompts-content) lines, got {count}"
+        assert count == 14, f"expected 14 TODO(prompts-content) lines, got {count}"
+
+
+class TestM9InterventionPrompts:
+    """M9 Step 4：三级干预 STUB prompt + format_* wrapper 纯函数测试。
+
+    测试纪律：纯函数，不触 DB / Redis / 任何 fixture。
+    """
+
+    # ---- C.1 / C.2: build_crisis_system_prompt / build_redline_system_prompt ----
+
+    def test_crisis_system_prompt_has_5_sections(self) -> None:
+        """Given age=10 gender=male, When build_crisis_system_prompt, Then 5 段标题存在。"""
+        msg = build_crisis_system_prompt(10, "male")
+        content = msg.content
+        assert isinstance(msg, SystemMessage)
+        assert "# 身份与原则" in content
+        assert "# 安全底线" in content
+        assert "# 对话风格" in content
+        assert "# 关于对方的性别" in content
+        assert "# 当前对话上下文" in content
+        assert STUB_CRISIS_SYSTEM_PROMPT in content
+
+    def test_redline_system_prompt_has_5_sections(self) -> None:
+        """Given age=10 gender=male, When build_redline_system_prompt, Then 5 段标题存在。"""
+        msg = build_redline_system_prompt(10, "male")
+        content = msg.content
+        assert isinstance(msg, SystemMessage)
+        assert "# 身份与原则" in content
+        assert "# 安全底线" in content
+        assert "# 对话风格" in content
+        assert "# 关于对方的性别" in content
+        assert "# 当前对话上下文" in content
+        assert STUB_REDLINE_SYSTEM_PROMPT in content
+
+    def test_crisis_system_prompt_gender_none_omits_section(self) -> None:
+        """Given gender=None, When build_crisis_system_prompt, Then 不含性别段。"""
+        content = build_crisis_system_prompt(10, None).content
+        assert "# 关于对方的性别" not in content
+        assert "对方今年 10 岁。" in content
+
+    def test_redline_system_prompt_gender_none_omits_section(self) -> None:
+        """Given gender=None, When build_redline_system_prompt, Then 不含性别段。"""
+        content = build_redline_system_prompt(10, None).content
+        assert "# 关于对方的性别" not in content
+        assert "对方今年 10 岁。" in content
+
+    # ---- C.3 / C.4: format_reentry_wrapper_* ----
+
+    def test_format_reentry_wrapper_crisis(self) -> None:
+        """Given user_input='hi', When format_reentry_wrapper_crisis, Then 含 STUB 标记。"""
+        result = format_reentry_wrapper_crisis("hi")
+        assert isinstance(result, str)
+        assert "TODO(prompts-content)" in result
+        assert "hi" in result
+
+    def test_format_reentry_wrapper_redline(self) -> None:
+        """Given user_input='hi', When format_reentry_wrapper_redline, Then 含 STUB 标记。"""
+        result = format_reentry_wrapper_redline("hi")
+        assert isinstance(result, str)
+        assert "TODO(prompts-content)" in result
+        assert "hi" in result
+
+    # ---- C.5: format_guidance_wrapper ----
+
+    def test_guidance_wrapper_none_passthrough(self) -> None:
+        """Given guidance=None, When format_guidance_wrapper, Then 返回原始 user_input。"""
+        assert format_guidance_wrapper("hi", None) == "hi"
+
+    def test_guidance_wrapper_empty_string_passthrough(self) -> None:
+        """Given guidance="", When format_guidance_wrapper, Then 返回原始 user_input。"""
+        assert format_guidance_wrapper("hi", "") == "hi"
+
+    def test_guidance_wrapper_with_guidance(self) -> None:
+        """Given guidance non-empty, When format_guidance_wrapper, Then 含 TODO 标记。"""
+        result = format_guidance_wrapper("hi", "be safe")
+        assert result != "hi"
+        assert "TODO(prompts-content)" in result
+        assert "hi" in result
+        assert "be safe" in result
 
