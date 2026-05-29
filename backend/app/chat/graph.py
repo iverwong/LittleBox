@@ -23,7 +23,6 @@ from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
     HumanMessage,
-    SystemMessage,
 )
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, StateGraph
@@ -32,11 +31,22 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.redis_client import _build_arq_redis_url
-from app.chat.context import build_context, load_active_history_for_assembly
+from app.chat.context import (
+    build_crisis_context,
+    build_redline_context,
+    load_active_history_for_assembly,
+)
 from app.chat.context_schema import ChatContextSchema
 from app.chat.extractors import extract_finish_reason, extract_reasoning_content, extract_usage
-from app.chat.factory import build_main_llm
-from app.chat.prompts import build_system_prompt, format_guidance_wrapper
+from app.chat.factory import build_crisis_llm, build_main_llm, build_redline_llm
+from app.chat.prompts import (
+    build_crisis_system_prompt,
+    build_redline_system_prompt,
+    build_system_prompt,
+    format_guidance_wrapper,
+    format_reentry_wrapper_crisis,
+    format_reentry_wrapper_redline,
+)
 from app.chat.state import AuditState, MainDialogueState
 from app.config import settings
 from app.models.chat import Message, Session
@@ -260,7 +270,7 @@ async def build_messages_main(
     state: MainDialogueState,
     runtime: Runtime[ChatContextSchema],
 ) -> dict:
-    """W1 wrapper 模式：load_active_history_for_assembly（不含本轮 human）+ 末位 wrapped HumanMessage。
+    """W1 wrapper 模式：load_active_history_for_assembly + 末位 wrapped HumanMessage。
 
     装配顺序：
       [system_prompt, *summaries(前缀), *active_messages(不含本轮),
@@ -298,16 +308,45 @@ async def build_messages_crisis(
     state: MainDialogueState,
     runtime: Runtime[ChatContextSchema],
 ) -> dict:
-    """patch0 期委派 build_messages_main；M9 主体 D 层替换为 crisis 专属装配。"""
-    return await build_messages_main(state, runtime)
+    """crisis 专属装配：crisis system prompt → anchor_window → after_anchor → reentry wrapper。"""
+    ctx = runtime.context
+    audit = state.get("audit_state", {})
+
+    target_mid = audit.get("target_message_id")
+    assert target_mid is not None, (
+        "M9 Step 8 前 target_message_id 由 audit 节点必填；"
+        "None 表示 PG 兜底或 Redis 信号尚未就绪"
+    )
+
+    async with ctx.db_session_factory() as db:
+        anchor_system, after_anchor = await build_crisis_context(
+            ctx.session_id, db, target_mid,
+        )
+    return {"messages": [
+        build_crisis_system_prompt(ctx.age, ctx.gender),
+        anchor_system,
+        *after_anchor,
+        HumanMessage(content=format_reentry_wrapper_crisis(ctx.user_input)),
+    ]}
 
 
 async def build_messages_redline(
     state: MainDialogueState,
     runtime: Runtime[ChatContextSchema],
 ) -> dict:
-    """patch0 期委派 build_messages_main；M9 主体 D 层替换为 redline 专属装配。"""
-    return await build_messages_main(state, runtime)
+    """redline 专属装配：redline system prompt → summaries → recent pairs → reentry wrapper。"""
+    ctx = runtime.context
+
+    async with ctx.db_session_factory() as db:
+        summaries_systems, recent_pairs = await build_redline_context(
+            ctx.session_id, state["turn_number"], db,
+        )
+    return {"messages": [
+        build_redline_system_prompt(ctx.age, ctx.gender),
+        *summaries_systems,
+        *recent_pairs,
+        HumanMessage(content=format_reentry_wrapper_redline(ctx.user_input)),
+    ]}
 
 
 # ---------------------------------------------------------------------------
@@ -375,24 +414,80 @@ async def call_crisis_llm(
     state: MainDialogueState,
     runtime: Runtime[ChatContextSchema],
 ) -> dict:
-    """Crisis LLM stub — patch0 回退到主 LLM。
+    """调 crisis 干预 LLM，通过 get_stream_writer() 流式输出 chunk。
 
-    M9 主体 D 层替换为危机干预专属 prompt + 模型。函数体零拓扑 diff。
+    Verbatim copy of call_main_llm，仅替换 builder + provider key。
     """
-    logger.warning("crisis_llm not implemented, falling back to main_llm in patch0")
-    return await call_main_llm(state, runtime)
+    ctx = runtime.context
+    writer = get_stream_writer()
+    llm = build_crisis_llm(ctx.settings)
+    parts: list[str] = []
+
+    llm_messages = list(state["messages"])
+
+    provider = ctx.settings.audit_provider
+
+    async for chunk in llm.astream(llm_messages):
+        _chunk_typed: AIMessageChunk = chunk  # type: ignore[assignment]
+
+        if extract_reasoning_content(_chunk_typed, provider):
+            writer({"reasoning": True})
+
+        text = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
+        if text:
+            writer({"delta": text})
+            parts.append(text)
+
+        fr = extract_finish_reason(_chunk_typed, provider)
+        if fr:
+            writer({"finish_reason": fr})
+
+        if _chunk_typed.usage_metadata is not None:
+            usage = extract_usage(_chunk_typed)
+            if usage:
+                writer({"usage_metadata": usage})
+
+    return {"messages": [AIMessage(content="".join(parts))]}
 
 
 async def call_redline_llm(
     state: MainDialogueState,
     runtime: Runtime[ChatContextSchema],
 ) -> dict:
-    """Redline LLM stub — patch0 回退到主 LLM。
+    """调 redline 干预 LLM，通过 get_stream_writer() 流式输出 chunk。
 
-    M9 主体 D 层替换为红线干预专属 prompt + 模型。函数体零拓扑 diff。
+    Verbatim copy of call_main_llm，仅替换 builder + provider key。
     """
-    logger.warning("redline_llm not implemented, falling back to main_llm in patch0")
-    return await call_main_llm(state, runtime)
+    ctx = runtime.context
+    writer = get_stream_writer()
+    llm = build_redline_llm(ctx.settings)
+    parts: list[str] = []
+
+    llm_messages = list(state["messages"])
+
+    provider = ctx.settings.audit_provider
+
+    async for chunk in llm.astream(llm_messages):
+        _chunk_typed: AIMessageChunk = chunk  # type: ignore[assignment]
+
+        if extract_reasoning_content(_chunk_typed, provider):
+            writer({"reasoning": True})
+
+        text = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
+        if text:
+            writer({"delta": text})
+            parts.append(text)
+
+        fr = extract_finish_reason(_chunk_typed, provider)
+        if fr:
+            writer({"finish_reason": fr})
+
+        if _chunk_typed.usage_metadata is not None:
+            usage = extract_usage(_chunk_typed)
+            if usage:
+                writer({"usage_metadata": usage})
+
+    return {"messages": [AIMessage(content="".join(parts))]}
 
 
 # ---------------------------------------------------------------------------

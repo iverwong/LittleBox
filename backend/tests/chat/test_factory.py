@@ -15,8 +15,10 @@ from langchain_openai import ChatOpenAI
 from app.chat.factory import (
     ProviderNotRegisteredError,
     _PROVIDER_REGISTRY,
+    build_crisis_llm,
     build_main_llm,
     build_provider_llm,
+    build_redline_llm,
 )
 
 
@@ -220,6 +222,24 @@ class TestChatDeepSeekConstruction:
             "thinking": {"type": "enabled"},
             "reasoning_effort": "max",
         }
+
+    def test_crisis_llm_config(self) -> None:
+        """run_lm: build_crisis_llm 实例非空、复audit_deepseek。"""
+        settings = _FakeSettings()
+        llm = build_crisis_llm(settings)
+        assert isinstance(llm, ChatDeepSeek)
+        assert llm.extra_body["thinking"] == {"type": "enabled"}
+        assert llm.extra_body["reasoning_effort"] == "max"
+        assert not hasattr(llm, "tools") or llm.tools is None or llm.tools == []
+
+    def test_redline_llm_config(self) -> None:
+        """run_llm: build_redline_llm 实例非空、复audit_deepseek。"""
+        settings = _FakeSettings()
+        llm = build_redline_llm(settings)
+        assert isinstance(llm, ChatDeepSeek)
+        assert llm.extra_body["thinking"] == {"type": "enabled"}
+        assert llm.extra_body["reasoning_effort"] == "max"
+        assert not hasattr(llm, "tools") or llm.tools is None or llm.tools == []
 
 
 # ---- T5b: ChatDeepSeek thinking params (Step 11.3) ----

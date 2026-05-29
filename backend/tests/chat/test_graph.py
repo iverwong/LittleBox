@@ -253,51 +253,63 @@ def _make_stub_runtime():
 
 
 @pytest.mark.asyncio
-async def test_crisis_llm_falls_back_to_main_with_warning(caplog):
-    """call_crisis_llm logs patch0 fallback warning and delegates to call_main_llm."""
+async def test_crisis_llm_streams_via_writer(monkeypatch):
+    """call_crisis_llm 通过 stream writer 输出 delta + finish_reason。"""
     state = _make_state(
         messages=[SystemMessage(content="sys"), HumanMessage(content="hi")],
     )
     runtime = _make_stub_runtime()
-    import app.chat.graph as graph_mod
 
-    original = graph_mod.get_stream_writer
+    written: list[dict] = []
+    fake_writer = type("W", (), {"__call__": lambda self, d: written.append(d)})()
 
-    class FakeWriter:
-        def __call__(self, data):
-            pass
+    fake_chunk = AIMessageChunk(
+        content="回复",
+        response_metadata={"finish_reason": "stop"},
+    )
 
-    graph_mod.get_stream_writer = lambda: FakeWriter()
-    try:
-        with caplog.at_level(logging.WARNING):
-            await call_crisis_llm(state, runtime)
-        assert any("crisis_llm not implemented" in msg for msg in caplog.messages)
-    finally:
-        graph_mod.get_stream_writer = original
+    class _FakeLLM:
+        async def astream(self, msgs):
+            yield fake_chunk
+
+    monkeypatch.setattr("app.chat.graph.get_stream_writer", lambda: fake_writer)
+    monkeypatch.setattr("app.chat.graph.build_crisis_llm", lambda _: _FakeLLM())
+
+    await call_crisis_llm(state, runtime)
+
+    deltas = [w for w in written if "delta" in w]
+    assert len(deltas) >= 1
+    assert deltas[0]["delta"] == "回复"
 
 
 @pytest.mark.asyncio
-async def test_redline_llm_falls_back_to_main_with_warning(caplog):
-    """call_redline_llm logs patch0 fallback warning and delegates to call_main_llm."""
+async def test_redline_llm_streams_via_writer(monkeypatch):
+    """call_redline_llm 通过 stream writer 输出 delta + finish_reason。"""
     state = _make_state(
         messages=[SystemMessage(content="sys"), HumanMessage(content="hi")],
     )
     runtime = _make_stub_runtime()
-    import app.chat.graph as graph_mod
 
-    original = graph_mod.get_stream_writer
+    written: list[dict] = []
+    fake_writer = type("W", (), {"__call__": lambda self, d: written.append(d)})()
 
-    class FakeWriter:
-        def __call__(self, data):
-            pass
+    fake_chunk = AIMessageChunk(
+        content="红线回复",
+        response_metadata={"finish_reason": "stop"},
+    )
 
-    graph_mod.get_stream_writer = lambda: FakeWriter()
-    try:
-        with caplog.at_level(logging.WARNING):
-            await call_redline_llm(state, runtime)
-        assert any("redline_llm not implemented" in msg for msg in caplog.messages)
-    finally:
-        graph_mod.get_stream_writer = original
+    class _FakeLLM:
+        async def astream(self, msgs):
+            yield fake_chunk
+
+    monkeypatch.setattr("app.chat.graph.get_stream_writer", lambda: fake_writer)
+    monkeypatch.setattr("app.chat.graph.build_redline_llm", lambda _: _FakeLLM())
+
+    await call_redline_llm(state, runtime)
+
+    deltas = [w for w in written if "delta" in w]
+    assert len(deltas) >= 1
+    assert deltas[0]["delta"] == "红线回复"
 
 
 # ---------------------------------------------------------------------------
