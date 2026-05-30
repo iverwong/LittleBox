@@ -475,7 +475,11 @@ async def _run_llm_pipeline(
                         from app.chat.context import _to_lc_message
                         from app.chat.factory import build_provider_llm
 
-                        assert protected_id is not None, "compression requires protected_id"
+                        if protected_id is None:
+                            raise RuntimeError(
+                                "compression triggered but no prior message to protect; "
+                                "this should not happen in production"
+                            )
 
                         actives_orm = (
                             (
