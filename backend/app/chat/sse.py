@@ -19,6 +19,20 @@ def _frame_sse_event(event_type: str, data: dict) -> bytes:
     return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
 
 
+def build_flow_pause_frame(reason: str = "backpressure") -> bytes:
+    """构造 `flow_pause` SSE 帧，段二在 backpressure 断流时发射。
+
+    帧格式（复用 M6 多行协议）：
+      event: flow_pause
+      data: {"reason": "backpressure"}
+
+    类型由 `event:` 行承载，data 内不放 `type` 字段（与 delta 帧同构）。
+    前端 `react-native-sse` 靠 `event:` 名分发到 `es.addEventListener('flow_pause')`；
+    缺 `event:` 行会落进默认 `message` 事件被静默丢弃。
+    """
+    return _frame_sse_event("flow_pause", {"reason": reason})
+
+
 async def stream_graph_to_sse(payloads) -> AsyncIterator[bytes]:
     """将 LangGraph custom-stream dict payload 流转为 SSE 多行协议帧（me 主路径）。
 
