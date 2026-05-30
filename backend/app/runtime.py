@@ -57,6 +57,11 @@ class RuntimeResources:
         self._chat_tasks[sid] = task
 
         def _on_done(t: asyncio.Task) -> None:
+            # 身份守卫：仅 pop 当前注册的 task。
+            # sid 唯一性由外部保障（acquire_session_lock 409 SessionBusy +
+            # running_streams 注册早于 create_task），此守卫为防御性编程。
+            if self._chat_tasks.get(sid) is not t:
+                return
             self._chat_tasks.pop(sid, None)
             if not t.cancelled():
                 if exc := t.exception():

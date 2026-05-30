@@ -1,4 +1,6 @@
 """FastAPI app factory."""
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -14,6 +16,8 @@ from app.auth.redis_client import redis_lifespan
 from app.config import settings
 from app.runtime import build_runtime, teardown_runtime
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -24,7 +28,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
             yield
         finally:
-            await teardown_runtime(rr)
+            # M9-patch1：有界等候正在运行的 chat bg task 优雅退出。
+            # 独立 try/finally 保证 teardown 不被等候块意外跳过（关注点 #6）。
+            try:
+                tasks = list(rr._chat_tasks.values())
+                if tasks:
+                    logger.warning(
+                        "waiting %d chat task(s) to finish (timeout=30s)",
+                        len(tasks),
+                    )
+                    done, pending = await asyncio.wait(tasks, timeout=30.0)
+                    if pending:
+                        logger.warning(
+                            "chat tasks timeout, cancelling %d task(s)",
+                            len(pending),
+                        )
+                        for t in pending:
+                            t.cancel()
+                        await asyncio.gather(*pending, return_exceptions=True)
+            finally:
+                await teardown_runtime(rr)
 
 
 def create_app() -> FastAPI:
