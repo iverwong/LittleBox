@@ -745,7 +745,6 @@ async def _stream_generator(
 
             if frame is None:
                 break
-                break
 
             try:
                 yield frame
