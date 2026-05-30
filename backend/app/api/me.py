@@ -715,10 +715,10 @@ async def _stream_generator(
     段一 put_nowait → QueueFull → 翻 overflow → 段二从 queue.get() 取出后
     queue.full() 永远返回 False（size 已减 1），造成 overflow 漏检。
 
-    首次帧超时保护：bg task（段一）在 async with db_session_factory 或 session_meta
-    入队前静默崩溃时，queue 永远为空 → generator 无限阻塞。
-    前 10 秒内必须产生至少一帧（session_meta），超时则静默退出，
-    避免请求级永久挂死（关注点 #3 补充防护）。
+    首次帧超时保护：仅覆盖 session_meta 入队前的静默崩溃（如 db_session_factory
+    初始化失败或段一 startup 异常）。session_meta 在进入 async-with 后第一句
+    入队，生产毫秒级；10s 阈值不覆盖首 token 交付延迟。
+    超时即静默退出（不做错误帧 — 段一已负责日志），避免请求级永久挂死。
     """
     try:
         first_frame = True
