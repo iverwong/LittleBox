@@ -2,7 +2,7 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import AsyncIterator, TYPE_CHECKING
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,20 +16,28 @@ from app.auth.redis_client import redis_lifespan
 from app.config import settings
 from app.runtime import build_runtime, teardown_runtime
 
+if TYPE_CHECKING:
+    from app.runtime import RuntimeResources
+
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """合并 lifespan：Redis 连接池 + 进程级 RuntimeResources。"""
-    async with redis_lifespan():
-        rr = await build_runtime(settings)
-        app.state.resources = rr
-        try:
-            yield
-        finally:
+    # M9-patch1 test seam: 若 app.state.resources 已注入（测试缝），
+    # 跳过 redis_lifespan + build_runtime，直接使用预置资源。
+    rr: RuntimeResources | None = getattr(app.state, "resources", None)
+    if rr is None:
+        async with redis_lifespan():
+            rr = await build_runtime(settings)
+            app.state.resources = rr
+    _teardown_owned = rr is not None and getattr(app.state, "_test_resources", None) is None
+    try:
+        yield
+    finally:
+        if rr is not None:
             # M9-patch1：有界等候正在运行的 chat bg task 优雅退出。
-            # 独立 try/finally 保证 teardown 不被等候块意外跳过（关注点 #6）。
             try:
                 tasks = list(rr._chat_tasks.values())
                 if tasks:
@@ -47,7 +55,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                             t.cancel()
                         await asyncio.gather(*pending, return_exceptions=True)
             finally:
-                await teardown_runtime(rr)
+                if _teardown_owned:
+                    await teardown_runtime(rr)
 
 
 def create_app() -> FastAPI:

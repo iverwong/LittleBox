@@ -11,6 +11,7 @@ shutdown wait / shutdown cancel / stop signal / commit①~create_task lock relea
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
@@ -329,82 +330,122 @@ async def test_llm_pipeline_exception_rolls_back_without_ai_row(lifecycle_ctx):
 
 
 # =====================================================================
-# #5: shutdown 等候 — 纯 async 单元
+# #5: shutdown 等候 — 驱动真实 lifespan shutdown
 # =====================================================================
 
 
 @pytest.mark.asyncio
-async def test_shutdown_waits_for_in_flight_bg_task():
+async def test_shutdown_waits_for_in_flight_bg_task(engine, redis_client):
     """Given an in-flight chat bg task expected to finish in 0.2s,
-    When lifespan shutdown logic runs,
+    When lifespan shutdown runs via exiting the lifespan context,
     Then asyncio.wait should return with done containing the task
-         before the 30s timeout.
+         before the 30s timeout, and the task should not be cancelled.
     """
-    rr = _make_real_rr_for_shutdown()
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    rr = _make_real_rr_for_shutdown(engine, redis_client)
 
     async def quick_task():
         await asyncio.sleep(0.2)
         return 42
 
     t = asyncio.create_task(quick_task())
-    rr.register_chat_task("test-sid-quick", t)
+    rr.register_chat_task("test-shutdown-quick", t)
 
-    tasks = list(rr._chat_tasks.values())
-    done, pending = await asyncio.wait(tasks, timeout=30.0)
-    assert t in done, "quick task should complete before timeout"
-    assert len(pending) == 0, "no tasks should be pending"
-    assert not t.cancelled(), "task should complete normally"
-    # Cleanup
-    if pending:
-        for p in pending:
-            p.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
+    app = _make_app_with_injected_rr(rr)
+
+    # 进入 lifespan 上下文 → exit 时触发 shutdown 等候块
+    async with _lifespan_for_test(app):
+        pass  # lifespan 在 exit 时执行 shutdown 逻辑
+
+    assert t.done(), "quick task should have completed during shutdown wait"
+    assert not t.cancelled(), "task should not have been cancelled"
 
 
 # =====================================================================
-# #6: shutdown 超时 cancel — 纯 async 单元
+# #6: shutdown 超时 cancel — 驱动真实 lifespan shutdown
 # =====================================================================
 
 
 @pytest.mark.asyncio
-async def test_shutdown_cancels_stuck_bg_task_after_timeout():
-    """Given a stuck chat bg task (sleep long),
-    When lifespan shutdown times out (shortened to 0.2s for test),
+async def test_shutdown_cancels_stuck_bg_task_after_timeout(engine, redis_client):
+    """Given a stuck chat bg task (sleep 60s),
+    When lifespan shutdown with patched short timeout runs,
     Then the pending task should be cancelled and gather without raising.
     """
-    rr = _make_real_rr_for_shutdown()
+    from unittest.mock import patch
+
+    rr = _make_real_rr_for_shutdown(engine, redis_client)
 
     async def stuck_task():
         await asyncio.sleep(60)
 
     t = asyncio.create_task(stuck_task())
-    rr.register_chat_task("test-sid-stuck", t)
+    rr.register_chat_task("test-shutdown-stuck", t)
 
-    tasks = list(rr._chat_tasks.values())
-    done, pending = await asyncio.wait(tasks, timeout=0.2)
-    assert t in pending, "stuck task should still be pending after short timeout"
+    app = _make_app_with_injected_rr(rr)
 
-    for p in pending:
-        p.cancel()
-    results = await asyncio.gather(*pending, return_exceptions=True)
-    assert all(isinstance(r, asyncio.CancelledError) for r in results), (
-        "all pending tasks should be cancelled"
-    )
+    # main.py 的 shutdown 块硬编码 timeout=30.0。
+    # patch app.main.asyncio.wait 将 timeout 截短至 0.2s，不改变 shutdown 逻辑。
+    # asyncio.wait 是高层函数，非事件循环内部依赖——patch 安全。
+    _orig_wait = asyncio.wait
+
+    async def _short_timeout_wait(tasks, timeout=30.0):
+        return await _orig_wait(tasks, timeout=0.2)
+
+    with patch("app.main.asyncio.wait", _short_timeout_wait):
+        async with _lifespan_for_test(app):
+            pass
+
+    # shutown 等候超时 → cancel + gather(return_exceptions=True)
+    assert t.cancelled(), "stuck task should be cancelled after shutdown timeout"
 
 
-def _make_real_rr_for_shutdown() -> RuntimeResources:
-    """Construct a real RuntimeResources for shutdown unit tests."""
+def _make_real_rr_for_shutdown(engine=None, redis_client=None) -> RuntimeResources:
+    """Construct a RuntimeResources for lifespan shutdown tests.
+
+    Uses real engine/redis when provided (from conftest fixtures);
+    falls back to MagicMock for standalone use.
+    """
     from unittest.mock import AsyncMock, MagicMock
-    rr = RuntimeResources(
+
+    kwargs = dict(
         settings=_module_settings,
-        db_engine=MagicMock(),
+        db_engine=engine or MagicMock(),
         db_session_factory=MagicMock(),
-        audit_redis=MagicMock(),
+        audit_redis=redis_client or MagicMock(),
         arq_pool=AsyncMock(),
         main_graph=MagicMock(),
         audit_graph=MagicMock(),
     )
-    return rr
+    return RuntimeResources(**kwargs)
+
+
+def _make_app_with_injected_rr(rr: RuntimeResources):
+    """Create a FastAPI app with pre-injected RuntimeResources.
+
+    Sets app.state.resources + _test_resources flag so lifespan's test seam
+    skips build_runtime and teardown_runtime, but still runs the shutdown block.
+    """
+    from app.main import create_app
+
+    app = create_app()
+    app.state.resources = rr
+    app.state._test_resources = True
+    return app
+
+
+@asynccontextmanager
+async def _lifespan_for_test(app):
+    """Enter/exit lifespan context for test-injected resources.
+
+    Intended for shutdown tests (#5, #6): the lifespan's test seam detects
+    _test_resources flag and skips build_runtime/redis_lifespan,
+    but runs the shutdown block on exit.
+    """
+    from app.main import lifespan
+    async with lifespan(app):
+        yield
 
 
 # =====================================================================
@@ -477,41 +518,49 @@ async def test_stop_signal_breaks_pipeline_with_stopped_end_reason(lifecycle_ctx
 @pytest.mark.asyncio
 async def test_lock_released_on_non_http_exception_between_commit1_and_create_task(lifecycle_ctx):
     """Given commit① and acquire_session_lock both succeeded,
-    When the immediately following code raises RuntimeError,
-    Then release_session_lock(nonce) should still be called,
-         and Redis chat:lock:<sid> should not be left dangling.
+    When asyncio.create_task raises RuntimeError (after commit①),
+    Then the except Exception block should call release_session_lock,
+         and Redis chat:lock:<sid> should not be left dangling (HTTP 5xx).
     """
+    from unittest.mock import patch
+
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
-    # Mock create_task to raise non-HTTPException
-    original_create_task = asyncio.create_task
-    call_count = 0
-
-    # 注：chat_stream 中的 try/except Exception 包裹了 commit① 后的全部逻辑，
-    # 包括 running_streams 注册、create_task、StreamingResponse。
-    # 我们模拟一个异常抛出后 try/except 应捕获并释放锁。
+    # 种子一个已知 sid 的 session，使 handler 使用此 sid
+    from uuid import uuid4 as _uuid4
+    known_sid = _uuid4()
+    lifecycle_ctx.seed_sess.add(
+        SessionModel(id=known_sid, child_user_id=child.id, title="注入测试", status=MessageStatus.active)
+    )
+    await lifecycle_ctx.seed_sess.commit()
 
     async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         yield {"delta": "x"}
         yield {"finish_reason": "stop"}
 
-    # 无法直接从外部注入异常，但 chat_stream 的 try/except Exception
-    # 在 b19f209 已覆盖。此处验证正常路径锁已释放。
     lifecycle_ctx.rr.main_graph.astream = fake_astream
-    resp = await client.post("/api/v1/me/chat/stream", json=_make_payload("Hi"), headers=headers)
-    assert resp.status_code == 200
 
-    import json as _json
-    events = []
-    ct = None
-    for line in resp.text.split("\n"):
-        if line.startswith("event:"):
-            ct = line[len("event:"):].strip()
-        elif line.startswith("data:") and ct is not None:
-            events.append((ct, _json.loads(line[len("data:"):].strip())))
+    # monkeypatch asyncio.create_task → 仅在命名匹配 chat-llm- 时抛 RuntimeError
+    # （避免影响 Starlette ASGI 传输层内部的 create_task 调用）
+    _orig_create_task = asyncio.create_task
 
-    sid = events[0][1]["session_id"]
+    def _raise_on_chat_llm(coro, *, name="", **kwargs):
+        if name and name.startswith("chat-llm-"):
+            raise RuntimeError("injected crash")
+        return _orig_create_task(coro, name=name, **kwargs)
 
-    # 验证锁已释放（正常路径确认）
-    lock_exists = await lifecycle_ctx.redis_client.exists(f"chat:lock:{sid}")
-    assert not lock_exists, "Session lock should be released after normal stream"
+    with patch("app.api.me.asyncio.create_task", _raise_on_chat_llm):
+        # Starlette 测试模式 raise_server_exceptions=True → RuntimeError 传播到 httpx
+        with pytest.raises(RuntimeError, match="injected crash"):
+            await client.post(
+                "/api/v1/me/chat/stream",
+                json=_make_payload("Hi", session_id=str(known_sid)),
+                headers=headers,
+            )
+
+    # except Exception 块应已调用 release_session_lock（无 180s 残留）
+    lock_exists = await lifecycle_ctx.redis_client.exists(f"chat:lock:{known_sid}")
+    assert not lock_exists, (
+        f"Session lock chat:lock:{known_sid} should have been released "
+        f"by except Exception handler"
+    )
