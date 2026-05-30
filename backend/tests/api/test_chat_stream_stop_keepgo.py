@@ -41,6 +41,7 @@ from app.db import get_db
 from app.models.accounts import Family, FamilyMember, User
 from app.models.chat import Message
 from app.models.enums import MessageRole, MessageStatus, UserRole
+from tests.api._chat_stream_lifecycle_helpers import lifecycle_ctx, lifecycle_setup
 
 # ---------------------------------------------------------------------------
 # _BrokenOnCall: 通过 athrow 将异常注入生成器的 yield 暂停点，
@@ -316,28 +317,22 @@ async def test_stop_no_ai(
 
 
 @pytest.mark.asyncio
-async def test_stop_with_ai(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session, redis_client,
-):
+async def test_stop_with_ai(lifecycle_ctx):
     """StopWithAi: event set after first delta → stopped with aid + DB ai + 'user_stopped'."""
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
     async def fake_astream_with_stop(initial_state, stream_mode="custom", **kwargs):
         yield {"delta": "Hello"}  # first payload: has_emitted_content = True
-        # Generator processes this payload (accumulate, yield SSE),
-        # then calls __anext__() — resume here.
-        # Set the stop event BEFORE yielding the next payload.
         ctx = kwargs.get("context")
         sid = str(ctx.session_id) if ctx else None
         ev = running_streams.get(sid)
         if ev is not None:
             ev.set()
         yield {"finish_reason": "stop"}
-        # Generator: no delta, stop check fires → StopWithAi
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream_with_stop
+    lifecycle_ctx.rr.main_graph.astream = fake_astream_with_stop
     body = make_payload(content="Hi")
-    resp = await api_client_with_eval.post(
+    resp = await client.post(
         "/api/v1/me/chat/stream", json=body, headers=headers,
     )
     assert resp.status_code == 200
@@ -352,14 +347,14 @@ async def test_stop_with_ai(
 
     stopped_frame = next(f for f in frames if f["type"] == "stopped")
     assert stopped_frame["data"]["finish_reason"] == "user_stopped"
-    # StopWithAi: aid is present
     assert stopped_frame["data"].get("aid") is not None, "StopWithAi should have aid"
 
     sid = frames[0]["data"]["session_id"]
 
     # DB: human (decision matrix) + ai (StopWithAi persist)
+    lifecycle_ctx.assert_sess.expire_all()
     msgs = (
-        (await db_session.execute(
+        (await lifecycle_ctx.assert_sess.execute(
             select(Message).where(Message.session_id == sid).order_by(Message.created_at),
         ))
         .scalars()
@@ -369,7 +364,6 @@ async def test_stop_with_ai(
     ai_msg = msgs[1]
     assert ai_msg.role == MessageRole.ai
     assert ai_msg.status == MessageStatus.active
-    # 关注点2+6: finish_reason 强制覆盖为 'user_stopped'（非 SDK 透传值）
     assert ai_msg.finish_reason == "user_stopped", (
         f"Expected 'user_stopped', got '{ai_msg.finish_reason}'"
     )
@@ -379,7 +373,7 @@ async def test_stop_with_ai(
     assert sid not in running_streams, "running_streams entry was not cleaned up"
 
     # Lock released
-    lock_exists = await redis_client.exists(f"chat:lock:{sid}")
+    lock_exists = await lifecycle_ctx.redis_client.exists(f"chat:lock:{sid}")
     assert not lock_exists, "Session lock was not released"
 
 
@@ -394,11 +388,9 @@ async def test_stop_with_ai(
 
 
 @pytest.mark.asyncio
-async def test_keepgo_connection_error(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session, redis_client,
-):
+async def test_keepgo_connection_error(lifecycle_ctx):
     """ConnectionError at SSE yield → LLM stream continues, all chunks consumed, DB written."""
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
     consumed_count = 0
     fake_payloads = [
@@ -420,20 +412,19 @@ async def test_keepgo_connection_error(
         nonlocal sse_call_count
         sse_call_count += 1
         async for p in payloads:
-            if sse_call_count >= 2:  # first call succeeds, second+ raise
+            if sse_call_count >= 2:
                 raise ConnectionError("mock client disconnect")
             yield _make_delta_frame(p.get("delta", ""))
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
     with patch("app.api.me.stream_graph_to_sse", mock_stream_to_sse):
         body = make_payload(content="Hi")
-        resp = await api_client_with_eval.post(
+        resp = await client.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
         )
         assert resp.status_code == 200
         await resp.aclose()
 
-    # 关注点4+6: 所有 fake stream chunk 均被消费（不 cancel 语义）
     assert consumed_count == len(fake_payloads), (
         f"Expected {len(fake_payloads)} chunks consumed, got {consumed_count}"
     )
@@ -445,8 +436,9 @@ async def test_keepgo_connection_error(
     sid = frames[0]["data"]["session_id"]
 
     # DB: accumulated = "你好！" (all deltas concatenated), finish_reason = "stop"
+    lifecycle_ctx.assert_sess.expire_all()
     msgs = (
-        (await db_session.execute(
+        (await lifecycle_ctx.assert_sess.execute(
             select(Message).where(Message.session_id == sid).order_by(Message.created_at),
         ))
         .scalars()
@@ -462,7 +454,7 @@ async def test_keepgo_connection_error(
     assert sid not in running_streams, "running_streams entry was not cleaned up"
 
     # 关注点6: 锁释放 — 锁 key 不存在
-    lock_exists = await redis_client.exists(f"chat:lock:{sid}")
+    lock_exists = await lifecycle_ctx.redis_client.exists(f"chat:lock:{sid}")
     assert not lock_exists, "Session lock was not released after keepgo"
 
 
@@ -545,9 +537,7 @@ async def test_running_streams_cleaned_after_error(
 
 
 @pytest.mark.asyncio
-async def test_keepgo_inner_yield_connection_error(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session, redis_client,
-):
+async def test_keepgo_inner_yield_connection_error(lifecycle_ctx):
     """Inner ``yield frame`` catches BrokenResourceError via athrow → client_alive=False.
 
     Triple assertion: all payloads consumed, DB written correctly,
@@ -555,7 +545,7 @@ async def test_keepgo_inner_yield_connection_error(
     """
     from starlette.responses import StreamingResponse
 
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
     fake_payloads = [
         {"delta": "你"},
@@ -571,25 +561,21 @@ async def test_keepgo_inner_yield_connection_error(
             consumed_count += 1
             yield p
 
-    # Patch StreamingResponse.__init__ to wrap body_iterator with _BrokenOnCall
     original_sr_init = StreamingResponse.__init__
 
     def patched_sr_init(self, content, *args, **kwargs):
         original_sr_init(self, content, *args, **kwargs)
-        # break_after=2 → inject on call 3 (after session_meta + first delta)
         self.body_iterator = _BrokenOnCall(self.body_iterator, break_after=2)
 
     with patch.object(StreamingResponse, "__init__", patched_sr_init):
-        app_with_eval.state.resources.main_graph.astream = fake_astream
+        lifecycle_ctx.rr.main_graph.astream = fake_astream
         body = {"content": "Hi"}
-        resp = await api_client_with_eval.post(
+        resp = await client.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
         )
         assert resp.status_code == 200
-        # 读取完整 body — 生成器在后台处理所有 payload 后结束
         _ = resp.text
 
-    # 断言 1: LLM 流全部消费完
     assert consumed_count == len(fake_payloads), (
         f"Expected {len(fake_payloads)} chunks consumed, got {consumed_count}"
     )
@@ -598,8 +584,9 @@ async def test_keepgo_inner_yield_connection_error(
     sid = frames[0]["data"]["session_id"]
 
     # 断言 2: DB ai 行写入完成
+    lifecycle_ctx.assert_sess.expire_all()
     msgs = (
-        (await db_session.execute(
+        (await lifecycle_ctx.assert_sess.execute(
             select(Message).where(Message.session_id == sid).order_by(Message.created_at),
         ))
         .scalars()
@@ -613,7 +600,7 @@ async def test_keepgo_inner_yield_connection_error(
     assert ai_msg.finish_reason == "stop"
 
     # 断言 3: 双锁释放 + running_streams 清理
-    lock_exists = await redis_client.exists(f"chat:lock:{sid}")
+    lock_exists = await lifecycle_ctx.redis_client.exists(f"chat:lock:{sid}")
     assert not lock_exists, "Session lock was not released"
 
     assert sid not in running_streams, "running_streams entry was not cleaned up"
