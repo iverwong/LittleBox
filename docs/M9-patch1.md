@@ -35,7 +35,7 @@
 - ❌ 水位线 HWM/LWM（单生产者顺序 put 场景无需）
 - ❌ 真正触发降速（`chat_stream_interval_s` 默认 0.0 占位）
 - ❌ 日轮次硬控（剥离为独立 issue，本 patch 不做）
-- ❌ 段二在 sseClient 层 close（前端只透传类型，由 store 决定 close 与 Resume）
+- ❌ 段二在 `chatStream` 传输层 close（前端只透传类型，由 store 决定 close 与 Resume）
 
 ### 0.3 核心 bug 与根因（背景，不在 Step 内重述）
 
@@ -94,14 +94,20 @@
 | 文件 | 改动 |
 | --- | --- |
 | `backend/app/runtime.py` | 扩 `RuntimeResources`：`db_session_factory` / `_chat_tasks` (default_factory) / `register_chat_task`；扩 settings：`chat_queue_maxsize=128` / `chat_stream_interval_s=0.0` |
-| `backend/app/chat/sse.py` | 新增 `build_flow_pause_frame(reason: str) -> bytes` |
+| `backend/app/chat/sse.py` | 新增 `build_flow_pause_frame(reason: str = "backpressure") -> bytes`，**内部必须复用既有 `_frame_sse_event("flow_pause", {"reason": reason})`**（main 上唯一成帧函数，不存在 `build_*_frame` 系列），确保帧带 `event: flow_pause` 行——前端靠 SSE `event:` 名分发，缺行会落进默认 `message` 事件被静默丢弃 |
 | `backend/app/api/me.py` | **核心改动**：`chat_stream` 拆为 `_run_llm_pipeline`（段一 bg task）+ `_stream_generator`（段二）；新增 `_ChatStreamState` dataclass；**先把现状 generator 内 inline 块抽为独立 helper（commit② / compression / thinking 状态机 / stream_graph_to_sse 包装 / stop 双分支），再迁段一**——这些 helper 在 main 上目前不存在；`enqueue_audit` 真实签名 `(sid, db, turn_number, child_user_id)`，按现状直调即可；将顶层 `try ... except HTTPException` 兜底**扩展为覆盖任意异常**（详见 §7.3 现状对照），封死 commit① 与 `create_task` 之间的 lock 残留另一条路径；删除原 `except ConnectionError, anyio.BrokenResourceError, asyncio.CancelledError: client_alive = False` 形同虚设代码；删除 `_MainGraphCompat` 与模块级 `_main_graph` 占位（grep `app.api.me._main_graph` 改用 `rr.main_graph`，patch0 已工厂化）；段一 finally 中 `release_session_lock` 异常分支改为 `logger.warning("release lock failed, rely on TTL", exc_info=True, extra={"sid": str(sid)})` 留痕（不再 `pass` 静默吃异常） |
 | `backend/app/main.py` | lifespan shutdown 阶段 `asyncio.wait(_chat_tasks, timeout=30)`  • 超时 cancel |
 | `backend/app/chat/locks.py` | **无改动**（`running_streams` / acquire / release 接口不变） |
 | `backend/tests/api/test_chat_stream.py`（新建或扩） | 8 个 Given/When/Then 测试覆盖正常流 / 客户端断连 / queue full / 段一异常 / shutdown 等候 / shutdown 超时 cancel / stop 信号 / commit① 与 create_task 之间异常的 lock 释放 |
 | 前端 | 由 [FE: M9-patch1 · flow_pause 前端识别清单](https://www.notion.so/FE-M9-patch1-flow_pause-bcc9e2eae76548f2ba3f16d94e25bb4b?pvs=21) 在本计划合 main 后并行落地（不在本计划 Step 内） |
 
-**新增 SSE 帧 schema**：`{"type": "flow_pause", "reason": "backpressure"}`。
+**新增 SSE 帧线格式**（与既有帧同构：类型由 `event:` 行承载，**data 内不放 `type` 字段**；前端 `react-native-sse` 靠 `event:` 名分发到 `es.addEventListener('flow_pause')`）：
+
+```
+event: flow_pause
+data: {"reason": "backpressure"}
+
+```
 
 ---
 
@@ -230,11 +236,11 @@ def test_chat_tasks_default_factory_isolated():
 
 ### 6.1 目标
 
-在 `backend/app/chat/sse.py` 暴露 `flow_pause` 帧构造函数，与既有 `build_start_frame` / `build_delta_frame` / `build_end_frame` / `build_error_frame` 风格一致。
+在 `backend/app/chat/sse.py` 暴露 `flow_pause` 帧构造函数。⚠️ **核验 main 后修正**：[sse.py](http://sse.py) 上**没有** `build_start_frame` / `build_delta_frame` / `build_end_frame` / `build_error_frame` 这些函数——唯一成帧入口是 `_frame_sse_event(event_type, data)`（产出 `event: <type>\ndata: <json>\n\n`），start/end/error 等帧都在 `me.py` 内直调它拼出。新函数**必须复用 `_frame_sse_event`**，与既有帧同构。（§7.4 骨架里的 `build_delta_frame` / `build_end_frame` / `build_error_frame` 同为伪占位，执行时一律落到 `_frame_sse_event(<event_type>, <data>)`，data 分别为 `{"content": ...}` / `{"finish_reason": ..., "aid": ...}` / `{"message": ..., "code": ...}`。）
 
 ### 6.2 涉及文件与改动
 
-`backend/app/chat/sse.py`：新增 `build_flow_pause_frame(reason: str = "backpressure") -> bytes`。
+`backend/app/chat/sse.py`：新增 `build_flow_pause_frame(reason: str = "backpressure") -> bytes`，**内部复用 `_frame_sse_event`，必须带 `event: flow_pause` 行**。
 
 ### 6.3 代码骨架
 
@@ -242,11 +248,14 @@ def test_chat_tasks_default_factory_isolated():
 def build_flow_pause_frame(reason: str = "backpressure") -> bytes:
     """Frame emitted by stream generator when backend triggers a graceful cutoff.
 
-    Front-end (see FE checklist) recognizes this frame, closes SSE, and triggers
-    the existing Resume channel.
+    ★ 必须复用 _frame_sse_event，产出带 `event: flow_pause` 行的多行协议帧。
+    前端（react-native-sse）靠 SSE `event:` 名分发到 es.addEventListener('flow_pause')；
+    若缺 `event:` 行（如手搓 data-only 帧），该帧落进默认 `message` 事件，前端无
+    对应监听器 → 静默丢弃，最终挂到后端关连接才以 transport error 收口（详见 §14.1）。
+    类型由 `event:` 行承载，data 内不放 `type` 字段（与 delta=`{"content":...}` 同构）。
     """
-    payload = {"type": "flow_pause", "reason": reason}
-    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
+    return _frame_sse_event("flow_pause", {"reason": reason})
+    # → b'event: flow_pause\ndata: {"reason": "backpressure"}\n\n'
 ```
 
 ### 6.4 验证
@@ -258,12 +267,14 @@ def test_build_flow_pause_frame_default_reason():
     """
     Given the default backpressure reason,
     When building a flow_pause frame,
-    Then the bytes should encode the canonical schema.
+    Then the bytes MUST carry an `event: flow_pause` line (前端分发依据)
+         and a data line with reason=backpressure, and NO `type` key.
     """
     frame = build_flow_pause_frame()
-    assert b"flow_pause" in frame
-    assert b"backpressure" in frame
-    # 完整 schema 断言 ...
+    # ★ 关键断言：必须带 event 行，否则前端按默认 message 事件丢弃
+    assert frame.startswith(b"event: flow_pause\n")
+    assert b'"reason": "backpressure"' in frame
+    assert b'"type"' not in frame  # 类型由 event 行承载，data 不放 type
 ```
 
 - [ ]  测试全绿
@@ -751,7 +762,7 @@ async def test_lock_released_on_non_http_exception_between_commit1_and_create_ta
 
 ### 13.4 为什么前端必须识别 `flow_pause`
 
-虽然不识别也能走自然 timeout，但 10s Waiting 在用户感知层面明显卡顿；本 patch 与 FE 清单页同节奏交付，识别成本极低（sseClient 类型联合加 1 变体 + chat.ts onEvent 加 1 case，复用既有 backgroundClose 通道），收益直接。
+虽然不识别也能走自然 timeout，但 10s Waiting 在用户感知层面明显卡顿；本 patch 与 FE 清单页同节奏交付，识别成本低（`chatStream.ts` 三处：`SseEvent` union + `CustomEventName` union + 新增 `es.addEventListener('flow_pause')`；chat.ts `_onSseEvent` 加 1 分支，复用既有 `backgroundClose` 通道），收益直接。
 
 ---
 
@@ -764,6 +775,7 @@ async def test_lock_released_on_non_http_exception_between_commit1_and_create_ta
 - **`_MainGraphCompat` 删除影响面**：grep `app.api.me._main_graph` 找出所有 patch 引用点，统一改为 `rr.main_graph` → 已写入 §3。
 - **commit① 与 create_task 之间异常路径缺测试**：补 G/W/T 用例 #8 → 已写入 §9.3。
 - **段一 finally 中 `release_session_lock` 失败的可观测性**：原 `except Exception: pass` 静默吃异常、仅靠 180s TTL 兜底；改为 `logger.warning("release lock failed, rely on TTL", exc_info=True, extra={"sid": str(sid)})` 留痕 → 已写入 §3 改动清单 [me.py](http://me.py) 行 / §7.2 改动列表 / §7.4 骨架 finally 处。
+- **`flow_pause` 帧格式契约（实查后端 + 前端核验，最高优先级）**：main 的 `sse.py` 唯一成帧函数 `_frame_sse_event` 强制带 `event:` 行；前端 `chatStream.ts`（M7）用 `react-native-sse`，对 9 个具名事件逐个 `es.addEventListener('<name>')`，**靠 `event:` 名分发、从不读 data.type**，且无 `message` 兜底监听器。原 §6.3 骨架手搓 data-only 帧（缺 `event:` 行 + 误放 `type` 字段），会被前端静默丢弃 → 一直挂到后端关连接才以 transport error 收口，弹「服务暂时不可用」toast，与优雅 Resume 意图相反。**修正：§6.3 改为复用 `_frame_sse_event("flow_pause", {"reason": reason})`；§6.1 / §6.2 / §6.4 与 §3 schema 行同步更正**；前端对应改动见 [FE: M9-patch1 · flow_pause 前端识别清单](https://www.notion.so/FE-M9-patch1-flow_pause-bcc9e2eae76548f2ba3f16d94e25bb4b?pvs=21) §1 / §4。
 
 ### 14.2 剥离为独立 issue（不在本 patch）
 
@@ -808,3 +820,5 @@ C) 强网（正常）
 - **段一行为完全一致** — commit② 必落、lock 必释放
 - **DB 末态一致** — `(in_progress=false, last_role=ai)`（异常路径除外，按 §6.4 (false, human) → A4Late）
 - **前端最终结局一致** — 实时流（C）或 Resume 整段渲染（A/B）或 A4Late（异常）
+
+[M9-patch1 · 执行偏差记录](https://www.notion.so/M9-patch1-e027d5b0bc61418fa39c4b500185a1e0?pvs=21)
