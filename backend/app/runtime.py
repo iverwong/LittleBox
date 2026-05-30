@@ -1,4 +1,5 @@
 """进程级资源容器。FastAPI lifespan / ARQ on_startup 共用。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -18,18 +19,18 @@ from sqlalchemy.ext.asyncio import (
 
 from app.auth.redis_client import _build_arq_redis_url
 
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from arq.connections import ArqRedis
 
     from app.config import Settings
 
 
-logger = logging.getLogger(__name__)
-
-
 @dataclass(frozen=True)
 class RuntimeResources:
     """进程级资源容器，构建后不可变。"""
+
     settings: Settings
     db_engine: AsyncEngine
     db_session_factory: async_sessionmaker[AsyncSession]
@@ -84,6 +85,7 @@ async def build_runtime(settings: Settings) -> RuntimeResources:
     # 4. arq_pool（构造参数对齐 worker.py::RedisSettings）
     from arq import create_pool
     from arq.connections import RedisSettings as ArqRedisSettings
+
     arq_pool = await create_pool(
         ArqRedisSettings(
             host=parsed.hostname or "localhost",
@@ -95,10 +97,12 @@ async def build_runtime(settings: Settings) -> RuntimeResources:
 
     # 5. main_graph（惰性导入：当前 commit 时 build_main_graph 尚不存在）
     from app.chat.graph import build_main_graph
+
     main_graph = build_main_graph()
 
     # 6. audit_graph（惰性导入；T11 改无参工厂 + Runtime DI）
     from app.audit.graph import build_audit_graph
+
     audit_graph = build_audit_graph()
 
     return RuntimeResources(
