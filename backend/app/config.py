@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     compression_model: str = "deepseek-v4-flash"
     # M8 压缩启用思考模式（默认关闭，压缩任务不需要 reasoning）
     compression_thinking_enabled: bool = False
+    # M9-patch1: 段一段二队列上限（默认 128），约 2.5s 弱网缓冲
+    chat_queue_maxsize: int = 128
+    # M9-patch1: 段一每帧降速钩子（默认 0.0 不触发，>0 时段一每帧 sleep）
+    chat_stream_interval_s: float = 0.0
 
     model_config = {"env_prefix": "LB_", "env_file": ".env"}
 
