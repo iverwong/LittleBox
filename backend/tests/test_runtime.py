@@ -79,7 +79,7 @@ async def test_teardown_runtime_order():
     rr = MagicMock()
     # RuntimeResources 含 TYPE_CHECKING 字段（ArqRedis），不能直接用 spec 构造
     rr.arq_pool = MagicMock()
-    rr.arq_pool.close = AsyncMock(side_effect=parent.arq_close)
+    rr.arq_pool.aclose = AsyncMock(side_effect=parent.arq_aclose)
     rr.audit_redis = MagicMock()
     rr.audit_redis.aclose = AsyncMock(side_effect=parent.audit_aclose)
     rr.db_engine = MagicMock()
@@ -88,7 +88,7 @@ async def test_teardown_runtime_order():
     await teardown_runtime(rr)
 
     assert parent.mock_calls == [
-        call.arq_close(close_connection_pool=True),
+        call.arq_aclose(close_connection_pool=True),
         call.audit_aclose(),
         call.db_dispose(),
     ]
