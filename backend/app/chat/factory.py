@@ -170,6 +170,35 @@ _PROVIDER_REGISTRY: dict[str, Callable[..., Runnable]] = {
     "compression_deepseek": lambda settings: _build_compression_deepseek(settings),
 }
 
+# ---- 集成测试注入缝（M9.5） ----
+# 允许测试按 provider 名 override LLM 实例。
+# 主图 LLM 用 provider="deepseek"（build_main_llm 调用），
+# 审查图 LLM 用 provider="audit_deepseek"（build_audit_llm 调用），
+# 可分别编排不同输出以实现阶段二路由验证。
+# 注：本 override 在 build_provider_llm 层生效，影响所有经过此函数的调用链。
+_test_llm_overrides: dict[str, Runnable] = {}
+
+
+def set_test_llm(provider: str, llm: Runnable) -> None:
+    """设置指定 provider 的测试用 LLM 实例。
+
+    provider 名与 _PROVIDER_REGISTRY key 一致。
+    设入后所有调用 build_provider_llm(provider, ...) 均返回此实例。
+    调用 clear_test_llm() 恢复生产行为。
+    """
+    _test_llm_overrides[provider] = llm
+
+
+def clear_test_llm(provider: str | None = None) -> None:
+    """清除测试 LLM override。
+
+    provider=None 时清除全部 override；否则仅清除指定 provider。
+    """
+    if provider is None:
+        _test_llm_overrides.clear()
+    else:
+        _test_llm_overrides.pop(provider, None)
+
 
 def build_provider_llm(provider: str, settings: Any) -> Runnable:
     """Build a single LLM instance for the given provider name.
@@ -177,6 +206,10 @@ def build_provider_llm(provider: str, settings: Any) -> Runnable:
     Raises:
         ProviderNotRegisteredError: if provider is not in the registry.
     """
+    # 集成测试注入缝：优先返回 override
+    if provider in _test_llm_overrides:
+        return _test_llm_overrides[provider]
+
     builder = _PROVIDER_REGISTRY.get(provider)
     if builder is None:
         msg = f"Unknown provider '{provider}'. Registered: {list(_PROVIDER_REGISTRY)}"
