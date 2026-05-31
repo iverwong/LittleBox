@@ -392,11 +392,16 @@ async def arq_worker(integration_runtime: Any) -> AsyncGenerator[Callable[[], in
     )
 
     async def drain() -> int:
-        """消费队列中所有待处理 job。返回处理数。"""
-        count = 0
-        while await worker.run_check():
-            count += 1
-        return count
+        """消费队列中所有待处理 job。返回成功处理数。
+
+        使用 async_run 而非 run_check 以避免 FailedJobs 异常上抛。
+        arq 的 run_check 在 jobs_failed > 0 时 raise FailedJobs，
+        而 RED 阶段预期 job 因名不匹配而失败——exception 会掩盖计数。
+        async_run 直接处理所有 job 并更新计数器，不主动 raise。
+        """
+        await worker.async_run()
+        # arq 已自行记录失败日志（function not found）
+        return worker.jobs_complete
 
     try:
         yield drain
