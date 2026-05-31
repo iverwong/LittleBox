@@ -12,6 +12,31 @@ export type ApiResult<T> =
   | { ok: false; status: number; body: unknown };
 
 /**
+ * Step 7 · API 错误的类型化抛出载体。
+ *
+ * 设计：
+ * - `ApiResult<T>` 仍是 fetch wrapper 的返回契约（不变，调用方按 ok narrow 后处理）；
+ * - 上层 store action（loadSessions / loadMessages 等）选择 throw 时，
+ *   用 ApiError 替代 `new Error('HTTP <status>')` 字符串拼接，避免调用方正则 parse 状态码；
+ * - 调用方 `catch (e) { if (e instanceof ApiError) handle(e.status); else throw e }`，
+ *   非 API 异常继续冒泡到 ErrorBoundary。
+ *
+ * status 语义对齐 ApiResult：0=网络层不可达，401/403/404/409/5xx=HTTP 状态码。
+ * body 透传 fetch wrapper 解析后的 errBody（可能 null）。
+ */
+export class ApiError extends Error {
+  public readonly status: number;
+  public readonly body: unknown;
+
+  constructor(status: number, body: unknown) {
+    super(`HTTP ${status}`);
+    this.name = 'ApiError';
+    this.status = status;
+    this.body = body;
+  }
+}
+
+/**
  * 解析开发期 Metro 所在机器的 hostname。
  * Expo SDK：Constants.expoConfig.hostUri = "192.168.x.x:8081"（真机）或 "localhost:8081"（模拟器）。
  * 真机跑 LAN IP，模拟器跑 localhost，自动适配。
@@ -43,13 +68,23 @@ export function setOnUnauthorizedRedirect(cb: () => void) {
   onUnauthorizedRedirect = cb;
 }
 
+/**
+ * 统一的 401 失效处理入口，供 chatStream 等不走 request() 通道的请求复用。
+ * 顺序与 request() 内部一致：先 clearSession（清 token/role/userId），
+ * 再 onUnauthorizedRedirect（跳 landing）。
+ */
+export async function handle401(): Promise<void> {
+  if (on401Handler) await on401Handler();
+  if (onUnauthorizedRedirect) onUnauthorizedRedirect();
+}
+
 // ---------------------------------------------------------------------------
 // SecureStore hydration
 // ---------------------------------------------------------------------------
 
 /**
  * 并发从 SecureStore 取 4 个 auth keys。
- * deviceId 缺失时调用 ensureDeviceId 生成并写入。
+ * deviceId 缺失时调用 getOrCreateDeviceId 生成并写入。
  */
 async function hydrateFromSecureStore(): Promise<{
   token: string | null;
@@ -64,16 +99,19 @@ async function hydrateFromSecureStore(): Promise<{
     SecureStore.getItemAsync('auth.deviceId'),
   ]);
 
-  let finalDeviceId: string = deviceId ?? (await ensureDeviceId());
+  let finalDeviceId: string = deviceId ?? (await getOrCreateDeviceId());
 
   return { token, role, userId, deviceId: finalDeviceId };
 }
 
 /**
- * SecureStore 缺失 deviceId 时生成 UUID 并写入。
+ * 读取 SecureStore 中的 deviceId；不存在时生成 UUID 写入。
+ * 幂等：多次调用返回同一 ID（除非中间走 resetDeviceId 显式 rotate）。
  * 使用 expo-crypto 而非全局 crypto.randomUUID（Hermes 无此 API）。
  */
-export async function ensureDeviceId(): Promise<string> {
+export async function getOrCreateDeviceId(): Promise<string> {
+  const existing = await SecureStore.getItemAsync('auth.deviceId');
+  if (existing) return existing;
   const id = Crypto.randomUUID();
   await SecureStore.setItemAsync('auth.deviceId', id);
   return id;
@@ -126,8 +164,10 @@ async function request<T>(
   path: string,
   body?: unknown,
 ): Promise<ApiResult<T>> {
-  // 延迟 import，避免循环依赖
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  // 延迟 require，避免 client.ts ↔ stores/auth.ts 循环依赖
+  //（auth.ts 消费 hydrateFromSecureStore / clearSessionSecureStore 等 client.ts 导出）。
+  // typescript-eslint 新版本将规则名从 no-var-requires 改为 no-require-imports。
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { useAuthStore } = require('@/stores/auth');
 
   const { token, deviceId } = useAuthStore.getState();
@@ -136,7 +176,7 @@ async function request<T>(
     'Content-Type': 'application/json',
     // token 为 null/undefined/falsy 时不注入 Authorization，避免 "Bearer undefined"
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    // deviceId 始终注入（ensureDeviceId 在 hydrate 时已保证有值）
+    // deviceId getOrCreateDeviceId 在 hydrate 时已保证有值）
     ...(deviceId ? { 'X-Device-Id': deviceId } : {}),
   };
 

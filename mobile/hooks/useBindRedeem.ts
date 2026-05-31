@@ -41,7 +41,7 @@ export function useBindRedeem(options?: {
         token: result.data.token,
         userId: result.data.account.id,
       });
-      router.replace('/child/welcome' as never);
+      router.replace('/child/chat' as never);
       return;
     }
 

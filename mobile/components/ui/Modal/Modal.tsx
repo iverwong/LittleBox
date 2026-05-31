@@ -53,7 +53,8 @@ export function Modal({
 			translateY.value = withSpring(300, CLOSE_SPRING)
 			opacity.value = withTiming(0, { duration: 150 })
 		}
-	}, [visible, translateY, opacity])
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- reanimated SharedValue 稳定，故意省略
+		}, [visible])
 
 	const handleBackdropPress = () => {
 		if (dismissOnBackdrop) {

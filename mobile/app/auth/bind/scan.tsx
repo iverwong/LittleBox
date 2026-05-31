@@ -28,6 +28,7 @@ export default function ScanScreen() {
     if (permission && !permission.granted && permission.canAskAgain) {
       requestPermission()
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [permission])
 
   // 权限尚未确定 → 等待

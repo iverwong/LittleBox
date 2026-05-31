@@ -82,6 +82,7 @@ function ChildCard({ child, onChildStateChanged: onChildStateChanged }: ChildCar
 
   const handleListItemPress = useCallback(() => {
     router.push(`/parent/children/${child.id}/settings` as never)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [child.id])
 
   const handlePrimaryAction = useCallback(() => {

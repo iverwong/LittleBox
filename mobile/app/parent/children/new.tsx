@@ -37,7 +37,7 @@ type Gender = 'male' | 'female' | 'unknown'
 export const NICKNAME_MAX = 32
 const DEFAULT_AGE = 12
 
-const GENDER_OPTIONS: Array<{ value: Gender; label: string }> = [
+const GENDER_OPTIONS: { value: Gender; label: string }[] = [
   { value: 'male', label: '男孩' },
   { value: 'female', label: '女孩' },
   { value: 'unknown', label: '保密' },
@@ -105,7 +105,8 @@ export default function NewChildScreen() {
 
     toast.show({ message: '已添加', variant: 'success', duration: 1500 })
     router.back()
-  }, [nickname, age, gender, router])
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- expo-router router 引用稳定
+  }, [nickname, age, gender])
 
   // 统一的字段标题
   const FieldLabel = ({ children }: { children: string }) => (

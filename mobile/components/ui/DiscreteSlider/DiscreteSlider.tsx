@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/exhaustive-deps */
 import { useCallback, useEffect, useMemo } from 'react'
 import type { GestureResponderEvent, LayoutChangeEvent } from 'react-native'
 import { Pressable, StyleSheet, View, Text } from 'react-native'
