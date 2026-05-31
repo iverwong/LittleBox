@@ -418,4 +418,4 @@ def build_audit_graph() -> CompiledStateGraph:
     )
     builder.add_edge("write_results", END)
 
-    return builder.compile()
+    return builder.compile()  # type: ignore[reportReturnType]

@@ -178,7 +178,7 @@ class TestSqlExpressionGuard:
             "禁止 Python 复合赋值修改 ai_turn_counter（会引入 read-modify-write 竞态）"
         )
         graph_source = inspect.getsource(graph)
-        assert "from sqlalchemy import update" in graph_source, (
+        assert re.search(r"from sqlalchemy import .*\bupdate\b", graph_source), (
             "graph.py 必须 import sqlalchemy.update"
         )
 

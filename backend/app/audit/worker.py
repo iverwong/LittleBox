@@ -155,7 +155,7 @@ async def run_audit(
             "messages": [],
             "max_iter": rr.settings.max_audit_tool_iterations,
         }
-        result: dict[str, Any] = await rr.audit_graph.ainvoke(state, context=audit_ctx)
+        result: dict[str, Any] = await rr.audit_graph.ainvoke(state, context=audit_ctx)  # type: ignore[reportArgumentType]
         output = result.get("structured_output")
         if output is not None:
             await manager.set_ready(

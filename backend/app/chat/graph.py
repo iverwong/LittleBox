@@ -27,8 +27,7 @@ from langchain_core.messages import (
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
-from sqlalchemy import select
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chat.context import (
@@ -533,4 +532,4 @@ def build_main_graph() -> CompiledStateGraph:
     builder.add_edge("call_crisis_llm", END)
     builder.add_edge("call_redline_llm", END)
 
-    return builder.compile()
+    return builder.compile()  # type: ignore[reportReturnType]
