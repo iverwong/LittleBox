@@ -43,7 +43,7 @@ from app.db import get_db
 from app.models.accounts import ChildProfile, User
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
-from app.models.enums import MessageRole, MessageStatus, SessionStatus
+from app.models.enums import InterventionType, MessageRole, MessageStatus, SessionStatus
 from app.runtime import RuntimeResources
 from app.schemas.accounts import AccountOut, CurrentAccount
 from app.schemas.children import ChildProfileOut
@@ -447,6 +447,7 @@ async def _run_llm_pipeline(
 
     accumulated = ""
     last_finish_reason = "stop"
+    last_intervention_type: InterventionType | None = None
     usage_meta: dict | None = None
     has_emitted_content = False
     user_stopped = False
@@ -595,6 +596,18 @@ async def _run_llm_pipeline(
                         thinking_started = False
                         _put(_frame_sse_event("thinking_end", {}))
 
+                    # intervention_type 信号（graph 终端节点在首 delta 前发射）
+                    it_raw = payload.get("intervention_type")
+                    if it_raw:
+                        try:
+                            last_intervention_type = InterventionType(it_raw)
+                        except ValueError:
+                            logger.warning(
+                                "unknown intervention_type %r, falling back to None",
+                                it_raw,
+                            )
+                            last_intervention_type = None
+
                     fr = payload.get("finish_reason")
                     if fr:
                         last_finish_reason = fr
@@ -621,7 +634,7 @@ async def _run_llm_pipeline(
                             content=accumulated,
                             finish_reason="user_stopped",
                             turn_number=turn_number,
-                            intervention_type=None,
+                            intervention_type=last_intervention_type,
                         )
                         if usage_meta:
                             _usage_total = usage_meta["input_tokens"] + usage_meta["output_tokens"]
@@ -654,7 +667,7 @@ async def _run_llm_pipeline(
                         content=accumulated,
                         finish_reason=last_finish_reason,
                         turn_number=turn_number,
-                        intervention_type=None,
+                        intervention_type=last_intervention_type,
                     )
                     if usage_meta:
                         _usage_total = usage_meta["input_tokens"] + usage_meta["output_tokens"]

@@ -378,6 +378,11 @@ async def call_main_llm(
 
     provider = ctx.settings.main_provider
 
+    # 在首个 delta 之前发射 intervention_type 信号（与 route_by_risk 同源）
+    _audit = state.get("audit_state", {})
+    if _audit.get("guidance") is not None:
+        writer({"intervention_type": "guided"})
+
     async for chunk in llm.astream(llm_messages):
         # astream() yields AIMessageChunk at runtime despite BaseMessage type annotation
         _chunk_typed: AIMessageChunk = chunk  # type: ignore[assignment]
@@ -422,6 +427,9 @@ async def call_crisis_llm(
 
     provider = ctx.settings.audit_provider
 
+    # 在首个 delta 之前发射 intervention_type 信号
+    writer({"intervention_type": "crisis"})
+
     async for chunk in llm.astream(llm_messages):
         _chunk_typed: AIMessageChunk = chunk  # type: ignore[assignment]
 
@@ -461,6 +469,9 @@ async def call_redline_llm(
     llm_messages = list(state["messages"])
 
     provider = ctx.settings.audit_provider
+
+    # 在首个 delta 之前发射 intervention_type 信号
+    writer({"intervention_type": "redline"})
 
     async for chunk in llm.astream(llm_messages):
         _chunk_typed: AIMessageChunk = chunk  # type: ignore[assignment]

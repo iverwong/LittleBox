@@ -51,7 +51,7 @@ from app.db import get_db
 from app.models.accounts import Family, FamilyMember, User
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
-from app.models.enums import MessageRole, MessageStatus, UserRole
+from app.models.enums import InterventionType, MessageRole, MessageStatus, UserRole
 from tests.api._chat_stream_lifecycle_helpers import lifecycle_ctx, lifecycle_setup
 
 # ---------------------------------------------------------------------------
@@ -1145,6 +1145,221 @@ async def test_multi_turn_stop_no_ai(lifecycle_ctx):
 
     sess = await lifecycle_ctx.assert_sess.get(SessionModel, sid)
     assert sess.ai_turn_counter == 0  # 未自增
+
+
+# ---------------------------------------------------------------------------
+# intervention_type 写路径接线四态测试（D-patch1-2）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_intervention_type_crisis(lifecycle_ctx):
+    """crisis 路由：ai 行 intervention_type 落库为 crisis。"""
+    from uuid import uuid4
+
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+    sid = uuid4()
+    lifecycle_ctx.seed_sess.add(
+        SessionModel(id=sid, child_user_id=child.id, title="test"),
+    )
+    await lifecycle_ctx.seed_sess.commit()
+
+    # crisis: 先发 intervention_type 信号，再发 delta
+    fake_payloads = [
+        {"intervention_type": "crisis"},
+        {"delta": "crisis response"},
+    ]
+    lifecycle_ctx.rr.main_graph.astream = _make_fake_graph_astream(fake_payloads)
+
+    resp = await client.post(
+        "/api/v1/me/chat/stream",
+        json=make_payload("hello", session_id=str(sid)),
+        headers=headers,
+    )
+    assert resp.status_code == 200
+
+    lifecycle_ctx.assert_sess.expire_all()
+    msgs = (
+        (await lifecycle_ctx.assert_sess.execute(
+            select(Message)
+            .where(Message.session_id == sid)
+            .order_by(Message.created_at),
+        ))
+        .scalars()
+        .all()
+    )
+    assert len(msgs) == 2  # human + ai
+    assert msgs[1].intervention_type == InterventionType.crisis
+
+
+@pytest.mark.asyncio
+async def test_intervention_type_redline(lifecycle_ctx):
+    """redline 路由：ai 行 intervention_type 落库为 redline。"""
+    from uuid import uuid4
+
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+    sid = uuid4()
+    lifecycle_ctx.seed_sess.add(
+        SessionModel(id=sid, child_user_id=child.id, title="test"),
+    )
+    await lifecycle_ctx.seed_sess.commit()
+
+    fake_payloads = [
+        {"intervention_type": "redline"},
+        {"delta": "redline response"},
+    ]
+    lifecycle_ctx.rr.main_graph.astream = _make_fake_graph_astream(fake_payloads)
+
+    resp = await client.post(
+        "/api/v1/me/chat/stream",
+        json=make_payload("hello", session_id=str(sid)),
+        headers=headers,
+    )
+    assert resp.status_code == 200
+
+    lifecycle_ctx.assert_sess.expire_all()
+    msgs = (
+        (await lifecycle_ctx.assert_sess.execute(
+            select(Message)
+            .where(Message.session_id == sid)
+            .order_by(Message.created_at),
+        ))
+        .scalars()
+        .all()
+    )
+    assert len(msgs) == 2
+    assert msgs[1].intervention_type == InterventionType.redline
+
+
+@pytest.mark.asyncio
+async def test_intervention_type_guided(lifecycle_ctx):
+    """guided 路由：ai 行 intervention_type 落库为 guided。"""
+    from uuid import uuid4
+
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+    sid = uuid4()
+    lifecycle_ctx.seed_sess.add(
+        SessionModel(id=sid, child_user_id=child.id, title="test"),
+    )
+    await lifecycle_ctx.seed_sess.commit()
+
+    fake_payloads = [
+        {"intervention_type": "guided"},
+        {"delta": "guided response"},
+    ]
+    lifecycle_ctx.rr.main_graph.astream = _make_fake_graph_astream(fake_payloads)
+
+    resp = await client.post(
+        "/api/v1/me/chat/stream",
+        json=make_payload("hello", session_id=str(sid)),
+        headers=headers,
+    )
+    assert resp.status_code == 200
+
+    lifecycle_ctx.assert_sess.expire_all()
+    msgs = (
+        (await lifecycle_ctx.assert_sess.execute(
+            select(Message)
+            .where(Message.session_id == sid)
+            .order_by(Message.created_at),
+        ))
+        .scalars()
+        .all()
+    )
+    assert len(msgs) == 2
+    assert msgs[1].intervention_type == InterventionType.guided
+
+
+@pytest.mark.asyncio
+async def test_intervention_type_normal(lifecycle_ctx):
+    """normal 路由：无 intervention_type 发射 → 落库 None（显式断言，杜绝假阳）。"""
+    from uuid import uuid4
+
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+    sid = uuid4()
+    lifecycle_ctx.seed_sess.add(
+        SessionModel(id=sid, child_user_id=child.id, title="test"),
+    )
+    await lifecycle_ctx.seed_sess.commit()
+
+    # normal: 不发射 intervention_type
+    fake_payloads = [{"delta": "normal reply"}]
+    lifecycle_ctx.rr.main_graph.astream = _make_fake_graph_astream(fake_payloads)
+
+    resp = await client.post(
+        "/api/v1/me/chat/stream",
+        json=make_payload("hello", session_id=str(sid)),
+        headers=headers,
+    )
+    assert resp.status_code == 200
+
+    lifecycle_ctx.assert_sess.expire_all()
+    msgs = (
+        (await lifecycle_ctx.assert_sess.execute(
+            select(Message)
+            .where(Message.session_id == sid)
+            .order_by(Message.created_at),
+        ))
+        .scalars()
+        .all()
+    )
+    assert len(msgs) == 2
+    assert msgs[1].intervention_type is None  # 显式断言 None，杜绝假阳
+
+
+@pytest.mark.asyncio
+async def test_intervention_type_stop_with_ai_crisis(lifecycle_ctx):
+    """StopWithAi + crisis：有内容时 stop → ai 行 intervention_type=crisis。"""
+    from uuid import uuid4
+
+    import asyncio
+
+    from app.chat.locks import running_streams
+
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+    sid = uuid4()
+    lifecycle_ctx.seed_sess.add(
+        SessionModel(id=sid, child_user_id=child.id, title="test"),
+    )
+    await lifecycle_ctx.seed_sess.commit()
+
+    _gate = asyncio.Event()
+    _ready = asyncio.Event()
+
+    async def _fake_astream(initial_state, stream_mode="custom", **kwargs):
+        yield {"intervention_type": "crisis"}
+        yield {"delta": "partial "}
+        _ready.set()
+        await _gate.wait()
+        yield {}
+
+    lifecycle_ctx.rr.main_graph.astream = _fake_astream
+
+    resp_task = asyncio.create_task(
+        client.post(
+            "/api/v1/me/chat/stream",
+            json=make_payload("hello", session_id=str(sid)),
+            headers=headers,
+        ),
+    )
+    await asyncio.wait_for(_ready.wait(), timeout=5)
+    running_streams[str(sid)].set()
+    _gate.set()
+    resp = await resp_task
+    assert resp.status_code == 200
+
+    lifecycle_ctx.assert_sess.expire_all()
+    msgs = (
+        (await lifecycle_ctx.assert_sess.execute(
+            select(Message)
+            .where(Message.session_id == sid)
+            .order_by(Message.created_at),
+        ))
+        .scalars()
+        .all()
+    )
+    assert len(msgs) == 2
+    assert msgs[1].intervention_type == InterventionType.crisis
 
 
 # ---------------------------------------------------------------------------
