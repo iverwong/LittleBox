@@ -121,6 +121,42 @@ async def _bootstrap_integration_db() -> AsyncGenerator[None, None]:
     # 不主动 drop：保留库以便调试；下次 session 头重建
 
 
+# ---------- Session-scoped row count guard (M9.5 计划偏差登记) ----------
+# 计划字面要求"纳入 _prod_db_row_count_guard"，但根 conftest 的 guard 只对
+# settings.database_url（生产库）做 baseline/final 比对。集成库 littlebox_integration
+# 是独立物理库，自然不受该 guard 管辖，且每次 session 头 DROP/CREATE + alembic 重建，
+# 不留持久状态。因此"行数兜底"目标通过物理隔离 + 自建 guard 实现等效保障，
+# 而非在根 conftest 中追加 integration 库的表名。
+# 下面 session 末断言确保集成库在各测试间 TRUNCATE 后无跨 session 泄漏。
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _integration_row_count_guard():
+    """集成库行数兜底：session 末 13 表应为空（被 truncate_tables 确保）。
+
+    若触发失败，说明有测试未使用 truncate_tables（或该 fixture 未生效）。
+    """
+    yield
+
+    import asyncio
+    from sqlalchemy import text as _text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    async def _check():
+        engine = create_async_engine(_integration_db_url())
+        try:
+            async with engine.connect() as conn:
+                for t in _GUARD_TABLES:
+                    cnt = (await conn.execute(_text(f"SELECT COUNT(*) FROM {t}"))).scalar_one()
+                    assert cnt == 0, (
+                        f"集成库表 {t} 残留 {cnt} 行——truncate_tables 未覆盖或未生效"
+                    )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_check())
+
+
 # ---------- Step 2: Integration engine (for TRUNCATE) ----------
 
 
@@ -153,13 +189,14 @@ _GUARD_TABLES = [
 ]
 
 
-@pytest_asyncio.fixture
-async def truncate_tables(_integration_engine: AsyncEngine) -> AsyncGenerator[None, None]:
-    """测试间 TRUNCATE 清理全部 13 表（与 _GUARD_TABLES 对齐）。
+@pytest_asyncio.fixture(autouse=True)
+async def truncate_tables(_integration_engine: AsyncEngine) -> None:
+    """测试间 TRUNCATE 清理全部 13 表（autouse，无需显式依赖）。
 
     关注点 7（DB bootstrap + TRUNCATE 闭环）：
       - 数据是 app 自身 session（build_runtime 引擎）真 commit 写入的
       - TRUNCATE RESTART IDENTITY CASCADE 清空所有表 + 重置序列
+      - autouse 确保集成包内所有测试自动获得干净状态，无需显式声明依赖
     """
     tables_sql = ", ".join(f'"{t}"' for t in _GUARD_TABLES)
     async with _integration_engine.connect() as conn:
@@ -167,7 +204,6 @@ async def truncate_tables(_integration_engine: AsyncEngine) -> AsyncGenerator[No
             text(f"TRUNCATE TABLE {tables_sql} RESTART IDENTITY CASCADE")
         )
         await conn.commit()
-    yield
 
 
 # ---------- Step 3: Real Redis fixture ----------
@@ -348,4 +384,4 @@ async def arq_worker(integration_runtime: Any) -> AsyncGenerator[Callable[[], in
     try:
         yield drain
     finally:
-        worker.close()
+        await worker.close()
