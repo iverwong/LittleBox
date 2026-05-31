@@ -190,15 +190,32 @@ _GUARD_TABLES = [
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def truncate_tables(_integration_engine: AsyncEngine) -> None:
-    """测试间 TRUNCATE 清理全部 13 表（autouse，无需显式依赖）。
+async def truncate_tables(
+    _integration_engine: AsyncEngine,
+) -> AsyncGenerator[None, None]:
+    """测试间 TRUNCATE 清理全部 13 表（autouse，setup+teardown 双清）。
+
+    setup 清：前一测试 crash 残留兜底，确保进入测试前干净。
+    teardown 清：清理本测试写入行，确保 session 末 _integration_row_count_guard
+    断言 13 表为空时不被最后一测的数据误伤（order-dependent false positive）。
 
     关注点 7（DB bootstrap + TRUNCATE 闭环）：
       - 数据是 app 自身 session（build_runtime 引擎）真 commit 写入的
       - TRUNCATE RESTART IDENTITY CASCADE 清空所有表 + 重置序列
-      - autouse 确保集成包内所有测试自动获得干净状态，无需显式声明依赖
+      - autouse 确保集成包内所有测试自动获得干净状态
     """
     tables_sql = ", ".join(f'"{t}"' for t in _GUARD_TABLES)
+
+    # setup：crash 残留兜底
+    async with _integration_engine.connect() as conn:
+        await conn.execute(
+            text(f"TRUNCATE TABLE {tables_sql} RESTART IDENTITY CASCADE")
+        )
+        await conn.commit()
+
+    yield
+
+    # teardown：清理本测试写入，满足 session 末 guard
     async with _integration_engine.connect() as conn:
         await conn.execute(
             text(f"TRUNCATE TABLE {tables_sql} RESTART IDENTITY CASCADE")
