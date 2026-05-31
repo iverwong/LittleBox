@@ -38,6 +38,7 @@ asyncio_default_test_loop_scope = "session"
 markers = [
     "live: needs real LLM API",
     "audit: audit pipeline tests",
+    "integration: needs real DB/Redis/arq worker",
 ]
 
 [tool.ruff]
