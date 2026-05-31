@@ -24,6 +24,7 @@ from app.models.accounts import ChildProfile, Family, FamilyMember, User
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
 from app.models.enums import Gender, MessageRole, MessageStatus, UserRole
+from tests.api._chat_stream_lifecycle_helpers import lifecycle_ctx, lifecycle_setup
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 
@@ -104,7 +105,7 @@ def _mock_enqueue_audit():
         yield
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def _patch_locks(monkeypatch: pytest.MonkeyPatch):
     """绕过 throttle + session lock（避免依赖 FakeRedis eval patch 跨测试泄漏）。"""
     from app.chat.locks import acquire_session_lock, acquire_throttle_lock
@@ -137,7 +138,7 @@ def _parse_sse_frames(raw: str) -> list[dict]:
 # ---- Group 6: orphan discard + LLM messages 拦截（去掉 token 累加断言）----
 
 @pytest.mark.asyncio
-async def test_discarded_orphan_llm_messages(api_client, auth_headers_child, db_session, app):
+async def test_discarded_orphan_llm_messages(api_client, auth_headers_child, db_session, app, _patch_locks):
     """孤儿 human 改内容重发：LLM 收到不含旧 orphan 的 messages。（Group 6）"""
     headers, child = auth_headers_child
     sentinel_messages: list = []
@@ -189,16 +190,16 @@ async def test_discarded_orphan_llm_messages(api_client, auth_headers_child, db_
 # ---- Group 8: 阈值 → needs_compression 标志 ----
 
 @pytest.mark.asyncio
-async def test_threshold_sets_needs_compression_flag(api_client, auth_headers_child, db_session, app):
+async def test_threshold_sets_needs_compression_flag(lifecycle_ctx):
     """usage_metadata ≥ 500_000 → session.needs_compression = True。（Group 8）"""
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
     sid = uuid.uuid4()
     session = SessionModel(
         id=sid, child_user_id=child.id, title="阈值测试",
         status="active",
     )
-    db_session.add(session)
-    await db_session.commit()
+    lifecycle_ctx.seed_sess.add(session)
+    await lifecycle_ctx.seed_sess.commit()
 
     async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in [
@@ -208,13 +209,13 @@ async def test_threshold_sets_needs_compression_flag(api_client, auth_headers_ch
         ]:
             yield p
 
-    app.state.resources.main_graph.astream = fake_astream
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
     body = make_payload(content="触发阈值", session_id=str(sid))
-    resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
+    resp = await client.post("/api/v1/me/chat/stream", json=body, headers=headers)
     assert resp.status_code == 200
     await resp.aclose()
 
-    session_after = await db_session.get(SessionModel, sid)
+    session_after = await lifecycle_ctx.assert_sess.get(SessionModel, sid)
     assert session_after.context_size_tokens is not None, "context_size_tokens should be set"
     total_usage = 300_000 + 200_001
     assert session_after.context_size_tokens == total_usage, (
@@ -226,15 +227,15 @@ async def test_threshold_sets_needs_compression_flag(api_client, auth_headers_ch
 # ---- Group 9: 压缩 ----
 
 @pytest.mark.asyncio
-async def test_context_size_tokens_snapshot_not_accumulate(api_client, auth_headers_child, db_session, app):
+async def test_context_size_tokens_snapshot_not_accumulate(lifecycle_ctx):
     """两轮对话：context_size_tokens 是末轮 usage 快照，不是累积。（Group 9）"""
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
     sess_uuid = uuid.uuid4()
-    db_session.add(SessionModel(
+    lifecycle_ctx.seed_sess.add(SessionModel(
         id=sess_uuid, child_user_id=child.id, title="快照测试",
         status="active",
     ))
-    await db_session.commit()
+    await lifecycle_ctx.seed_sess.commit()
 
     async def fake_stream_round1(initial_state, stream_mode="custom", **kwargs):
         for p in [
@@ -244,14 +245,19 @@ async def test_context_size_tokens_snapshot_not_accumulate(api_client, auth_head
         ]:
             yield p
 
-    app.state.resources.main_graph.astream = fake_stream_round1
+    lifecycle_ctx.rr.main_graph.astream = fake_stream_round1
     body = make_payload(content="第一轮", session_id=str(sess_uuid))
-    resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
+    resp = await client.post("/api/v1/me/chat/stream", json=body, headers=headers)
     assert resp.status_code == 200
     await resp.aclose()
 
-    s1 = await db_session.get(SessionModel, sess_uuid)
+    s1 = await lifecycle_ctx.assert_sess.get(SessionModel, sess_uuid)
     assert s1.context_size_tokens == 150_000
+
+    # 清除 throttle 锁，避免第二轮被限频
+    await lifecycle_ctx.redis_client.delete(f"chat:throttle:{child.id}")
+    # 清除 assert_sess identity map 缓存，强制第二轮从 DB 重新读取
+    lifecycle_ctx.assert_sess.expire_all()
 
     async def fake_stream_round2(initial_state, stream_mode="custom", **kwargs):
         for p in [
@@ -261,37 +267,37 @@ async def test_context_size_tokens_snapshot_not_accumulate(api_client, auth_head
         ]:
             yield p
 
-    app.state.resources.main_graph.astream = fake_stream_round2
+    lifecycle_ctx.rr.main_graph.astream = fake_stream_round2
     body = make_payload(content="第二轮", session_id=str(sess_uuid))
-    resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
+    resp = await client.post("/api/v1/me/chat/stream", json=body, headers=headers)
     assert resp.status_code == 200
     await resp.aclose()
 
-    s2 = await db_session.get(SessionModel, sess_uuid)
+    s2 = await lifecycle_ctx.assert_sess.get(SessionModel, sess_uuid)
     assert s2.context_size_tokens == 500_000, "should be round2's snapshot, NOT cumulative 650k"
 
 
 @pytest.mark.asyncio
-async def test_compression_progress_fired_when_flag_true(api_client, auth_headers_child, db_session, app):
+async def test_compression_progress_fired_when_flag_true(lifecycle_ctx):
     """needs_compression=True 时 user 到达后先发 compression_start + compression_end 帧。（Group 9）"""
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
     sid = uuid.uuid4()
     session = SessionModel(
         id=sid, child_user_id=child.id, title="压缩测试",
         status="active", needs_compression=True,
     )
-    db_session.add(session)
-    await db_session.flush()
+    lifecycle_ctx.seed_sess.add(session)
+    await lifecycle_ctx.seed_sess.flush()
     # R+: 添加预存 human + AI 消息使 actives_orm 有数据可压缩（Row 3 保留旧行）
-    db_session.add(Message(
+    lifecycle_ctx.seed_sess.add(Message(
         session_id=sid, role=MessageRole.human,
         content="上一轮消息", status=MessageStatus.active,
     ))
-    db_session.add(Message(
+    lifecycle_ctx.seed_sess.add(Message(
         session_id=sid, role=MessageRole.ai,
         content="上一轮回复", status=MessageStatus.active,
     ))
-    await db_session.commit()
+    await lifecycle_ctx.seed_sess.commit()
 
     # mock get_chat_llm 给压缩用；fake astream 给主图用
     mock_llm = AsyncMock()
@@ -301,12 +307,12 @@ async def test_compression_progress_fired_when_flag_true(api_client, auth_header
         for p in [{"delta": "回复"}, {"finish_reason": "stop"}]:
             yield p
 
-    app.state.resources.main_graph.astream = fake_astream
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
     with (
         patch("app.chat.factory.build_provider_llm", return_value=mock_llm),
     ):
         body = make_payload(content="新消息", session_id=str(sid))
-        resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
+        resp = await client.post("/api/v1/me/chat/stream", json=body, headers=headers)
         assert resp.status_code == 200
         await resp.aclose()
 
@@ -318,16 +324,16 @@ async def test_compression_progress_fired_when_flag_true(api_client, auth_header
         "compression_end should be emitted"
     )
     # 验证 active → compressed + new summary
-    msgs = (await db_session.execute(
+    msgs = (await lifecycle_ctx.assert_sess.execute(
         select(Message).where(Message.session_id == sid).order_by(Message.created_at)
     )).scalars().all()
     assert any(m.role == MessageRole.summary for m in msgs), "summary message should exist"
-    session = await db_session.get(SessionModel, sid)
+    session = await lifecycle_ctx.assert_sess.get(SessionModel, sid)
     assert session.needs_compression is False, "flag reset after compression"
 
 
 @pytest.mark.asyncio
-async def test_compression_failure_keeps_flag(api_client, auth_headers_child, db_session, app):
+async def test_compression_failure_keeps_flag(api_client, auth_headers_child, db_session, app, _patch_locks):
     """压缩 LLM 抛错 → SSE error 帧 + needs_compression 保持 True。（Group 9）"""
     headers, child = auth_headers_child
     sid = uuid.uuid4()
@@ -376,17 +382,17 @@ async def test_compression_failure_keeps_flag(api_client, auth_headers_child, db
 
 
 @pytest.mark.asyncio
-async def test_compression_skipped_when_flag_false(api_client, auth_headers_child, db_session, app):
+async def test_compression_skipped_when_flag_false(lifecycle_ctx):
     """纯新 session（needs_compression=False）不发 compression_progress。（Group 9）"""
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
     async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in [{"delta": "你好"}, {"finish_reason": "stop"}]:
             yield p
 
-    app.state.resources.main_graph.astream = fake_astream
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
     body = make_payload(content="你好")
-    resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)
+    resp = await client.post("/api/v1/me/chat/stream", json=body, headers=headers)
     assert resp.status_code == 200
     await resp.aclose()
 

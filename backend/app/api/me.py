@@ -7,8 +7,9 @@ import base64
 import json
 import logging
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 import anyio
@@ -23,7 +24,7 @@ from app.auth.deps import get_current_account, require_child
 from app.auth.redis_client import get_redis
 from app.chat.compression import CONTEXT_COMPRESS_THRESHOLD_TOKENS
 from app.chat.context_schema import ChatContextSchema
-from app.chat.graph import enqueue_audit
+from app.chat.graph import enqueue_audit, persist_ai_turn
 from app.chat.locks import (
     acquire_session_lock,
     acquire_throttle_lock,
@@ -37,12 +38,12 @@ from app.chat.session_policy import (
     should_switch_session,
     today_session_title,
 )
-from app.chat.sse import stream_graph_to_sse
+from app.chat.sse import build_flow_pause_frame, stream_graph_to_sse
 from app.db import get_db
 from app.models.accounts import ChildProfile, User
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
-from app.models.enums import MessageRole, MessageStatus, SessionStatus
+from app.models.enums import InterventionType, MessageRole, MessageStatus, SessionStatus
 from app.runtime import RuntimeResources
 from app.schemas.accounts import AccountOut, CurrentAccount
 from app.schemas.children import ChildProfileOut
@@ -56,6 +57,7 @@ from app.schemas.sessions import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/me", tags=["me"])
+
 
 @router.get("", response_model=AccountOut)
 async def get_me(
@@ -392,6 +394,376 @@ async def _stub_stream() -> list[bytes]:
     ]
 
 
+@dataclass
+class _ChatStreamState:
+    """段一段二共享的轻量 mutable container。"""
+
+    overflow: bool = False
+
+
+async def _run_llm_pipeline(
+    rr: RuntimeResources,
+    redis: Redis,
+    sid: UUID,
+    hid: UUID,
+    nonce: str,
+    child_user_id: UUID,
+    turn_number: int,
+    initial_state: Any,
+    ctx: ChatContextSchema,
+    queue: asyncio.Queue,
+    state: _ChatStreamState,
+    stop_event: asyncio.Event,
+    protected_id: UUID | None = None,
+    age: int = 8,
+    gender: str | None = None,
+) -> None:
+    """段一：LLM consumption 协程，在独立 asyncio.Task 中运行。
+
+    M9-patch1 解耦后，以下业务逻辑从 HTTP StreamingResponse generator
+    迁入本函数（§7.3 清单 1-8）：compression → thinking 状态机 →
+    graph.astream → stream_graph_to_sse 帧映射 → commit② 三终态
+    （自然结束 / StopWithAi / StopNoAi）。
+
+    accumulated 语义（关注点 #4）：以段一全量产出为准，不受段二
+    客户端送达影响。即使客户端断连，commit② 仍将完整 accumulated
+    落库，确保 Resume 流能取出完整 ai 行。
+    """
+
+    def _put(frame: bytes) -> None:
+        """入队辅助：队满即翻 overflow flag（关注点 #3），后续 put 全部跳过。
+
+        overflow 翻正后段一继续跑（graph 循环 + commit② 照常），
+        仅停止入队。段二在取帧前检测 overflow 标志，自行发 flow_pause
+        断流并退出。
+        """
+        if state.overflow:
+            return
+        try:
+            queue.put_nowait(frame)
+        except asyncio.QueueFull:
+            state.overflow = True
+            logger.info("queue overflow, headless mode", extra={"sid": str(sid)})
+
+    accumulated = ""
+    last_finish_reason = "stop"
+    last_intervention_type: InterventionType | None = None
+    usage_meta: dict | None = None
+    has_emitted_content = False
+    user_stopped = False
+    thinking_started = False
+
+    try:
+        async with rr.db_session_factory() as db:
+            try:
+                # 第一帧：session_meta
+                _put(_frame_sse_event("session_meta", {"session_id": str(sid), "hid": str(hid)}))
+
+                # 重新加载 session（段一有自己独立的 db session）
+                session = await db.get(SessionModel, sid)
+                if session is None:
+                    raise RuntimeError(f"session {sid} not found")
+
+                # ---- 阻塞压缩检查 ----
+                if session.needs_compression:
+                    try:
+                        _put(_frame_sse_event("compression_start", {}))
+
+                        from app.chat.compression import (
+                            build_compression_prompt,
+                            extract_compression_summary,
+                        )
+                        from app.chat.context import _to_lc_message
+                        from app.chat.factory import build_provider_llm
+
+                        if protected_id is None:
+                            raise RuntimeError(
+                                "compression triggered but no prior message to protect; "
+                                "this should not happen in production"
+                            )
+
+                        actives_orm = (
+                            (
+                                await db.execute(
+                                    select(Message)
+                                    .where(
+                                        Message.session_id == sid,
+                                        Message.status == "active",
+                                        Message.id != protected_id,
+                                    )
+                                    .order_by(Message.created_at.asc())
+                                )
+                            )
+                            .scalars()
+                            .all()
+                        )
+
+                        if actives_orm:
+                            c_input = build_compression_prompt(
+                                [_to_lc_message(mo) for mo in actives_orm]
+                            )
+                            c_llm = build_provider_llm(
+                                f"compression_{rr.settings.compression_provider}",
+                                rr.settings,
+                            )
+                            c_result = await c_llm.ainvoke(c_input)
+                            raw = (
+                                c_result.content if hasattr(c_result, "content") else str(c_result)
+                            )
+                            summary = extract_compression_summary(raw)
+                            for mo in actives_orm:
+                                mo.status = MessageStatus.compressed
+                            db.add(
+                                Message(
+                                    session_id=sid,
+                                    role=MessageRole.summary,
+                                    status=MessageStatus.active,
+                                    content=summary,
+                                )
+                            )
+                        else:
+                            logger.info(
+                                "compression noop for session %s: no messages to compress", sid
+                            )
+
+                        session.needs_compression = False
+                        await db.commit()
+
+                        # 手动构造 initial_state["messages"]
+                        _sp = build_system_prompt(age, gender)
+                        _new_hist = []
+
+                        if actives_orm:
+                            _summary_msg = (
+                                await db.execute(
+                                    select(Message)
+                                    .where(
+                                        Message.session_id == sid,
+                                        Message.role == MessageRole.summary,
+                                        Message.status == MessageStatus.active,
+                                    )
+                                    .order_by(Message.created_at.desc())
+                                    .limit(1)
+                                )
+                            ).scalar_one()
+                            _new_hist.append(_to_lc_message(_summary_msg))
+
+                        _protected_msg = (
+                            await db.execute(select(Message).where(Message.id == protected_id))
+                        ).scalar_one()
+                        _new_hist.append(_to_lc_message(_protected_msg))
+
+                        initial_state["messages"] = [_sp, *_new_hist]
+
+                        _put(_frame_sse_event("compression_end", {}))
+                    except Exception:
+                        logger.exception("compression failed for session %s", sid)
+                        _put(
+                            _frame_sse_event(
+                                "error",
+                                {"message": "压缩失败，请重试", "code": "CompressionError"},
+                            )
+                        )
+
+                # ---- 图谱主循环 ----
+                graph = rr.main_graph
+                async for payload in graph.astream(
+                    initial_state,
+                    context=ctx,  # type: ignore[arg-type]
+                    stream_mode="custom",
+                ):
+                    if stop_event.is_set():
+                        user_stopped = True
+                        break
+                    if payload.get("usage_metadata"):
+                        usage_meta = payload["usage_metadata"]
+
+                    # reasoning 信号（关注点 #5：段一无 client_alive 门控，
+                    # 帧无条件入队；段二 yield 时通过捕捉 ConnectionError 自行退役）
+                    if payload.get("reasoning"):
+                        if not thinking_started:
+                            thinking_started = True
+                            _put(_frame_sse_event("thinking_start", {}))
+                        continue
+
+                    d = payload.get("delta", "")
+                    if d:
+                        has_emitted_content = True
+                        accumulated += d
+
+                    # 首个非空 delta → 收 thinking
+                    if d and thinking_started:
+                        thinking_started = False
+                        _put(_frame_sse_event("thinking_end", {}))
+
+                    # intervention_type 信号（graph 终端节点在首 delta 前发射）
+                    it_raw = payload.get("intervention_type")
+                    if it_raw:
+                        try:
+                            last_intervention_type = InterventionType(it_raw)
+                        except ValueError:
+                            logger.warning(
+                                "unknown intervention_type %r, falling back to None",
+                                it_raw,
+                            )
+                            last_intervention_type = None
+
+                    fr = payload.get("finish_reason")
+                    if fr:
+                        last_finish_reason = fr
+
+                    # single-delta wrapper → stream_graph_to_sse 映射
+                    async def _wrap():
+                        yield payload
+
+                    try:
+                        async for frame in stream_graph_to_sse(_wrap()):
+                            _put(frame)
+                    except Exception:
+                        logger.exception(
+                            "stream_graph_to_sse mapping failed",
+                            extra={"sid": str(sid)},
+                        )
+
+                # ---- commit② 三终态（关注点 #1） ----
+                if user_stopped:
+                    if has_emitted_content:
+                        # StopWithAi：persist_ai_turn 写 ai 行 + 自增 → usage 记账 → commit → audit
+                        aid = await persist_ai_turn(
+                            db, sid,
+                            content=accumulated,
+                            finish_reason="user_stopped",
+                            turn_number=turn_number,
+                            intervention_type=last_intervention_type,
+                        )
+                        if usage_meta:
+                            _usage_total = usage_meta["input_tokens"] + usage_meta["output_tokens"]
+                            session.context_size_tokens = _usage_total
+                            if _usage_total >= CONTEXT_COMPRESS_THRESHOLD_TOKENS:
+                                session.needs_compression = True
+                        await db.commit()
+                        await enqueue_audit(
+                            rr.arq_pool,
+                            rr.audit_redis,
+                            sid,
+                            db,
+                            turn_number,
+                            child_user_id,
+                            aid,
+                        )
+                        _put(
+                            _frame_sse_event(
+                                "stopped",
+                                {"finish_reason": "user_stopped", "aid": str(aid)},
+                            )
+                        )
+                    else:
+                        # StopNoAi：不写 ai 行、不发 audit、不带 aid 的 stopped 帧
+                        _put(_frame_sse_event("stopped", {"finish_reason": "user_stopped"}))
+                else:
+                    # 自然结束：persist_ai_turn 写 ai 行 + 自增 → usage 记账 → commit → audit
+                    aid = await persist_ai_turn(
+                        db, sid,
+                        content=accumulated,
+                        finish_reason=last_finish_reason,
+                        turn_number=turn_number,
+                        intervention_type=last_intervention_type,
+                    )
+                    if usage_meta:
+                        _usage_total = usage_meta["input_tokens"] + usage_meta["output_tokens"]
+                        session.context_size_tokens = _usage_total
+                        if _usage_total >= CONTEXT_COMPRESS_THRESHOLD_TOKENS:
+                            session.needs_compression = True
+                    await db.commit()
+                    await enqueue_audit(
+                        rr.arq_pool,
+                        rr.audit_redis,
+                        sid,
+                        db,
+                        turn_number,
+                        child_user_id,
+                        aid,
+                    )
+                    _put(
+                        _frame_sse_event(
+                            "end",
+                            {"finish_reason": last_finish_reason, "aid": str(aid)},
+                        )
+                    )
+
+            except Exception as e:
+                logger.exception("llm pipeline error", extra={"sid": str(sid)})
+                await db.rollback()
+                _put(_frame_sse_event("error", {"message": str(e), "code": "InternalError"}))
+
+    finally:
+        running_streams.pop(str(sid), None)
+        if not state.overflow:
+            try:
+                queue.put_nowait(None)  # 哨兵：通知段二正常退出
+            except asyncio.QueueFull:
+                state.overflow = True
+        try:
+            await release_session_lock(redis, str(sid), nonce)
+        except Exception:
+            logger.warning(
+                "release lock failed, rely on TTL",
+                exc_info=True,
+                extra={"sid": str(sid)},
+            )
+
+
+async def _stream_generator(
+    queue: asyncio.Queue,
+    state: _ChatStreamState,
+    sid: UUID,
+) -> AsyncGenerator[bytes, None]:
+    """段二：StreamingResponse generator。仅做帧转发 + overflow check + 客户端断检测。
+
+    overflow check（关注点 #3）在 await queue.get() 之前，避免以下时序陷阱：
+    段一 put_nowait → QueueFull → 翻 overflow → 段二从 queue.get() 取出后
+    queue.full() 永远返回 False（size 已减 1），造成 overflow 漏检。
+
+    首次帧超时保护：仅覆盖 session_meta 入队前的静默崩溃（如 db_session_factory
+    初始化失败或段一 startup 异常）。session_meta 在进入 async-with 后第一句
+    入队，生产毫秒级；10s 阈值不覆盖首 token 交付延迟。
+    超时即静默退出（不做错误帧 — 段一已负责日志），避免请求级永久挂死。
+    """
+    try:
+        first_frame = True
+        while True:
+            if state.overflow:
+                yield build_flow_pause_frame("backpressure")
+                logger.info("sse backpressure cutoff", extra={"sid": str(sid)})
+                return
+
+            try:
+                if first_frame:
+                    frame = await asyncio.wait_for(queue.get(), timeout=10.0)
+                    first_frame = False
+                else:
+                    frame = await queue.get()
+            except asyncio.TimeoutError:
+                # 段一未能在 10s 内产生首帧（含 session_meta），
+                # 大概率是 bg task startup 静默崩溃；静默退出不做错误帧（段一已负责日志）
+                logger.error(
+                    "first frame timeout, bg task may have crashed silently",
+                    extra={"sid": str(sid)},
+                )
+                return
+
+            if frame is None:
+                break
+
+            try:
+                yield frame
+            except ConnectionError, anyio.BrokenResourceError:
+                logger.info("client disconnected", extra={"sid": str(sid)})
+                return
+    except asyncio.CancelledError:
+        raise
+
+
 @router.post("/chat/stream")
 async def chat_stream(
     request: Request,
@@ -400,58 +772,16 @@ async def chat_stream(
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> StreamingResponse:
-    """子对话轮次流式接口：决策矩阵 + 图谱流 + T5 持久化。
+    """流式接口：决策矩阵 → 提交① → 段一 bg task + 段二 generator。
 
-    流程：限流锁 → 会话检查 → 会话锁 → 决策矩阵
-    → 首轮/后续轮事务 → 提交① → 图谱流
-    （main_graph.astream custom-mode）→ stream_graph_to_sse → T5
-    （persist_ai_turn 写入 ai active 行）→ 提交② → StreamingResponse。
+    M9-patch1 解耦后：
+    - 同步前置（限流 / sesssion 策略 / 决策矩阵 / commit①）保持原位
+    - LLM consumption 迁至独立 _run_llm_pipeline（段一），
+      通过 asyncio.Queue 单向中转 SSE 字节帧给段二
+    - StreamingResponse 由 _stream_generator（段二）承担，仅做帧转发 +
+      overflow check + 客户端断检测
 
-    双提交边界：提交①（L597）持久化 human 行 + session；
-    提交②（generator 内 L758/L792）持久化 AI 行
-    （persist_ai_turn flush + db.commit）。两次提交 = 两个原子
-    单元：错误路径不写 ai 行；图谱流失败不回滚 human 行。
-
-    Decision matrix O (baseline §5.4, 7 rows):
-      Row 1: last=None   + regen=null  → INSERT human (active) [session resolved via policy]
-      Row 2: last=None   + regen=!null → 400 RegenerateForInvalid
-      Row 3: last=AI      + regen=null  → INSERT human (active)
-      Row 4: last=AI      + regen=!null → 400 RegenerateForInvalid
-      Row 5: last=orphan  + regen=null  → UPDATE old discarded + INSERT human (active)
-      Row 6: last=orphan  + regen=hid   → reuse orphan (content must be "")
-      Row 7: last=orphan  + regen=!hid  → 400 RegenerateForInvalid
-
-    Gate A 闭合论证（适用于 Row 5-7）：
-      "末条 active 消息"定义为 SELECT ... WHERE status='active'
-      ORDER BY created_at DESC, id DESC LIMIT 1 —— 它始终是最新的 active 行。
-      "非孤儿 human"需要在它之后存在一条 active AI 行，
-      但该 AI 行本身会成为"最新的 active 行"，与 ORDER BY 结果矛盾。
-      因此"末条 active 行是 human" ⟺ "孤儿 human"；无需二次查询。
-      Row 8/9（非孤儿 human 路径）不可达——若执行到则 raise AssertionError，
-      以捕获未来状态空间回归。
-
-    T5 单写入点（Step 8b）：图谱流结束 → persist_ai_turn
-    写入恰好一条 ai active 行（status='active', role='ai'），
-    内容为 accumulated 累积内容，finish_reason 取自末条 graph chunk；
-    同时更新 sessions.last_active_at。错误路径不写 ai 行。
-
-    SSE 7-event sequence (M6, §8.1):
-      session_meta → [thinking_start → thinking_end] → delta×N → end
-    session_meta.session_id 始终为服务端最终生效 sid（非客户端传入的 hint）。
-    错误路径：发射 error 帧（human active 行保留，不写 ai 行）。
-
-    锁释放契约：session 锁在 generator finally 块中释放
-    （成功路径）；对于在 generator 构造前抛出的 HTTPException
-    路径（P0-2），在 StreamingResponse 前显式释放。
-
-    Stop 检测（Step 8c）：session_meta 产出后，注册
-    running_streams[sid] = asyncio.Event()。每次 for 循环迭代在
-    内容累积之后、SSE yield 之前检查 event.is_set()（关注点1）。
-    StopKind 二分支：has_emitted_content ? StopWithAi（persist_ai_turn
-    写入 'user_stopped' + 带 aid 的 stopped 帧） : StopNoAi（不带 aid 的 stopped 帧）。
-    不 cancel：单帧 yield 用 try/except 包裹
-    ConnectionError/anyio.BrokenResourceError/asyncio.CancelledError →
-    client_alive=False，LLM 流继续但不 yield。
+    Decision matrix O (baseline §5.4, 7 rows) 参见 _run_llm_pipeline docstring。
     """
     # ---- throttle lock (TTL 自然过期，finally 不主动 DEL) ----
     if not await acquire_throttle_lock(redis, str(current.id)):
@@ -606,319 +936,88 @@ async def chat_stream(
             session.last_active_at = user_msg.created_at
         await db.commit()
 
-        # ---- 流式响应 ----
-        async def generator() -> AsyncGenerator[bytes, None]:
-            accumulated = ""
-            last_finish_reason = "stop"  # 兜底；末帧 finish_reason 命中时覆盖
-            usage_meta: dict | None = None  # 由 call_main_llm 转发的末帧 usage 快照
-            has_emitted_content = False
-            client_alive = True
-            user_stopped = False
+        # ---- 流式响应（M9-patch1 解耦） ----
+        # 段一：LLM consumption 独立 bg task；段二：StreamingResponse 帧转发
+        rr: RuntimeResources = request.app.state.resources
 
-            # 从 app.state 取 RuntimeResources + 构造 ChatContextSchema
-            rr: RuntimeResources = request.app.state.resources
+        from app.chat.state import MainDialogueState
 
-            from app.chat.state import MainDialogueState
+        ctx = ChatContextSchema(
+            session_id=sid,
+            child_user_id=current.id,
+            child_profile={},
+            age=_age,
+            gender=_gender,
+            user_input=req.content,
+            settings=rr.settings,
+            db_session_factory=rr.db_session_factory,
+            audit_redis=rr.audit_redis,
+        )
 
-            ctx = ChatContextSchema(
-                session_id=sid,
+        initial_state: MainDialogueState = {
+            "messages": [],
+            "audit_state": {
+                "crisis_locked": False,
+                "crisis_detected": False,
+                "redline_triggered": False,
+                "guidance": None,
+                "target_message_id": None,
+            },
+            "generated_token_count": 0,
+            "client_alive": True,
+            "user_stop_requested": False,
+            "turn_number": _turn_number,
+        }
+
+        # 计算 compression protected_id（段一用独立 db session，无法访问 handler 的 ORM 对象）
+        # Row 1（last_msg is None）无旧消息可压缩，protected_id 置 None
+        _protected_id: UUID | None = None
+        if last_msg is not None:
+            _protected_id = user_msg.id if user_msg is not None else last_msg.id
+
+        # ★ stop event 注册必须在 create_task 之前（避免 race）
+        stop_event = asyncio.Event()
+        running_streams[str(sid)] = stop_event
+
+        _maxsize = rr.settings.chat_queue_maxsize
+        if not isinstance(_maxsize, int):
+            _maxsize = 128
+        queue: asyncio.Queue = asyncio.Queue(maxsize=_maxsize)
+        state = _ChatStreamState()
+
+        bg = asyncio.create_task(
+            _run_llm_pipeline(
+                rr=rr,
+                redis=redis,
+                sid=sid,
+                hid=hid,
+                nonce=nonce,
                 child_user_id=current.id,
-                child_profile={},
+                turn_number=_turn_number,
+                initial_state=initial_state,
+                ctx=ctx,
+                queue=queue,
+                state=state,
+                stop_event=stop_event,
+                protected_id=_protected_id,
                 age=_age,
                 gender=_gender,
-                user_input=req.content,
-                settings=rr.settings,
-                db_session_factory=rr.db_session_factory,
-                audit_redis=rr.audit_redis,
-            )
+            ),
+            name=f"chat-llm-{sid}",
+        )
+        rr.register_chat_task(str(sid), bg)
 
-            initial_state: MainDialogueState = {
-                "messages": [],  # build_messages_main 节点从 DB 装载
-                "audit_state": {
-                    "crisis_locked": False,
-                    "crisis_detected": False,
-                    "redline_triggered": False,
-                    "guidance": None,
-                    "target_message_id": None,
-                },
-                "generated_token_count": 0,
-                "client_alive": True,
-                "user_stop_requested": False,
-                "turn_number": _turn_number,
-            }
-
-            try:
-                yield _frame_sse_event("session_meta", {"session_id": str(sid), "hid": str(hid)})
-
-                # 注册 stop event（Step 8c）
-                event = asyncio.Event()
-                running_streams[str(sid)] = event
-
-                # 消费图谱流：累积内容 + 转发到 SSE
-                thinking_started = False  # thinking 信号状态机（基线 §3.2）
-                # ---- 阻塞压缩检查（scheme R）：needs_compression=True → 同步压缩 ----
-                if session.needs_compression:
-                    try:
-                        yield _frame_sse_event("compression_start", {})
-
-                        from app.chat.compression import (
-                            build_compression_prompt,
-                            extract_compression_summary,
-                        )
-                        from app.chat.context import _to_lc_message
-                        from app.chat.factory import build_provider_llm
-
-                        # R+: 计算受保护行（本轮新 human / 复用 orphan）
-                        assert last_msg is not None
-                        protected_id = user_msg.id if user_msg is not None else last_msg.id
-
-                        # R+: 查询待压缩集，排除受保护行
-                        actives_orm = (
-                            (
-                                await db.execute(
-                                    select(Message)
-                                    .where(
-                                        Message.session_id == sid,
-                                        Message.status == "active",
-                                        Message.id != protected_id,
-                                    )
-                                    .order_by(Message.created_at.asc())
-                                )
-                            )
-                            .scalars()
-                            .all()
-                        )
-
-                        if actives_orm:
-                            # R+: 自组装 summarizer 输入，不调 build_context
-                            # （避免新 human 和排序问题）
-                            c_input = build_compression_prompt(
-                                [_to_lc_message(mo) for mo in actives_orm]
-                            )
-                            c_llm = build_provider_llm(
-                                f"compression_{rr.settings.compression_provider}",
-                                rr.settings,
-                            )
-                            c_result = await c_llm.ainvoke(c_input)
-                            raw = (
-                                c_result.content
-                                if hasattr(c_result, "content")
-                                else str(c_result)
-                            )
-                            summary = extract_compression_summary(raw)
-                            for mo in actives_orm:
-                                mo.status = MessageStatus.compressed
-                            db.add(
-                                Message(
-                                    session_id=sid,
-                                    role=MessageRole.summary,
-                                    status=MessageStatus.active,
-                                    content=summary,
-                                )
-                            )
-                        else:
-                            logger.info(
-                                "compression noop for session %s: no messages to compress", sid
-                            )
-
-                        session.needs_compression = False
-                        await db.commit()
-
-                        # R+: 手动构造 initial_state["messages"]（方案 a）
-                        # 顺序：[main_system, (turn_summ?), summary, protected_human]
-                        # 不调 build_context（ASC 排序会将 protected_human 置于 summary 前）
-                        _sp = build_system_prompt(_age, _gender)
-                        _new_hist = []
-
-                        # 若有新摘要行，注入（位于 protected_human 之前）
-                        if actives_orm:
-                            _summary_msg = (
-                                await db.execute(
-                                    select(Message)
-                                    .where(
-                                        Message.session_id == sid,
-                                        Message.role == MessageRole.summary,
-                                        Message.status == MessageStatus.active,
-                                    )
-                                    .order_by(Message.created_at.desc())
-                                    .limit(1)
-                                )
-                            ).scalar_one()
-                            _new_hist.append(_to_lc_message(_summary_msg))
-
-                        # 受保护 human 行放在最后
-                        _protected_msg = (
-                            await db.execute(select(Message).where(Message.id == protected_id))
-                        ).scalar_one()
-                        _new_hist.append(_to_lc_message(_protected_msg))
-
-                        initial_state["messages"] = [_sp, *_new_hist]
-
-                        yield _frame_sse_event("compression_end", {})
-                    except Exception:
-                        logger.exception("compression failed for session %s", sid)
-                        yield _frame_sse_event(
-                            "error",
-                            {
-                                "message": "压缩失败，请重试",
-                                "code": "CompressionError",
-                            },
-                        )
-                        return
-
-                graph = request.app.state.resources.main_graph
-                async for payload in graph.astream(
-                    initial_state, context=ctx, stream_mode="custom",
-                ):
-                    # 关注点1（修订）：stop 检查移至 for 顶部。每个 chunk 进来即检查，
-                    # 不论 payload 类型。修复两个旧位置的 bug：
-                    #   B1. reasoning `continue` 跳过原检查 → 思考阶段 stop
-                    #       要等首 content delta（5-30s）才生效
-                    #   B2. 原检查在 accumulated += d 后、yield 前 → StopWithAi
-                    #       persist 了客户端未收到的最后一帧
-                    # 顶部检查保证 has_emitted_content / accumulated 仅反映
-                    # 「已成功 yield 的 chunks」，前后端一致。
-                    if event.is_set():
-                        user_stopped = True
-                        break
-                    # usage_metadata 快照（由 call_main_llm 末帧转发）
-                    if payload.get("usage_metadata"):
-                        usage_meta = payload["usage_metadata"]
-
-                    # reasoning 信号（基线 §3.2, signal-only, 不传文本）
-                    if payload.get("reasoning"):
-                        if not thinking_started and client_alive:
-                            thinking_started = True
-                            try:
-                                yield _frame_sse_event("thinking_start", {})
-                            except (
-                                ConnectionError,
-                                anyio.BrokenResourceError,
-                                asyncio.CancelledError,
-                            ):
-                                client_alive = False
-                        continue  # reasoning 信号 payload 不进 _wrap → stream_graph_to_sse
-
-                    d = payload.get("delta", "")
-                    if d:
-                        has_emitted_content = True
-                        accumulated += d
-
-                    # 首个非空 delta 到达且 thinking 已开 → 收 thinking
-                    if d and thinking_started and client_alive:
-                        thinking_started = False
-                        try:
-                            yield _frame_sse_event("thinking_end", {})
-                        except ConnectionError, anyio.BrokenResourceError, asyncio.CancelledError:
-                            client_alive = False
-
-                    fr = payload.get("finish_reason")
-                    if fr:
-                        last_finish_reason = fr  # stop / length / content_filter
-
-                    # 关注点1 已上移至 for 循环顶部（修订）—— 修复 B1 + B2 见上
-
-                    # 关注点4：单帧 yield 级 try/except + stream_graph_to_sse 保护
-                    async def _wrap():
-                        yield payload
-
-                    try:
-                        async for frame in stream_graph_to_sse(_wrap()):
-                            if not client_alive:
-                                continue
-                            try:
-                                yield frame
-                            except (
-                                ConnectionError,
-                                anyio.BrokenResourceError,
-                                asyncio.CancelledError,
-                            ):
-                                client_alive = False
-                    except ConnectionError, anyio.BrokenResourceError, asyncio.CancelledError:
-                        client_alive = False
-
-                # 关注点3：user_stopped 与自然结束互斥（persist_ai_turn 至多 1 次）
-                # ---- commit② — ai 消息落库 + usage 快照 + needs_compression 标志 + 审查 ----
-                if user_stopped:
-                    # 关注点2：StopKind 二分支
-                    if has_emitted_content:
-                        ai_msg = Message(
-                            session_id=sid,
-                            role=MessageRole.ai,
-                            content=accumulated,
-                            status=MessageStatus.active,
-                            finish_reason="user_stopped",
-                            turn_number=_turn_number,
-                        )
-                        db.add(ai_msg)
-                        await db.flush()
-                        aid = ai_msg.id
-
-                        # usage 快照：写 LLM 真值，不累加
-                        if usage_meta:
-                            _usage_total = usage_meta["input_tokens"] + usage_meta["output_tokens"]
-                            session.context_size_tokens = _usage_total
-                            if _usage_total >= CONTEXT_COMPRESS_THRESHOLD_TOKENS:
-                                session.needs_compression = True
-                        await db.commit()
-
-                        await enqueue_audit(rr.arq_pool, rr.audit_redis, sid, db, _turn_number, current.id, aid)
-
-                        if client_alive:
-                            yield _frame_sse_event(
-                                "stopped",
-                                {"finish_reason": "user_stopped", "aid": str(aid)},
-                            )
-                    else:
-                        if client_alive:
-                            yield _frame_sse_event(
-                                "stopped",
-                                {"finish_reason": "user_stopped"},
-                            )
-                else:
-                    # 自然结束分支：commit②
-                    ai_msg = Message(
-                        session_id=sid,
-                        role=MessageRole.ai,
-                        content=accumulated,
-                        status=MessageStatus.active,
-                        finish_reason=last_finish_reason,
-                        turn_number=_turn_number,
-                    )
-                    db.add(ai_msg)
-                    await db.flush()
-                    aid = ai_msg.id
-
-                    # usage 快照：写 LLM 真值，不累加
-                    if usage_meta:
-                        _usage_total = usage_meta["input_tokens"] + usage_meta["output_tokens"]
-                        session.context_size_tokens = _usage_total
-                        if _usage_total >= CONTEXT_COMPRESS_THRESHOLD_TOKENS:
-                            session.needs_compression = True
-                    await db.commit()
-
-                    await enqueue_audit(rr.arq_pool, rr.audit_redis, sid, db, _turn_number, current.id, aid)
-
-                    if client_alive:
-                        yield _frame_sse_event(
-                            "end",
-                            {"finish_reason": last_finish_reason, "aid": str(aid)},
-                        )
-            except Exception as e:
-                logger.exception("chat_stream generator failed")
-                if client_alive:
-                    yield _frame_sse_event(
-                        "error",
-                        {"message": str(e), "code": "InternalError"},
-                    )
-                # human active 行已由上方 db.commit() 持久化，不写 ai 行（不回滚）
-            finally:
-                # 关注点5：先 pop running_streams（去除 stop 入口），再 release_session_lock
-                running_streams.pop(str(sid), None)
-                await release_session_lock(redis, str(sid), nonce)
-
-        return StreamingResponse(generator(), media_type="text/event-stream")
+        return StreamingResponse(
+            _stream_generator(queue, state, sid),
+            media_type="text/event-stream",
+        )
 
     except HTTPException:
+        # P0-2 锁释放：限流锁 TTL 自过期，不主动 DEL（关注点 #6）
+        await release_session_lock(redis, str(sid), nonce)
+        raise
+    except Exception:
+        # 非 HTTPException 异常路径（DB / Redis / OOM）同样释放锁，
+        # 封死 commit①~create_task 间非 HTTPException 绕过 release_session_lock 的 lock 残留
         await release_session_lock(redis, str(sid), nonce)
         raise

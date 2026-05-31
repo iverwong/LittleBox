@@ -39,6 +39,7 @@ from app.models.accounts import Family, FamilyMember, User
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
 from app.models.enums import MessageRole, MessageStatus, UserRole
+from tests.api._chat_stream_lifecycle_helpers import lifecycle_ctx, lifecycle_setup, seed_compression_session
 
 # ---------------------------------------------------------------------------
 # Fixtures (reused from test_chat_stream_control_plane.py)
@@ -193,32 +194,29 @@ class _FakeGraphStream:
 
 
 @pytest.mark.asyncio
-async def test_sse_sequence_session_meta_multi_delta_end(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session, monkeypatch
-):
+async def test_sse_sequence_session_meta_multi_delta_end(lifecycle_ctx):
     """session_meta → delta×2 → end (multi-delta, no reasoning_content)."""
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
     fake_payloads = [
-        {"delta": "你"},  # delta 1
-        {"delta": "好"},  # delta 2
-        {"finish_reason": "stop"},  # no output from sse adapter
+        {"delta": "你"},
+        {"delta": "好"},
+        {"finish_reason": "stop"},
     ]
 
     async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in fake_payloads:
             yield p
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
     body = make_payload(content="Hello")
-    resp = await api_client_with_eval.post("/api/v1/me/chat/stream", json=body, headers=headers)
+    resp = await client.post("/api/v1/me/chat/stream", json=body, headers=headers)
     assert resp.status_code == 200
     await resp.aclose()
 
     frames = _parse_sse_frames(resp.text)
     frame_types = [f["type"] for f in frames]
 
-    # Event sequence: session_meta → delta × 2 → end
     assert frame_types[0] == "session_meta"
     assert frame_types[1] == "delta"
     assert frame_types[2] == "delta"
@@ -264,11 +262,9 @@ async def test_sse_sequence_delta_only_no_reasoning(
 
 
 @pytest.mark.asyncio
-async def test_t5_writes_ai_active_with_stop(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session, monkeypatch
-):
+async def test_t5_writes_ai_active_with_stop(lifecycle_ctx):
     """Inline AI write on normal path → ai active row + finish_reason='stop'."""
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
     fake_payloads = [
         {"delta": "回复内容"},
@@ -279,18 +275,19 @@ async def test_t5_writes_ai_active_with_stop(
         for p in fake_payloads:
             yield p
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
 
     body = make_payload(content="Hello")
-    resp = await api_client_with_eval.post("/api/v1/me/chat/stream", json=body, headers=headers)
+    resp = await client.post("/api/v1/me/chat/stream", json=body, headers=headers)
     assert resp.status_code == 200
     await resp.aclose()
 
     sid = _parse_sse_frames(resp.text)[0]["data"]["session_id"]
 
+    lifecycle_ctx.assert_sess.expire_all()
     msgs = (
         (
-            await db_session.execute(
+            await lifecycle_ctx.assert_sess.execute(
                 select(Message).where(Message.session_id == sid).order_by(Message.created_at)
             )
         )
@@ -298,7 +295,6 @@ async def test_t5_writes_ai_active_with_stop(
         .all()
     )
 
-    # Exactly 2 rows: human (from decision matrix) + ai (from T5)
     assert len(msgs) == 2
     human_msg, ai_msg = msgs
     assert human_msg.role == MessageRole.human
@@ -314,32 +310,31 @@ async def test_t5_writes_ai_active_with_stop(
 
 
 @pytest.mark.asyncio
-async def test_t5_finish_reason_length(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session, monkeypatch
-):
+async def test_t5_finish_reason_length(lifecycle_ctx):
     """Mock last chunk finish_reason='length' → DB row + SSE end frame both have 'length'."""
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
     fake_payloads = [
         {"delta": "长回复"},
-        {"finish_reason": "length"},  # length not stop
+        {"finish_reason": "length"},
     ]
 
     async def fake_astream(initial_state, stream_mode="custom", **kwargs):
         for p in fake_payloads:
             yield p
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
 
     body = make_payload(content="Tell me a story")
-    resp = await api_client_with_eval.post("/api/v1/me/chat/stream", json=body, headers=headers)
+    resp = await client.post("/api/v1/me/chat/stream", json=body, headers=headers)
     assert resp.status_code == 200
     await resp.aclose()
 
     sid = _parse_sse_frames(resp.text)[0]["data"]["session_id"]
+    lifecycle_ctx.assert_sess.expire_all()
     msgs = (
         (
-            await db_session.execute(
+            await lifecycle_ctx.assert_sess.execute(
                 select(Message).where(Message.session_id == sid, Message.role == MessageRole.ai)
             )
         )
@@ -355,11 +350,9 @@ async def test_t5_finish_reason_length(
 
 
 @pytest.mark.asyncio
-async def test_t5_finish_reason_content_filter(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session, monkeypatch
-):
+async def test_t5_finish_reason_content_filter(lifecycle_ctx):
     """finish_reason='content_filter' → DB row + SSE end frame both have 'content_filter'."""
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
     fake_payloads = [
         {"delta": "filtered"},
@@ -370,17 +363,18 @@ async def test_t5_finish_reason_content_filter(
         for p in fake_payloads:
             yield p
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
 
     body = make_payload(content="Test filter")
-    resp = await api_client_with_eval.post("/api/v1/me/chat/stream", json=body, headers=headers)
+    resp = await client.post("/api/v1/me/chat/stream", json=body, headers=headers)
     assert resp.status_code == 200
     await resp.aclose()
 
     sid = _parse_sse_frames(resp.text)[0]["data"]["session_id"]
+    lifecycle_ctx.assert_sess.expire_all()
     msgs = (
         (
-            await db_session.execute(
+            await lifecycle_ctx.assert_sess.execute(
                 select(Message).where(Message.session_id == sid, Message.role == MessageRole.ai)
             )
         )
@@ -401,13 +395,9 @@ async def test_t5_finish_reason_content_filter(
 
 
 @pytest.mark.asyncio
-async def test_t5_commit_called_after_persist(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session, monkeypatch
-):
+async def test_t5_commit_called_after_persist(lifecycle_ctx):
     """Generator calls db.commit() at least twice: decision-matrix commit① + AI-row commit②."""
-    from unittest.mock import AsyncMock
-
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
     fake_payloads = [
         {"delta": "hi"},
@@ -418,37 +408,26 @@ async def test_t5_commit_called_after_persist(
         for p in fake_payloads:
             yield p
 
-    # Spy on db_session.commit
-    original_commit = db_session.commit
-    commit_spy = AsyncMock()
-
-    async def spy_commit(*args, **kwargs):
-        await commit_spy(*args, **kwargs)
-        return await original_commit(*args, **kwargs)
-
-    db_session.commit = spy_commit
-
-    app_with_eval.state.resources.main_graph.astream = fake_astream
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
 
     body = make_payload(content="Hello")
-    resp = await api_client_with_eval.post("/api/v1/me/chat/stream", json=body, headers=headers)
+    resp = await client.post("/api/v1/me/chat/stream", json=body, headers=headers)
     assert resp.status_code == 200
     await resp.aclose()
 
-    # commit① = decision matrix (human row), commit② = AI row (inside generator)
-    assert commit_spy.call_count >= 2, (
-        f"Expected at least 2 commits (decision matrix + AI row), got {commit_spy.call_count}"
-    )
+    # Verify commit② happened: ai row should be visible via cross-connection read
+    sid = _parse_sse_frames(resp.text)[0]["data"]["session_id"]
+    lifecycle_ctx.assert_sess.expire_all()
+    ai_msgs = (await lifecycle_ctx.assert_sess.execute(
+        select(Message).where(Message.session_id == sid, Message.role == MessageRole.ai)
+    )).scalars().all()
+    assert len(ai_msgs) == 1, "commit② should have written exactly one ai row"
 
 
 @pytest.mark.asyncio
-async def test_ai_row_persisted_cross_connection(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session, engine
-):
+async def test_ai_row_persisted_cross_connection(lifecycle_ctx):
     """After generator commit②, AI row is visible from a completely new DB connection."""
-    from unittest.mock import patch
-
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
     fake_payloads = [
         {"delta": "跨连接回复"},
@@ -459,28 +438,26 @@ async def test_ai_row_persisted_cross_connection(
         for p in fake_payloads:
             yield p
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
 
     body = make_payload(content="Hello")
-    resp = await api_client_with_eval.post("/api/v1/me/chat/stream", json=body, headers=headers)
+    resp = await client.post("/api/v1/me/chat/stream", json=body, headers=headers)
     assert resp.status_code == 200
     await resp.aclose()
 
     sid = _parse_sse_frames(resp.text)[0]["data"]["session_id"]
 
-    # Generator's commit② released the savepoint → AI row is now in the outer PG
-    # transaction. Verify via a raw connection execute (same outer transaction,
-    # no need to commit it — avoids data leak to other tests).
-    conn = await db_session.connection()
-    result = await conn.execute(
+    # Read via assert_sess (separate connection) — proves real commit② visibility
+    lifecycle_ctx.assert_sess.expire_all()
+    result = await lifecycle_ctx.assert_sess.execute(
         select(Message.content, Message.finish_reason).where(
             Message.session_id == sid, Message.role == MessageRole.ai
         )
     )
     row = result.one_or_none()
-    assert row is not None, "AI row not visible on same connection — commit② may not have executed"
-    assert row[0] == "跨连接回复"  # content
-    assert row[1] == "stop"  # finish_reason
+    assert row is not None, "AI row not visible — commit② may not have executed"
+    assert row[0] == "跨连接回复"
+    assert row[1] == "stop"
 
 
 # ---------------------------------------------------------------------------
@@ -489,35 +466,33 @@ async def test_ai_row_persisted_cross_connection(
 
 
 @pytest.mark.asyncio
-async def test_error_path_emits_error_frame_and_preserves_human(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session, monkeypatch
-):
+async def test_error_path_emits_error_frame_and_preserves_human(lifecycle_ctx):
     """graph raises Exception → SSE error frame + human active row retained + no ai row."""
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
     async def fake_astream_broken(initial_state, stream_mode="custom", **kwargs):
         yield {"delta": "partial before error"}
         raise RuntimeError("graph internal error")
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream_broken
+    lifecycle_ctx.rr.main_graph.astream = fake_astream_broken
 
     body = make_payload(content="Hello")
-    resp = await api_client_with_eval.post("/api/v1/me/chat/stream", json=body, headers=headers)
+    resp = await client.post("/api/v1/me/chat/stream", json=body, headers=headers)
     assert resp.status_code == 200
     await resp.aclose()
 
     frames = _parse_sse_frames(resp.text)
     frame_types = [f["type"] for f in frames]
 
-    # (a) error frame present
     assert "error" in frame_types, f"No error frame in {frame_types}"
     error_frame = next(f for f in frames if f["type"] == "error")
     assert "graph internal error" in error_frame["data"]["message"]
 
     sid = frames[0]["data"]["session_id"]
+    lifecycle_ctx.assert_sess.expire_all()
     msgs = (
         (
-            await db_session.execute(
+            await lifecycle_ctx.assert_sess.execute(
                 select(Message).where(Message.session_id == sid).order_by(Message.created_at)
             )
         )
@@ -525,7 +500,7 @@ async def test_error_path_emits_error_frame_and_preserves_human(
         .all()
     )
 
-    # (b) exactly 1 row: human active (orphan or new, no ai row)
+    # exactly 1 row: human active (orphan or new, no ai row)
     assert len(msgs) == 1, f"Expected 1 row (human only), got {len(msgs)}: {msgs}"
     assert msgs[0].role == MessageRole.human
     assert msgs[0].status == MessageStatus.active
@@ -562,14 +537,12 @@ async def test_error_path_lock_released(
 
 
 @pytest.mark.asyncio
-async def test_accumulated_content_concatenates_all_deltas(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session, monkeypatch
-):
+async def test_accumulated_content_concatenates_all_deltas(lifecycle_ctx):
     """accumulated = sum of all delta payloads → ai row content = full concatenated text."""
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
     fake_payloads = [
-        {"delta": "你"},  # incremental chunks
+        {"delta": "你"},
         {"delta": "好"},
         {"delta": "！"},
         {"finish_reason": "stop"},
@@ -579,22 +552,23 @@ async def test_accumulated_content_concatenates_all_deltas(
         for p in fake_payloads:
             yield p
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
 
     body = make_payload(content="Hi")
-    resp = await api_client_with_eval.post("/api/v1/me/chat/stream", json=body, headers=headers)
+    resp = await client.post("/api/v1/me/chat/stream", json=body, headers=headers)
     assert resp.status_code == 200
     await resp.aclose()
 
     sid = _parse_sse_frames(resp.text)[0]["data"]["session_id"]
+    lifecycle_ctx.assert_sess.expire_all()
     ai_msg = (
-        await db_session.execute(
+        await lifecycle_ctx.assert_sess.execute(
             select(Message).where(Message.session_id == sid, Message.role == MessageRole.ai)
         )
     ).scalar_one_or_none()
 
     assert ai_msg is not None
-    assert ai_msg.content == "你好！"  # all deltas concatenated
+    assert ai_msg.content == "你好！"
 
 
 # ---------------------------------------------------------------------------
@@ -603,11 +577,9 @@ async def test_accumulated_content_concatenates_all_deltas(
 
 
 @pytest.mark.asyncio
-async def test_end_frame_contains_real_aid(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session, monkeypatch
-):
+async def test_end_frame_contains_real_aid(lifecycle_ctx):
     """emit_end receives real aid from inline AI message id."""
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
     fake_payloads = [
         {"delta": "response"},
@@ -618,16 +590,17 @@ async def test_end_frame_contains_real_aid(
         for p in fake_payloads:
             yield p
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
 
     body = make_payload(content="Hello")
-    resp = await api_client_with_eval.post("/api/v1/me/chat/stream", json=body, headers=headers)
+    resp = await client.post("/api/v1/me/chat/stream", json=body, headers=headers)
     assert resp.status_code == 200
     await resp.aclose()
 
     sid = _parse_sse_frames(resp.text)[0]["data"]["session_id"]
+    lifecycle_ctx.assert_sess.expire_all()
     ai_msg = (
-        await db_session.execute(
+        await lifecycle_ctx.assert_sess.execute(
             select(Message).where(Message.session_id == sid, Message.role == MessageRole.ai)
         )
     ).scalar_one_or_none()
@@ -643,17 +616,15 @@ async def test_end_frame_contains_real_aid(
 
 
 @pytest.mark.asyncio
-async def test_thinking_start_end_sse_sequence(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session
-):
+async def test_thinking_start_end_sse_sequence(lifecycle_ctx):
     """reasoning signal payloads → thinking_start (once) → first delta → thinking_end."""
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
     fake_payloads = [
-        {"reasoning": True},        # first reasoning → thinking_start
-        {"reasoning": True},        # second reasoning → no repeat
-        {"delta": "你好"},            # first delta → thinking_end
-        {"delta": "！"},             # second delta
+        {"reasoning": True},
+        {"reasoning": True},
+        {"delta": "你好"},
+        {"delta": "！"},
         {"finish_reason": "stop"},
     ]
 
@@ -661,9 +632,9 @@ async def test_thinking_start_end_sse_sequence(
         for p in fake_payloads:
             yield p
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
     body = make_payload(content="Hello")
-    resp = await api_client_with_eval.post(
+    resp = await client.post(
         "/api/v1/me/chat/stream", json=body, headers=headers
     )
     assert resp.status_code == 200
@@ -790,13 +761,13 @@ async def compression_session(db_session, child_user):
 
 @pytest.mark.asyncio
 async def test_compression_normal_path(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session, compression_session, monkeypatch,
+    lifecycle_ctx,
 ):
     """Compression normal path: session_meta → compression_start → compression_end → delta → end."""
     from unittest.mock import AsyncMock, patch
 
-    headers, child = auth_headers_child
-    sid, _, msg1_id, msg2_id = compression_session
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+    sid, _, msg1_id, msg2_id = await seed_compression_session(lifecycle_ctx, child)
 
     fake_payloads = [
         {"delta": "回复"},
@@ -810,11 +781,11 @@ async def test_compression_normal_path(
     fake_c_llm = AsyncMock()
     fake_c_llm.ainvoke = AsyncMock(return_value=AIMessage(content="用户打招呼，AI 回应天气"))
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
 
     with patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
         body = make_payload(content="继续聊聊", session_id=str(sid))
-        resp = await api_client_with_eval.post(
+        resp = await client.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
         )
         assert resp.status_code == 200
@@ -830,9 +801,9 @@ async def test_compression_normal_path(
     assert frame_types[3] == "delta"
     assert frame_types[4] == "end"
 
-    # Verify compression wrote a summary row
+    lifecycle_ctx.assert_sess.expire_all()
     summary = (
-        await db_session.execute(
+        await lifecycle_ctx.assert_sess.execute(
             select(Message).where(
                 Message.session_id == sid, Message.role == MessageRole.summary,
             )
@@ -842,22 +813,19 @@ async def test_compression_normal_path(
     assert summary.status == MessageStatus.active
     assert "用户打招呼" in summary.content
 
-    # Old messages are compressed（按 ID 查询避免 order-dependent 干扰）
     for mid in (msg1_id, msg2_id):
-        row = await db_session.get(Message, mid)
+        row = await lifecycle_ctx.assert_sess.get(Message, mid)
         assert row is not None, f"Message {mid} not found"
         assert row.status == MessageStatus.compressed, f"msg {mid} status={row.status}"
 
 
 @pytest.mark.asyncio
-async def test_compression_with_reasoning_path(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session, compression_session, monkeypatch,
-):
+async def test_compression_with_reasoning_path(lifecycle_ctx):
     """Compression + reasoning: session_meta → compression_start → compression_end → thinking_start → thinking_end → delta → end."""
     from unittest.mock import AsyncMock, patch
 
-    headers, child = auth_headers_child
-    sid, _, msg1_id, msg2_id = compression_session
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+    sid, _, msg1_id, msg2_id = await seed_compression_session(lifecycle_ctx, child)
 
     fake_payloads = [
         {"reasoning": True},
@@ -873,11 +841,11 @@ async def test_compression_with_reasoning_path(
     fake_c_llm = AsyncMock()
     fake_c_llm.ainvoke = AsyncMock(return_value=AIMessage(content="摘要"))
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
 
     with patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
         body = make_payload(content="继续", session_id=str(sid))
-        resp = await api_client_with_eval.post(
+        resp = await client.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
         )
     assert resp.status_code == 200
@@ -959,9 +927,7 @@ async def test_compression_failure_path(
 
 
 @pytest.mark.asyncio
-async def test_compression_row84_regression(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session, compression_session, monkeypatch,
-):
+async def test_compression_row84_regression(lifecycle_ctx):
     """Row 84 回归断言：端到端压缩链路生成的 summary 不含对话式起首。
 
     Mock LLM 返回客观摘要「用户说你好，AI 回应今天天气不错」。
@@ -969,8 +935,8 @@ async def test_compression_row84_regression(
     """
     from unittest.mock import AsyncMock
 
-    headers, child = auth_headers_child
-    sid, _, msg1_id, msg2_id = compression_session
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+    sid, _, msg1_id, msg2_id = await seed_compression_session(lifecycle_ctx, child)
 
     fake_c_llm = AsyncMock()
     # Mock LLM returning a proper objective summary (NOT conversational greeting)
@@ -982,19 +948,20 @@ async def test_compression_row84_regression(
         yield {"delta": "r"}
         yield {"finish_reason": "stop"}
 
-    app_with_eval.state.resources.main_graph.astream = _fake_astream_84
+    lifecycle_ctx.rr.main_graph.astream = _fake_astream_84
 
     with patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
         body = make_payload(content="继续聊聊", session_id=str(sid))
-        resp = await api_client_with_eval.post(
+        resp = await client.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
         )
     assert resp.status_code == 200
     await resp.aclose()
 
     # Verify summary content
+    lifecycle_ctx.assert_sess.expire_all()
     summary = (
-        await db_session.execute(
+        await lifecycle_ctx.assert_sess.execute(
             select(Message).where(
                 Message.session_id == sid, Message.role == MessageRole.summary,
             )
@@ -1012,31 +979,28 @@ async def test_compression_row84_regression(
 
 
 @pytest.mark.asyncio
-async def test_compression_noop_empty_filter(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session, child_user, monkeypatch,
-):
+async def test_compression_noop_empty_filter(lifecycle_ctx):
     """Only one active human message + needs_compression=True → actives empty after filter → noop (no summary, no compression markers)."""
     from unittest.mock import AsyncMock
     from uuid import uuid4 as _uuid4
 
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
     sid = _uuid4()
 
-    # Create session with only one human message
     session = SessionModel(id=sid, child_user_id=child.id, title="test")
-    db_session.add(session)
-    await db_session.flush()
+    lifecycle_ctx.seed_sess.add(session)
+    await lifecycle_ctx.seed_sess.flush()
 
     msg = Message(
         session_id=sid, role=MessageRole.human,
         content="你好", status=MessageStatus.active,
     )
-    db_session.add(msg)
-    await db_session.flush()
+    lifecycle_ctx.seed_sess.add(msg)
+    await lifecycle_ctx.seed_sess.flush()
 
     session.needs_compression = True
     session.context_size_tokens = 600000
-    await db_session.commit()
+    await lifecycle_ctx.seed_sess.commit()
 
     fake_payloads = [
         {"delta": "回复你"},
@@ -1047,10 +1011,10 @@ async def test_compression_noop_empty_filter(
         for p in fake_payloads:
             yield p
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
 
     body = make_payload(content="新的消息", session_id=str(sid))
-    resp = await api_client_with_eval.post(
+    resp = await client.post(
         "/api/v1/me/chat/stream", json=body, headers=headers,
     )
     assert resp.status_code == 200
@@ -1064,7 +1028,8 @@ async def test_compression_noop_empty_filter(
     assert "compression_end" in frame_types
 
     # No summary row should be written
-    _result2 = await db_session.execute(
+    lifecycle_ctx.assert_sess.expire_all()
+    _result2 = await lifecycle_ctx.assert_sess.execute(
         select(Message).where(
             Message.session_id == sid, Message.role == MessageRole.summary,
         )
@@ -1074,7 +1039,7 @@ async def test_compression_noop_empty_filter(
 
     # session.needs_compression should be False (reset by noop path)
     session_row = (
-        await db_session.execute(
+        await lifecycle_ctx.assert_sess.execute(
             select(SessionModel).where(SessionModel.id == sid)
         )
     ).scalar_one()
@@ -1087,14 +1052,12 @@ async def test_compression_noop_empty_filter(
 
 
 @pytest.mark.asyncio
-async def test_compression_messages_order_assertion(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session, compression_session, monkeypatch,
-):
+async def test_compression_messages_order_assertion(lifecycle_ctx):
     """方案 a 核心契约：压缩后 initial_state["messages"] 顺序为 [system_prompt, summary, protected_human]."""
     from unittest.mock import AsyncMock, patch as _patch
 
-    headers, child = auth_headers_child
-    sid, _, msg1_id, msg2_id = compression_session
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+    sid, _, msg1_id, msg2_id = await seed_compression_session(lifecycle_ctx, child)
 
     captured: list = []
     summary_content = "测试摘要XYZ"
@@ -1107,11 +1070,11 @@ async def test_compression_messages_order_assertion(
     fake_c_llm = AsyncMock()
     fake_c_llm.ainvoke = AsyncMock(return_value=AIMessage(content=summary_content))
 
-    app_with_eval.state.resources.main_graph.astream = spy_astream
+    lifecycle_ctx.rr.main_graph.astream = spy_astream
 
     with _patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
         body = make_payload(content="继续聊聊", session_id=str(sid))
-        resp = await api_client_with_eval.post(
+        resp = await client.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
         )
         assert resp.status_code == 200
@@ -1143,9 +1106,7 @@ async def test_compression_messages_order_assertion(
 
 
 @pytest.mark.asyncio
-async def test_compression_with_existing_summary(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session, child_user, monkeypatch,
-):
+async def test_compression_with_existing_summary(lifecycle_ctx):
     """二次压缩：已有旧 summary 行的 session 中，旧 summary 被纳入压缩集并标 compressed。"""
     from datetime import UTC, datetime as _dt
     from uuid import uuid4 as _uuid4
@@ -1153,14 +1114,13 @@ async def test_compression_with_existing_summary(
 
     from app.chat.prompts import SUMMARY_PREFIX
 
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
     sid = _uuid4()
 
     session = SessionModel(id=sid, child_user_id=child.id, title="test")
-    db_session.add(session)
-    await db_session.flush()
+    lifecycle_ctx.seed_sess.add(session)
+    await lifecycle_ctx.seed_sess.flush()
 
-    # 5 行：human → AI → old_summary → human → AI
     base_ts = _dt.now(UTC)
     rows_data = [
         (MessageRole.human, "第一轮"),
@@ -1177,13 +1137,13 @@ async def test_compression_with_existing_summary(
             status=MessageStatus.active,
         )
         m.created_at = base_ts.replace(microsecond=base_ts.microsecond + i)
-        db_session.add(m)
-        await db_session.flush()
+        lifecycle_ctx.seed_sess.add(m)
+        await lifecycle_ctx.seed_sess.flush()
         msg_ids.append(m.id)
 
     session.needs_compression = True
     session.context_size_tokens = 600000
-    await db_session.commit()
+    await lifecycle_ctx.seed_sess.commit()
 
     captured: list = []
 
@@ -1195,26 +1155,27 @@ async def test_compression_with_existing_summary(
     fake_c_llm = AsyncMock()
     fake_c_llm.ainvoke = AsyncMock(return_value=AIMessage(content="新合并摘要"))
 
-    app_with_eval.state.resources.main_graph.astream = spy_astream
+    lifecycle_ctx.rr.main_graph.astream = spy_astream
 
     with _patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
         body = make_payload(content="第三轮", session_id=str(sid))
-        resp = await api_client_with_eval.post(
+        resp = await client.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
         )
         assert resp.status_code == 200
         await resp.aclose()
 
     # 1) 5 行旧消息全部转 compressed（含旧 summary 行）
+    lifecycle_ctx.assert_sess.expire_all()
     for mid in msg_ids:
-        row = await db_session.get(Message, mid)
+        row = await lifecycle_ctx.assert_sess.get(Message, mid)
         assert row is not None, f"msg {mid} not found"
         assert row.status == MessageStatus.compressed, (
             f"msg {mid} (role={row.role}) status={row.status} — expected compressed"
         )
 
     # 2) 新 summary 行
-    _result3 = await db_session.execute(
+    _result3 = await lifecycle_ctx.assert_sess.execute(
         select(Message).where(
             Message.session_id == sid,
             Message.role == MessageRole.summary,
@@ -1232,7 +1193,8 @@ async def test_compression_with_existing_summary(
     )
 
     # 3) session.needs_compression == False
-    session_row = await db_session.get(SessionModel, sid)
+    lifecycle_ctx.assert_sess.expire_all()
+    session_row = await lifecycle_ctx.assert_sess.get(SessionModel, sid)
     assert session_row.needs_compression is False
 
     # 4) messages 顺序断言：[main_system, new_summary, protected_human]

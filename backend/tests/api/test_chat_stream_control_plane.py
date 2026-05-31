@@ -51,7 +51,8 @@ from app.db import get_db
 from app.models.accounts import Family, FamilyMember, User
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
-from app.models.enums import MessageRole, MessageStatus, UserRole
+from app.models.enums import InterventionType, MessageRole, MessageStatus, UserRole
+from tests.api._chat_stream_lifecycle_helpers import lifecycle_ctx, lifecycle_setup
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -193,19 +194,17 @@ def _make_fake_graph_astream(fake_payloads: list[dict]):
 
 
 @pytest.mark.asyncio
-async def test_decision_row1_first_turn(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session,
-):
+async def test_decision_row1_first_turn(lifecycle_ctx):
     """Row 1: first turn (session resolved via policy) creates human active, returns 200."""
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
     body = make_payload(content="Hello world")
 
     # Fake graph yields 1 delta → SSE: session_meta, delta, end (frames[2]=end)
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream
-    resp = await api_client_with_eval.post(
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
+    resp = await client.post(
         "/api/v1/me/chat/stream", json=body, headers=headers
     )
     assert resp.status_code == 200
@@ -218,7 +217,7 @@ async def test_decision_row1_first_turn(
     assert frames[2]["type"] == "end"
 
     # DB: session active + human active
-    session_row = await db_session.get(SessionModel, sid)
+    session_row = await lifecycle_ctx.assert_sess.get(SessionModel, sid)
     assert session_row is not None
     assert session_row.status == MessageStatus.active
     assert session_row.child_user_id == child.id
@@ -226,7 +225,7 @@ async def test_decision_row1_first_turn(
 
     msgs = (
         (
-            await db_session.execute(
+            await lifecycle_ctx.assert_sess.execute(
                 select(Message).where(Message.session_id == sid).order_by(Message.created_at)
             )
         )
@@ -266,37 +265,35 @@ async def test_decision_row2_regen_on_empty_session(api_client_with_eval, auth_h
 
 
 @pytest.mark.asyncio
-async def test_decision_row3_ai_continuation(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session,
-):
+async def test_decision_row3_ai_continuation(lifecycle_ctx):
     """Row 3: last message is AI, insert new human."""
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
     # Pre-seed session with AI message
     sid = uuid4()
     session = SessionModel(
         id=sid, child_user_id=child.id, title="test", status=MessageStatus.active
     )
-    db_session.add(session)
+    lifecycle_ctx.seed_sess.add(session)
     ai_msg = Message(
         session_id=sid, role=MessageRole.ai, status=MessageStatus.active, content="Hello AI"
     )
-    db_session.add(ai_msg)
-    await db_session.commit()
+    lifecycle_ctx.seed_sess.add(ai_msg)
+    await lifecycle_ctx.seed_sess.commit()
 
     body = make_payload(content="Child reply", session_id=str(sid))
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream
-    resp = await api_client_with_eval.post(
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
+    resp = await client.post(
         "/api/v1/me/chat/stream", json=body, headers=headers
     )
     assert resp.status_code == 200
 
     msgs = (
         (
-            await db_session.execute(
+            await lifecycle_ctx.assert_sess.execute(
                 select(Message)
                 .where(Message.session_id == sid, Message.status == MessageStatus.active)
                 .order_by(Message.created_at, Message.id)
@@ -349,38 +346,36 @@ async def test_decision_row4_ai_regen_invalid(api_client_with_eval, auth_headers
 
 
 @pytest.mark.asyncio
-async def test_decision_row5_orphan_regen_null(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session
-):
+async def test_decision_row5_orphan_regen_null(lifecycle_ctx):
     """Row 5: orphan human + null → UPDATE old discarded + INSERT new human; both in same tx."""
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
     sid = uuid4()
 
-    db_session.add(
+    lifecycle_ctx.seed_sess.add(
         SessionModel(id=sid, child_user_id=child.id, title="test", status=MessageStatus.active)
     )
     # Orphan = human, no subsequent AI
     orphan = Message(
         session_id=sid, role=MessageRole.human, status=MessageStatus.active, content="Old content"
     )
-    db_session.add(orphan)
-    await db_session.flush()
+    lifecycle_ctx.seed_sess.add(orphan)
+    await lifecycle_ctx.seed_sess.flush()
     orphan_id = orphan.id
-    await db_session.commit()
+    await lifecycle_ctx.seed_sess.commit()
 
     body = make_payload(content="New content", session_id=str(sid))
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream
-    resp = await api_client_with_eval.post(
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
+    resp = await client.post(
         "/api/v1/me/chat/stream", json=body, headers=headers
     )
     assert resp.status_code == 200
 
     msgs = (
         (
-            await db_session.execute(
+            await lifecycle_ctx.assert_sess.execute(
                 select(Message)
                 .where(Message.session_id == sid)
                 .order_by(Message.created_at, Message.id)
@@ -396,9 +391,6 @@ async def test_decision_row5_orphan_regen_null(
     assert len(discarded) == 1, f"Expected 1 discarded, got {[(m.id, m.status) for m in msgs]}"
     assert discarded[0].id == orphan_id
     assert len(active) == 2, f"Expected 2 active (human + ai), got {len(active)}"
-    # 注意：不能依赖 ORDER BY created_at, id 的排序确定性——UUID v4 非单调，
-    # 同事务内 created_at 全相同，排序退化为 id 字典序，AI 可能出现在 human 前。
-    # 按 role 查找而非靠位置索引。
     active_human = next(m for m in active if m.role == MessageRole.human)
     assert active_human.content == "New content"
     active_ai = next(m for m in active if m.role == MessageRole.ai)
@@ -411,14 +403,12 @@ async def test_decision_row5_orphan_regen_null(
 
 
 @pytest.mark.asyncio
-async def test_decision_row6_orphan_reuse(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session
-):
+async def test_decision_row6_orphan_reuse(lifecycle_ctx):
     """Row 6: orphan + =hid → reuse orphan row (no INSERT, no content update)."""
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
     sid = uuid4()
 
-    db_session.add(
+    lifecycle_ctx.seed_sess.add(
         SessionModel(id=sid, child_user_id=child.id, title="test", status=MessageStatus.active)
     )
     orphan = Message(
@@ -427,18 +417,18 @@ async def test_decision_row6_orphan_reuse(
         status=MessageStatus.active,
         content="Original question",
     )
-    db_session.add(orphan)
-    await db_session.flush()
+    lifecycle_ctx.seed_sess.add(orphan)
+    await lifecycle_ctx.seed_sess.flush()
     orphan_id = orphan.id
-    await db_session.commit()
+    await lifecycle_ctx.seed_sess.commit()
 
     # Row 6: content should be "" (Option A — strict contract)
     body = make_payload(content="", session_id=str(sid), regenerate_for=str(orphan_id))
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream
-    resp = await api_client_with_eval.post(
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
+    resp = await client.post(
         "/api/v1/me/chat/stream", json=body, headers=headers
     )
     assert resp.status_code == 200
@@ -448,7 +438,7 @@ async def test_decision_row6_orphan_reuse(
     assert hid_in_meta == str(orphan_id)  # hid unchanged
 
     msgs = (
-        (await db_session.execute(select(Message).where(Message.session_id == sid))).scalars().all()
+        (await lifecycle_ctx.assert_sess.execute(select(Message).where(Message.session_id == sid))).scalars().all()
     )
     # 复用 orphan + inline AI = 2 rows
     assert len(msgs) == 2
@@ -528,18 +518,16 @@ async def test_decision_row7_orphan_history_regen(
 
 
 @pytest.mark.asyncio
-async def test_decision_row3_with_prior_human(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session
-):
+async def test_decision_row3_with_prior_human(lifecycle_ctx):
     """Row 3 sub-scenario: session has H1 + AI already, insert new human (H2).
 
     Covers H1 (active) + A1 (active) + new human → 3 active rows.
     This is the "non-orphan continuation" path: last_msg = AI, so we INSERT human.
     """
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
     sid = uuid4()
 
-    db_session.add(
+    lifecycle_ctx.seed_sess.add(
         SessionModel(id=sid, child_user_id=child.id, title="test", status=MessageStatus.active)
     )
     base = datetime.now(UTC)
@@ -551,24 +539,26 @@ async def test_decision_row3_with_prior_human(
         session_id=sid, role=MessageRole.ai, status=MessageStatus.active,
         content="AI reply", created_at=base + timedelta(milliseconds=1),
     )
-    db_session.add_all([human, ai])
-    await db_session.flush()
+    lifecycle_ctx.seed_sess.add_all([human, ai])
+    await lifecycle_ctx.seed_sess.flush()
     human_id = human.id
-    await db_session.flush()
+    await lifecycle_ctx.seed_sess.commit()
 
     body = make_payload(content="H2 continuation", session_id=str(sid))
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream
-    resp = await api_client_with_eval.post(
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
+    resp = await client.post(
         "/api/v1/me/chat/stream", json=body, headers=headers
     )
     assert resp.status_code == 200
 
+    # 强制从 DB 重新读取（避免前序事务的 identity map 缓存）
+    lifecycle_ctx.assert_sess.expire_all()
     msgs = (
         (
-            await db_session.execute(
+            await lifecycle_ctx.assert_sess.execute(
                 select(Message)
                 .where(Message.session_id == sid, Message.status == MessageStatus.active)
                 .order_by(Message.created_at, Message.id)
@@ -590,18 +580,16 @@ async def test_decision_row3_with_prior_human(
 
 
 @pytest.mark.asyncio
-async def test_decision_row5_with_prior_ai(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session
-):
+async def test_decision_row5_with_prior_ai(lifecycle_ctx):
     """Row 5: H1 + A1 + H2 active, regen=null → UPDATE H2 discarded + INSERT H3 active.
 
     PG timestamp construction: explicit created_at ensures H2 is the confirmed last
     active row by ORDER BY created_at DESC, id DESC.
     """
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
     sid = uuid4()
 
-    db_session.add(
+    lifecycle_ctx.seed_sess.add(
         SessionModel(id=sid, child_user_id=child.id, title="test", status=MessageStatus.active)
     )
     base = datetime.now(UTC)
@@ -617,17 +605,17 @@ async def test_decision_row5_with_prior_ai(
         session_id=sid, role=MessageRole.human, status=MessageStatus.active,
         content="H2", created_at=base + timedelta(milliseconds=2),
     )
-    db_session.add_all([h1, a1, h2])
-    await db_session.flush()
+    lifecycle_ctx.seed_sess.add_all([h1, a1, h2])
+    await lifecycle_ctx.seed_sess.flush()
     h2_id = h2.id
-    await db_session.flush()
+    await lifecycle_ctx.seed_sess.commit()
 
     body = make_payload(content="H3 content", session_id=str(sid))
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream
-    resp = await api_client_with_eval.post(
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
+    resp = await client.post(
         "/api/v1/me/chat/stream", json=body, headers=headers
     )
     assert resp.status_code == 200
@@ -635,8 +623,9 @@ async def test_decision_row5_with_prior_ai(
     frames = _parse_sse_stream(resp.text)
     hid_in_meta = frames[0]["data"]["hid"]
 
+    lifecycle_ctx.assert_sess.expire_all()
     msgs = (
-        (await db_session.execute(select(Message).where(Message.session_id == sid)
+        (await lifecycle_ctx.assert_sess.execute(select(Message).where(Message.session_id == sid)
                                   .order_by(Message.created_at, Message.id))).scalars().all()
     )
     assert len(msgs) == 5  # H1 + A1 + H2(discarded) + H3 + inline AI
@@ -656,18 +645,16 @@ async def test_decision_row5_with_prior_ai(
 
 
 @pytest.mark.asyncio
-async def test_decision_row6_with_prior_ai_reuse(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session
-):
+async def test_decision_row6_with_prior_ai_reuse(lifecycle_ctx):
     """Row 6: H1 + A1 + H2 active, regen=H2.id + content="" → reuse H2 (no new row).
 
     The Gate A closing argument says "last active row is human" ⟺ "orphan", so H2 is
     the orphan.  Row 6 should reuse it: hid=H2.id, no new row inserted.
     """
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
     sid = uuid4()
 
-    db_session.add(
+    lifecycle_ctx.seed_sess.add(
         SessionModel(id=sid, child_user_id=child.id, title="test", status=MessageStatus.active)
     )
     base = datetime.now(UTC)
@@ -683,17 +670,17 @@ async def test_decision_row6_with_prior_ai_reuse(
         session_id=sid, role=MessageRole.human, status=MessageStatus.active,
         content="H2 original", created_at=base + timedelta(milliseconds=2),
     )
-    db_session.add_all([h1, a1, h2])
-    await db_session.flush()
+    lifecycle_ctx.seed_sess.add_all([h1, a1, h2])
+    await lifecycle_ctx.seed_sess.flush()
     h2_id = h2.id
-    await db_session.flush()
+    await lifecycle_ctx.seed_sess.commit()
 
     body = make_payload(content="", session_id=str(sid), regenerate_for=str(h2_id))
     fake_payloads = [{"delta": "[fake]"}]
     fake_astream = _make_fake_graph_astream(fake_payloads)
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream
-    resp = await api_client_with_eval.post(
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
+    resp = await client.post(
         "/api/v1/me/chat/stream", json=body, headers=headers
     )
     assert resp.status_code == 200
@@ -702,7 +689,7 @@ async def test_decision_row6_with_prior_ai_reuse(
     assert frames[0]["data"]["hid"] == str(h2_id)  # hid unchanged
 
     msgs = (
-        (await db_session.execute(select(Message).where(Message.session_id == sid)
+        (await lifecycle_ctx.assert_sess.execute(select(Message).where(Message.session_id == sid)
                                   .order_by(Message.created_at, Message.id))).scalars().all()
     )
     assert len(msgs) == 4  # H1 + A1 + H2 + inline AI
@@ -922,6 +909,457 @@ async def test_lock_released_in_generator_finally(
         redis_client, _parse_sse_stream(resp.text)[0]["data"]["session_id"]
     )
     assert nonce is not None  # lock was released and we can re-acquire
+
+
+# ---------------------------------------------------------------------------
+# 多轮集成测试（M9-patch1 commit②：persist_ai_turn 单写点收敛）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_multi_turn_natural_end(lifecycle_ctx):
+    """(a) 自然结束 × 2 轮：turn_number 和 ai_turn_counter 逐轮递增。
+
+    - Turn1：ai 行 turn_number==1 且 session.ai_turn_counter==1
+    - Turn2：ai 行 turn_number==2 且 session.ai_turn_counter==2
+    """
+    import asyncio
+
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+
+    # --- Turn 1 ---
+    fake_payloads = [{"delta": "第一轮回复"}]
+    fake_astream = _make_fake_graph_astream(fake_payloads)
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
+
+    resp1 = await client.post(
+        "/api/v1/me/chat/stream", json=make_payload("你好"), headers=headers,
+    )
+    assert resp1.status_code == 200
+    frames1 = _parse_sse_stream(resp1.text)
+    sid = frames1[0]["data"]["session_id"]
+    assert frames1[-1]["type"] == "end"
+
+    # 验证 Turn1：从 DB 重新读（避免 identity-map 缓存）
+    lifecycle_ctx.assert_sess.expire_all()
+    msgs1 = (
+        (
+            await lifecycle_ctx.assert_sess.execute(
+                select(Message)
+                .where(Message.session_id == sid)
+                .order_by(Message.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(msgs1) == 2  # human + ai
+    assert msgs1[0].role == MessageRole.human
+    assert msgs1[0].turn_number == 1
+    assert msgs1[1].role == MessageRole.ai
+    assert msgs1[1].turn_number == 1
+
+    sess1 = await lifecycle_ctx.assert_sess.get(SessionModel, sid)
+    assert sess1.ai_turn_counter == 1
+
+    # 清除节流锁，使 Turn2 不被 429
+    await lifecycle_ctx.redis_client.delete(f"chat:throttle:{child.id}")
+
+    # --- Turn 2 ---
+    fake_payloads2 = [{"delta": "第二轮回复"}]
+    fake_astream2 = _make_fake_graph_astream(fake_payloads2)
+    lifecycle_ctx.rr.main_graph.astream = fake_astream2
+
+    resp2 = await client.post(
+        "/api/v1/me/chat/stream",
+        json=make_payload("继续", session_id=str(sid)),
+        headers=headers,
+    )
+    assert resp2.status_code == 200
+    frames2 = _parse_sse_stream(resp2.text)
+    assert frames2[-1]["type"] == "end"
+
+    # 验证 Turn2：从 DB 重新读
+    lifecycle_ctx.assert_sess.expire_all()
+    msgs2 = (
+        (
+            await lifecycle_ctx.assert_sess.execute(
+                select(Message)
+                .where(Message.session_id == sid)
+                .order_by(Message.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # H1 + A1 + H2 + A2 = 4 条
+    assert len(msgs2) == 4, f"期望 4 条，实际 {len(msgs2)}"
+    assert msgs2[2].role == MessageRole.human
+    assert msgs2[2].turn_number == 2
+    assert msgs2[3].role == MessageRole.ai
+    assert msgs2[3].turn_number == 2
+
+    sess2 = await lifecycle_ctx.assert_sess.get(SessionModel, sid)
+    assert sess2.ai_turn_counter == 2
+
+    # (d) Turn2 能取到 Turn1 的行（验证多轮历史可见）
+    assert msgs2[0].role == MessageRole.human  # H1
+    assert msgs2[1].role == MessageRole.ai     # A1
+    assert msgs2[0].status == MessageStatus.active
+    assert msgs2[1].status == MessageStatus.active
+
+
+@pytest.mark.asyncio
+async def test_multi_turn_stop_with_ai(lifecycle_ctx):
+    """(b) StopWithAi：有内容时 stop → ai 行 + turn_number + counter 自增。"""
+    from uuid import uuid4
+
+    import asyncio
+
+    from app.chat.locks import running_streams
+
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+
+    # 预埋 session（已知 sid，供 bg task 使用）
+    sid = uuid4()
+    lifecycle_ctx.seed_sess.add(
+        SessionModel(id=sid, child_user_id=child.id, title="test")
+    )
+    await lifecycle_ctx.seed_sess.commit()
+
+    _gate = asyncio.Event()
+    _ready = asyncio.Event()
+
+    async def _fake_astream(initial_state, stream_mode="custom", **kwargs):
+        yield {"delta": "partial "}
+        _ready.set()
+        await _gate.wait()
+        yield {}
+
+    lifecycle_ctx.rr.main_graph.astream = _fake_astream
+
+    # 在 bg task 中启动 POST
+    resp_task = asyncio.create_task(
+        client.post(
+            "/api/v1/me/chat/stream",
+            json=make_payload("hello", session_id=str(sid)),
+            headers=headers,
+        ),
+    )
+
+    # 等待 fake 首次 yield（此时 bg task 已在 _gate 上等待）
+    await asyncio.wait_for(_ready.wait(), timeout=5)
+
+    # 设置停止信号
+    running_streams[str(sid)].set()
+    _gate.set()
+
+    resp = await resp_task
+    assert resp.status_code == 200
+    frames = _parse_sse_stream(resp.text)
+    assert frames[-1]["type"] == "stopped", f"尾帧应是 stopped，实际 {frames[-1]}"
+    assert "aid" in frames[-1]["data"], "StopWithAi 应带 aid"
+
+    lifecycle_ctx.assert_sess.expire_all()
+    msgs = (
+        (
+            await lifecycle_ctx.assert_sess.execute(
+                select(Message)
+                .where(Message.session_id == sid)
+                .order_by(Message.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(msgs) == 2  # human + ai
+    assert msgs[1].role == MessageRole.ai
+    assert msgs[1].turn_number == 1
+    assert msgs[1].finish_reason == "user_stopped"
+
+    sess = await lifecycle_ctx.assert_sess.get(SessionModel, sid)
+    assert sess.ai_turn_counter == 1
+
+
+@pytest.mark.asyncio
+async def test_multi_turn_stop_no_ai(lifecycle_ctx):
+    """(c) StopNoAi：无内容时 stop → 不写 ai 行、counter 不变。"""
+    from uuid import uuid4
+
+    import asyncio
+
+    from app.chat.locks import running_streams
+
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+
+    sid = uuid4()
+    lifecycle_ctx.seed_sess.add(
+        SessionModel(id=sid, child_user_id=child.id, title="test")
+    )
+    await lifecycle_ctx.seed_sess.commit()
+
+    _gate = asyncio.Event()
+    _ready = asyncio.Event()
+
+    async def _fake_astream(initial_state, stream_mode="custom", **kwargs):
+        _ready.set()
+        await _gate.wait()
+        yield {}
+
+    lifecycle_ctx.rr.main_graph.astream = _fake_astream
+
+    resp_task = asyncio.create_task(
+        client.post(
+            "/api/v1/me/chat/stream",
+            json=make_payload("hello", session_id=str(sid)),
+            headers=headers,
+        ),
+    )
+
+    await asyncio.wait_for(_ready.wait(), timeout=5)
+
+    running_streams[str(sid)].set()
+    _gate.set()
+
+    resp = await resp_task
+    assert resp.status_code == 200
+    frames = _parse_sse_stream(resp.text)
+    assert frames[-1]["type"] == "stopped"
+    assert "aid" not in frames[-1]["data"], "StopNoAi 不应带 aid"
+
+    lifecycle_ctx.assert_sess.expire_all()
+    msgs = (
+        (
+            await lifecycle_ctx.assert_sess.execute(
+                select(Message)
+                .where(Message.session_id == sid)
+                .order_by(Message.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # 只有 human 行（pre-seeded session 没有 human，但 commit① 会写一条）
+    assert len(msgs) == 1, f"StopNoAi 应只有 1 条 human 行，实际 {len(msgs)}"
+    assert msgs[0].role == MessageRole.human
+
+    sess = await lifecycle_ctx.assert_sess.get(SessionModel, sid)
+    assert sess.ai_turn_counter == 0  # 未自增
+
+
+# ---------------------------------------------------------------------------
+# intervention_type 写路径接线四态测试（D-patch1-2）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_intervention_type_crisis(lifecycle_ctx):
+    """crisis 路由：ai 行 intervention_type 落库为 crisis。"""
+    from uuid import uuid4
+
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+    sid = uuid4()
+    lifecycle_ctx.seed_sess.add(
+        SessionModel(id=sid, child_user_id=child.id, title="test"),
+    )
+    await lifecycle_ctx.seed_sess.commit()
+
+    # crisis: 先发 intervention_type 信号，再发 delta
+    fake_payloads = [
+        {"intervention_type": "crisis"},
+        {"delta": "crisis response"},
+    ]
+    lifecycle_ctx.rr.main_graph.astream = _make_fake_graph_astream(fake_payloads)
+
+    resp = await client.post(
+        "/api/v1/me/chat/stream",
+        json=make_payload("hello", session_id=str(sid)),
+        headers=headers,
+    )
+    assert resp.status_code == 200
+
+    lifecycle_ctx.assert_sess.expire_all()
+    msgs = (
+        (await lifecycle_ctx.assert_sess.execute(
+            select(Message)
+            .where(Message.session_id == sid)
+            .order_by(Message.created_at),
+        ))
+        .scalars()
+        .all()
+    )
+    assert len(msgs) == 2  # human + ai
+    assert msgs[1].intervention_type == InterventionType.crisis
+
+
+@pytest.mark.asyncio
+async def test_intervention_type_redline(lifecycle_ctx):
+    """redline 路由：ai 行 intervention_type 落库为 redline。"""
+    from uuid import uuid4
+
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+    sid = uuid4()
+    lifecycle_ctx.seed_sess.add(
+        SessionModel(id=sid, child_user_id=child.id, title="test"),
+    )
+    await lifecycle_ctx.seed_sess.commit()
+
+    fake_payloads = [
+        {"intervention_type": "redline"},
+        {"delta": "redline response"},
+    ]
+    lifecycle_ctx.rr.main_graph.astream = _make_fake_graph_astream(fake_payloads)
+
+    resp = await client.post(
+        "/api/v1/me/chat/stream",
+        json=make_payload("hello", session_id=str(sid)),
+        headers=headers,
+    )
+    assert resp.status_code == 200
+
+    lifecycle_ctx.assert_sess.expire_all()
+    msgs = (
+        (await lifecycle_ctx.assert_sess.execute(
+            select(Message)
+            .where(Message.session_id == sid)
+            .order_by(Message.created_at),
+        ))
+        .scalars()
+        .all()
+    )
+    assert len(msgs) == 2
+    assert msgs[1].intervention_type == InterventionType.redline
+
+
+@pytest.mark.asyncio
+async def test_intervention_type_guided(lifecycle_ctx):
+    """guided 路由：ai 行 intervention_type 落库为 guided。"""
+    from uuid import uuid4
+
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+    sid = uuid4()
+    lifecycle_ctx.seed_sess.add(
+        SessionModel(id=sid, child_user_id=child.id, title="test"),
+    )
+    await lifecycle_ctx.seed_sess.commit()
+
+    fake_payloads = [
+        {"intervention_type": "guided"},
+        {"delta": "guided response"},
+    ]
+    lifecycle_ctx.rr.main_graph.astream = _make_fake_graph_astream(fake_payloads)
+
+    resp = await client.post(
+        "/api/v1/me/chat/stream",
+        json=make_payload("hello", session_id=str(sid)),
+        headers=headers,
+    )
+    assert resp.status_code == 200
+
+    lifecycle_ctx.assert_sess.expire_all()
+    msgs = (
+        (await lifecycle_ctx.assert_sess.execute(
+            select(Message)
+            .where(Message.session_id == sid)
+            .order_by(Message.created_at),
+        ))
+        .scalars()
+        .all()
+    )
+    assert len(msgs) == 2
+    assert msgs[1].intervention_type == InterventionType.guided
+
+
+@pytest.mark.asyncio
+async def test_intervention_type_normal(lifecycle_ctx):
+    """normal 路由：无 intervention_type 发射 → 落库 None（显式断言，杜绝假阳）。"""
+    from uuid import uuid4
+
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+    sid = uuid4()
+    lifecycle_ctx.seed_sess.add(
+        SessionModel(id=sid, child_user_id=child.id, title="test"),
+    )
+    await lifecycle_ctx.seed_sess.commit()
+
+    # normal: 不发射 intervention_type
+    fake_payloads = [{"delta": "normal reply"}]
+    lifecycle_ctx.rr.main_graph.astream = _make_fake_graph_astream(fake_payloads)
+
+    resp = await client.post(
+        "/api/v1/me/chat/stream",
+        json=make_payload("hello", session_id=str(sid)),
+        headers=headers,
+    )
+    assert resp.status_code == 200
+
+    lifecycle_ctx.assert_sess.expire_all()
+    msgs = (
+        (await lifecycle_ctx.assert_sess.execute(
+            select(Message)
+            .where(Message.session_id == sid)
+            .order_by(Message.created_at),
+        ))
+        .scalars()
+        .all()
+    )
+    assert len(msgs) == 2
+    assert msgs[1].intervention_type is None  # 显式断言 None，杜绝假阳
+
+
+@pytest.mark.asyncio
+async def test_intervention_type_stop_with_ai_crisis(lifecycle_ctx):
+    """StopWithAi + crisis：有内容时 stop → ai 行 intervention_type=crisis。"""
+    from uuid import uuid4
+
+    import asyncio
+
+    from app.chat.locks import running_streams
+
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+    sid = uuid4()
+    lifecycle_ctx.seed_sess.add(
+        SessionModel(id=sid, child_user_id=child.id, title="test"),
+    )
+    await lifecycle_ctx.seed_sess.commit()
+
+    _gate = asyncio.Event()
+    _ready = asyncio.Event()
+
+    async def _fake_astream(initial_state, stream_mode="custom", **kwargs):
+        yield {"intervention_type": "crisis"}
+        yield {"delta": "partial "}
+        _ready.set()
+        await _gate.wait()
+        yield {}
+
+    lifecycle_ctx.rr.main_graph.astream = _fake_astream
+
+    resp_task = asyncio.create_task(
+        client.post(
+            "/api/v1/me/chat/stream",
+            json=make_payload("hello", session_id=str(sid)),
+            headers=headers,
+        ),
+    )
+    await asyncio.wait_for(_ready.wait(), timeout=5)
+    running_streams[str(sid)].set()
+    _gate.set()
+    resp = await resp_task
+    assert resp.status_code == 200
+
+    lifecycle_ctx.assert_sess.expire_all()
+    msgs = (
+        (await lifecycle_ctx.assert_sess.execute(
+            select(Message)
+            .where(Message.session_id == sid)
+            .order_by(Message.created_at),
+        ))
+        .scalars()
+        .all()
+    )
+    assert len(msgs) == 2
+    assert msgs[1].intervention_type == InterventionType.crisis
 
 
 # ---------------------------------------------------------------------------

@@ -72,20 +72,23 @@ async def persist_ai_turn(
     sid: uuid.UUID,
     finish_reason: str,
     content: str,
+    turn_number: int,
     intervention_type: InterventionType | None = None,
 ) -> uuid.UUID:
-    """Persist one AI turn as an active message row (M6-patch3: no longer updates last_active_at).
+    """持久化一条 AI 消息行 + 同事务自增 ai_turn_counter（M9-patch1 单写点收敛）。
 
-    T5 single-write-point: called from me.py generator after the stream ends.
-    This helper does NOT touch the messages table inside the graph.
-    last_active_at 由 commit① 独占（F 决策），commit② 不再覆写。
+    收敛后：me.py 的两个写行分支（StopWithAi / 自然结束）统一调此函数，
+    不再内联手搓 Message。调用方负责 usage_meta 记账和 enqueue_audit。
+
+    last_active_at 由 commit① 独占，本函数不覆写（F 决策 / M6-patch3）。
 
     Args:
         db: async DB session
         sid: session UUID
         finish_reason: LLM stop reason (stop / length / content_filter / user_stopped)
         content: accumulated text content
-        intervention_type: None=normal, crisis=redline=guided=override type
+        turn_number: 当前轮号（commit① human + commit② ai 共享同号）
+        intervention_type: None=normal, crisis/redline/guided/override
 
     Returns:
         The id of the newly inserted AI message row (uuid.UUID).
@@ -96,6 +99,7 @@ async def persist_ai_turn(
         content=content,
         status=MessageStatus.active,
         finish_reason=finish_reason,
+        turn_number=turn_number,
         intervention_type=intervention_type,
     )
     db.add(msg)
@@ -374,6 +378,11 @@ async def call_main_llm(
 
     provider = ctx.settings.main_provider
 
+    # 在首个 delta 之前发射 intervention_type 信号（与 route_by_risk 同源）
+    _audit = state.get("audit_state", {})
+    if _audit.get("guidance") is not None:
+        writer({"intervention_type": "guided"})
+
     async for chunk in llm.astream(llm_messages):
         # astream() yields AIMessageChunk at runtime despite BaseMessage type annotation
         _chunk_typed: AIMessageChunk = chunk  # type: ignore[assignment]
@@ -418,6 +427,9 @@ async def call_crisis_llm(
 
     provider = ctx.settings.audit_provider
 
+    # 在首个 delta 之前发射 intervention_type 信号
+    writer({"intervention_type": "crisis"})
+
     async for chunk in llm.astream(llm_messages):
         _chunk_typed: AIMessageChunk = chunk  # type: ignore[assignment]
 
@@ -457,6 +469,9 @@ async def call_redline_llm(
     llm_messages = list(state["messages"])
 
     provider = ctx.settings.audit_provider
+
+    # 在首个 delta 之前发射 intervention_type 信号
+    writer({"intervention_type": "redline"})
 
     async for chunk in llm.astream(llm_messages):
         _chunk_typed: AIMessageChunk = chunk  # type: ignore[assignment]
