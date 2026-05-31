@@ -596,11 +596,15 @@ async def _run_llm_pipeline(
                         thinking_started = False
                         _put(_frame_sse_event("thinking_end", {}))
 
-                    # intervention_type 信号（graph 终端节点在首 delta 前发射）
+                    # intervention_type 信号（graph 终端节点在首 delta 前发射）。
+                    # 此处 payload 是 graph 终端节点在 LLM .astream() 之前写入的单次路由帧，
+                    # 严格早于后续 delta chunk 帧。_put 在此发射 SSE 事件后，
+                    # 待第一个 delta 到达（如果有）才通过 stream_graph_to_sse 映射。
                     it_raw = payload.get("intervention_type")
                     if it_raw:
                         try:
                             last_intervention_type = InterventionType(it_raw)
+                            _put(_frame_sse_event("intervention_type", {"type": it_raw}))
                         except ValueError:
                             logger.warning(
                                 "unknown intervention_type %r, falling back to None",

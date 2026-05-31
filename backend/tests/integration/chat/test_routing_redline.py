@@ -1,13 +1,10 @@
-"""Step 12 · 红测：redline 路由。
+"""Step 12 · GREEN：redline 路由。
 
-预期流程（修复后）：
+修复后流程：
   1. 第 1 轮发消息 → 流正常结束 → enqueue_audit 入队审查
   2. worker drain → 处理审计 → FakeAuditLLM 输出 redline_triggered
   3. 第 2 轮发消息 → load_audit_state 读到 redline 信号
   4. route_by_risk → redline 分支 → 发出 redline intervention_type 帧
-
-当前因入队名 bug：
-  - 与 Step 11 同一根因：audit job 不被消费 → 信号永不就绪 → RED
 """
 
 from __future__ import annotations
@@ -18,7 +15,13 @@ import pytest
 
 from app.chat.factory import clear_test_llm, set_test_llm
 
-from ._helpers import FakeMainLLM, parse_sse_events, seed_integration_child
+from ._helpers import (
+    FakeAuditLLM,
+    FakeMainLLM,
+    make_audit_tool_call,
+    parse_sse_events,
+    seed_integration_child,
+)
 
 pytestmark = [
     pytest.mark.integration,
@@ -27,7 +30,8 @@ pytestmark = [
 
 
 class TestRedlineRoutingRed:
-    """redline 路由红测（两轮）。"""
+    """RED 存档：入队名 bug 时的原始断言（__test__=False 不被 pytest 收集）。"""
+    __test__ = False
 
     async def test_redline_routing_no_intervention_frame(
         self,
@@ -36,8 +40,28 @@ class TestRedlineRoutingRed:
         arq_worker: Any,
     ) -> None:
         """第 2 轮应发 redline intervention_type 帧但未发 → RED。"""
+        pass
+
+
+class TestRedlineRoutingGreen:
+    """redline 路由 GREEN（两轮）。"""
+
+    async def test_redline_routing_sends_intervention_frame(
+        self,
+        api_client: Any,
+        integration_runtime: Any,
+        arq_worker: Any,
+    ) -> None:
+        """第 2 轮应发 redline intervention_type 帧。"""
         child, headers = await seed_integration_child(integration_runtime)
         set_test_llm("deepseek", FakeMainLLM())
+        set_test_llm(
+            "audit_deepseek",
+            FakeAuditLLM(tool_calls=make_audit_tool_call(
+                redline_triggered=True,
+                redline_detail="explicit content",
+            )),
+        )
         try:
             # ---- Round 1 ----
             async with api_client.stream(
@@ -52,9 +76,12 @@ class TestRedlineRoutingRed:
             await asyncio.sleep(0.05)
 
             processed = await arq_worker()
-            assert processed == 0, (
-                f"RED 前提：drain 应返回 0（入队名 bug），实际 {processed}"
+            assert processed == 1, (
+                f"drain 应消费 1 个 audit job，实际 {processed}"
             )
+
+            # 等待 throttle lock 过期
+            await asyncio.sleep(2.0)
 
             # ---- Round 2 ----
             async with api_client.stream(
@@ -71,9 +98,12 @@ class TestRedlineRoutingRed:
                 and d.get("type") == "redline"
             ]
             assert len(redline_frames) > 0, (
-                "RED: redline intervention_type 帧未发出。\n"
-                "入队名 bug → audit 不就绪 → route 走 main → 无红线干预。\n"
+                f"GREEN: 应发出 redline intervention_type 帧。\n"
                 f"实际事件类型：{set(t for t, _ in events2)}"
+            )
+
+            assert any(t == "end" for t, _ in events2), (
+                "redline 分支流应正常结束"
             )
 
         finally:

@@ -1,15 +1,10 @@
-"""Step 10 · 红测：main 路由全链路。
+"""Step 10 · GREEN：main 路由全链路。
 
-预期流程（修复后）：
+修复后流程：
   1. child 发消息 → POST /api/v1/me/chat/stream
   2. 流正常结束（SSE delta + end 帧）
-  3. commit② 中 enqueue_audit 发送审查 job → drain 消费 1 个
-  4. route_by_risk 走 main（自然结束无干预信号）
-
-当前因入队名 bug（Step 9）：
-  - enqueue_audit 用短名 "run_audit" → arq worker 注册全路径 → job 不被消费
-  - drain 返回 0（RED：应为 1）
-  - 流能正常结束（main 路由是默认分支）
+  3. commit② 中 enqueue_audit 送审查 job → drain 消费 1 个
+  4. route_by_risk 走 main（默认值无干预信号）
 """
 
 from __future__ import annotations
@@ -20,7 +15,7 @@ import pytest
 
 from app.chat.factory import clear_test_llm, set_test_llm
 
-from ._helpers import FakeMainLLM, parse_sse_events, seed_integration_child
+from ._helpers import FakeAuditLLM, FakeMainLLM, make_audit_tool_call, parse_sse_events, seed_integration_child
 
 pytestmark = [
     pytest.mark.integration,
@@ -29,7 +24,21 @@ pytestmark = [
 
 
 class TestMainRoutingRed:
-    """main 路由全链路红测。"""
+    """RED 存档：入队名 bug 时的原始断言（__test__=False 不被 pytest 收集）。"""
+    __test__ = False
+
+    async def test_main_routing_drain_zero(
+        self,
+        api_client: Any,
+        integration_runtime: Any,
+        arq_worker: Any,
+    ) -> None:
+        """Drain 应返回 1 但返回 0 → RED（入队名 bug）。"""
+        pass
+
+
+class TestMainRoutingGreen:
+    """main 路由全链路 GREEN。"""
 
     async def test_main_routing_stream_completes(
         self,
@@ -38,8 +47,7 @@ class TestMainRoutingRed:
     ) -> None:
         """流正常结束：assert delta + end 帧存在。
 
-        即使入队名 bug 阻止 audit 就绪，main 路由作为默认分支
-        仍应正常产字。
+        main 路由作为默认分支，即使审计信号不就绪仍应正常产字。
         """
         child, headers = await seed_integration_child(integration_runtime)
         set_test_llm("deepseek", FakeMainLLM())
@@ -60,20 +68,23 @@ class TestMainRoutingRed:
         finally:
             clear_test_llm()
 
-    async def test_main_routing_drain_zero(
+    async def test_main_routing_drain_consumes_job(
         self,
         api_client: Any,
         integration_runtime: Any,
         arq_worker: Any,
     ) -> None:
-        """Drain 应返回 1 但返回 0 → RED（入队名 bug）。
+        """Drain 应消费 1 个 audit job（入队名修复后）。
 
         enqueue_audit 在 commit② 中被调用（段一 finally 之前），
         流结束时机在 commit② + enqueue 之后，因此 drain 时 job 已入队。
-        但因入队名不匹配，worker 不消费。
+        加上 FakeAuditLLM（默认全关），worker 处理审计后返回 1。
         """
         child, headers = await seed_integration_child(integration_runtime)
         set_test_llm("deepseek", FakeMainLLM())
+        set_test_llm("audit_deepseek", FakeAuditLLM(
+            tool_calls=make_audit_tool_call(),
+        ))
         try:
             async with api_client.stream(
                 "POST",
@@ -89,11 +100,9 @@ class TestMainRoutingRed:
             await asyncio.sleep(0.05)
 
             processed = await arq_worker()
-            # RED 断言：入队名 bug 导致 worker 不匹配 job
             assert processed == 1, (
-                f"RED: drain 返回 {processed}（期望 1）。\n"
-                "入队名 bug：enqueue 用 'run_audit'，worker 注册 'app.audit.worker.run_audit'。\n"
-                "worker 不会消费此 job → audit 永不就绪 → 全链路中断。"
+                f"GREEN: drain 应消费 1 个 job，实际 {processed}。"
             )
+
         finally:
             clear_test_llm()

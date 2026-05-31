@@ -1,7 +1,10 @@
-"""Step 15 · 红测：SSE 帧序 — intervention_type 帧应早于首个 delta 帧。
+"""Step 15 · GREEN：SSE 帧序 — intervention_type 帧应早于首个 delta 帧。
 
-RED 真因：`stream_graph_to_sse()`（sse.py:36-61）仅映射 `delta` 帧，
-`intervention_type` 从未发射为 SSE 事件——它只在 DB 层 persist_ai_turn 记录。
+修复后：
+  stream_graph_to_sse 仍然只映射 delta 帧，
+  但 me.py _run_llm_pipeline 在解析到 payload.intervention_type 时
+  直接 _put(_frame_sse_event("intervention_type", {"type": it_raw})),
+  该 SSE 事件在首个 delta 帧之前被写入队列 → 帧序正确。
 
 两轮协议：
   Round 1：正常流 → 创建 session + turn=1
@@ -10,9 +13,7 @@ RED 真因：`stream_graph_to_sse()`（sse.py:36-61）仅映射 `delta` 帧，
   Round 2：load_audit_state(turn=2, expected_turn=1) 读到 ready
   → route_by_risk → "redline" → call_redline_llm
   → writer({"intervention_type": "redline"})（graph.py:473）
-  → stream_graph_to_sse 不转这个 payload → 客户端收不到 intervention_type 帧
-
-Phase 3 修复步骤：在 stream_graph_to_sse 中增加 intervention_type/finish_reason 映射。
+  → me.py 收到 payload → _put SSE event → 再后面的 delta 帧
 """
 
 from __future__ import annotations
@@ -32,7 +33,8 @@ pytestmark = [
 
 
 class TestSseFrameOrderRed:
-    """SSE 帧序红测（两轮，预设 audit ready→redline）。"""
+    """RED 存档：SSE 帧序红测（__test__=False 不被 pytest 收集）。"""
+    __test__ = False
 
     async def test_intervention_before_first_delta(
         self,
@@ -40,10 +42,24 @@ class TestSseFrameOrderRed:
         integration_runtime: Any,
         integration_redis: Any,
     ) -> None:
-        """Round 2 路由到 redline，backend 发射了 intervention_type writer 但不转 SSE。
+        """Round 2 路由到 redline，intervention_type 帧不存在。"""
+        pass
 
-        此测试验证的是「缺 intervention_type SSE 帧」→ 永远 RED，
-        直至 Phase 3 补 sse.py mapping。
+
+class TestSseFrameOrderGreen:
+    """SSE 帧序 GREEN（两轮，手动设 audit ready→redline）。"""
+
+    async def test_intervention_before_first_delta(
+        self,
+        api_client: Any,
+        integration_runtime: Any,
+        integration_redis: Any,
+    ) -> None:
+        """Round 2 路由到 redline，intervention_type 帧应在首个 delta 前出现。
+
+        手动管理 audit 信号（不依赖 arq worker），独立验证 RC2 修复。
+        同时用 FakeMainLLM 覆盖 audit_deepseek provider，
+        防止 call_redline_llm 调用真实 API。
         """
         from datetime import datetime, timezone
         from app.state.audit_signals import AuditSignalsManager
@@ -51,6 +67,8 @@ class TestSseFrameOrderRed:
 
         child, headers = await seed_integration_child(integration_runtime)
         set_test_llm("deepseek", FakeMainLLM())
+        # 覆盖 audit_deepseek（call_redline_llm 使用此 key）防真 API 调用
+        set_test_llm("audit_deepseek", FakeMainLLM(["干预回复"]))
 
         try:
             # ---- Round 1 ----
@@ -82,7 +100,7 @@ class TestSseFrameOrderRed:
                     crisis_detected=False,
                     redline_triggered=True,
                     redline_detail="帧序测试红线触发",
-                    turn_summary="SSE帧序验证测试",
+                    turn_summary="SSE 帧序验证测试",
                 ),
             )
 
@@ -93,16 +111,22 @@ class TestSseFrameOrderRed:
             ) as resp:
                 events2 = await parse_sse_events(resp)
 
-            # RED 断言：intervention_type 帧不存在（sse.py 不发射它）
+            # GREEN 断言：intervention_type 帧存在（RC2 修复后）
             intervention_events = [
                 d for t, d in events2 if t == "intervention_type"
             ]
             assert len(intervention_events) > 0, (
-                "RED: intervention_type 帧不存在。\n"
-                "路由可达 redline（payload 已由 writer 发射），\n"
-                "但 stream_graph_to_sse(sse.py:36) 仅转 delta 帧，\n"
-                "intervention_type/finish_reason/usage_metadata 全部丢失。\n"
-                "事件类型: " + str({t for t, _ in events2})
+                f"GREEN: intervention_type 帧应存在。\n"
+                f"事件类型: {set(t for t, _ in events2)}"
+            )
+
+            # 帧序断言：intervention_type 的首个索引 < delta 的首个索引
+            event_types = [t for t, _ in events2]
+            first_intervention = event_types.index("intervention_type")
+            first_delta = event_types.index("delta") if "delta" in event_types else len(event_types)
+            assert first_intervention < first_delta, (
+                f"GREEN: intervention_type 索引 {first_intervention}"
+                f" 应早于首个 delta 索引 {first_delta}"
             )
 
         finally:

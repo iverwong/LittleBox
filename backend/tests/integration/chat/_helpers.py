@@ -111,6 +111,17 @@ class FakeAuditLLM:
             return AIMessage(content="", tool_calls=self._tool_calls)
         return AIMessage(content=self._content)
 
+    async def astream(
+        self,
+        messages: Any,
+        **kwargs: Any,
+    ) -> AsyncIterator[AIMessageChunk]:
+        """供危机/红线干预 LLM（call_crisis_llm / call_redline_llm）调用。
+        它们使用与审查图相同的 provider key "audit_deepseek"，
+        但调的是 .astream() 而非 .ainvoke()。
+        """
+        yield AIMessageChunk(content=self._content)
+
     def bind_tools(self, tools: Any, **kwargs: Any) -> "FakeAuditLLM":
         return self
 
@@ -123,6 +134,43 @@ class FakeAuditLLM:
         **kwargs: Any,
     ) -> "FakeAuditLLM":
         return self
+
+
+def make_audit_tool_call(
+    crisis_detected: bool = False,
+    crisis_topic: str | None = None,
+    redline_triggered: bool = False,
+    redline_detail: str | None = None,
+    guidance: str = "",
+    turn_summary: str = "审查正常",
+) -> list[dict]:
+    """构造 FakeAuditLLM 可用的 tool_calls 参数，模拟 AuditOutputSchema 工具调用。
+
+    audit_llm_call 节点期望 AIMessage.tool_calls[0].name == "AuditOutputSchema"，
+    且 args 可通过 AuditOutputSchema.model_validate() 校验。
+    AuditOutputSchema 的 model_validator 要求：
+      - crisis_detected=True → crisis_topic 非空
+      - redline_triggered=True → redline_detail 非空
+    """
+    import uuid
+
+    args = {
+        "dimension_scores": {
+            "emotional": 0, "social": 0, "romance": 0, "values": 0,
+            "boundaries": 0, "academic": 0, "lifestyle": 0,
+        },
+        "crisis_detected": crisis_detected,
+        "crisis_topic": crisis_topic,
+        "redline_triggered": redline_triggered,
+        "redline_detail": redline_detail,
+        "guidance": guidance,
+        "turn_summary": turn_summary,
+    }
+    return [{
+        "name": "AuditOutputSchema",
+        "args": args,
+        "id": f"call-{uuid.uuid4().hex[:12]}",
+    }]
 
 
 async def seed_integration_child(integration_runtime: Any) -> tuple[Any, dict[str, str]]:
