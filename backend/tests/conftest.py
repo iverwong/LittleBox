@@ -70,12 +70,12 @@ def pytest_collection_modifyitems(config, items):
     if not config.getoption("--run-live"):
         skip_live = pytest.mark.skip(reason="需要 --run-live 显式触发")
         for item in items:
-            if "live" in item.keywords:
+            if item.get_closest_marker("live"):
                 item.add_marker(skip_live)
     if not config.getoption("--run-integration"):
         skip_int = pytest.mark.skip(reason="需要 --run-integration 显式触发")
         for item in items:
-            if "integration" in item.keywords:
+            if item.get_closest_marker("integration"):
                 item.add_marker(skip_int)
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
