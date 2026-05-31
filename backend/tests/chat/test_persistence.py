@@ -56,6 +56,7 @@ async def test_persist_ai_turn_inserts_active_ai_message(db_session, child_user)
         sid=sid,
         finish_reason="stop",
         content="Hello, world!",
+        turn_number=1,
     )
     await db_session.flush()
 
@@ -88,6 +89,7 @@ async def test_persist_ai_turn_no_longer_updates_last_active_at(db_session, chil
         sid=sid,
         finish_reason="stop",
         content="reply",
+        turn_number=1,
     )
     await db_session.flush()
 
@@ -109,6 +111,7 @@ async def test_persist_ai_turn_accepts_intervention_type(db_session, child_user)
         sid=sid,
         finish_reason="stop",
         content="crisis response",
+        turn_number=1,
         intervention_type=InterventionType.crisis,
     )
     await db_session.flush()
@@ -132,7 +135,7 @@ async def test_ai_turn_counter_increments_after_each_turn(db_session, child_user
     await db_session.flush()
 
     for i in range(3):
-        await persist_ai_turn(db_session, sid=sid, finish_reason="stop", content=f"reply{i}")
+        await persist_ai_turn(db_session, sid=sid, finish_reason="stop", content=f"reply{i}", turn_number=i + 1)
         await db_session.flush()
 
     row = await db_session.execute(
@@ -217,7 +220,7 @@ class TestConcurrentRowLock:
 
         async def _one_turn(db):
             await persist_ai_turn(
-                db, sid, finish_reason="stop", content="concurrent test turn",
+                db, sid, finish_reason="stop", content="concurrent test turn", turn_number=1,
             )
             await db.commit()
 

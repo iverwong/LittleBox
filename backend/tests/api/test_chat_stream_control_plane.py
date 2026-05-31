@@ -912,6 +912,242 @@ async def test_lock_released_in_generator_finally(
 
 
 # ---------------------------------------------------------------------------
+# 多轮集成测试（M9-patch1 commit②：persist_ai_turn 单写点收敛）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_multi_turn_natural_end(lifecycle_ctx):
+    """(a) 自然结束 × 2 轮：turn_number 和 ai_turn_counter 逐轮递增。
+
+    - Turn1：ai 行 turn_number==1 且 session.ai_turn_counter==1
+    - Turn2：ai 行 turn_number==2 且 session.ai_turn_counter==2
+    """
+    import asyncio
+
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+
+    # --- Turn 1 ---
+    fake_payloads = [{"delta": "第一轮回复"}]
+    fake_astream = _make_fake_graph_astream(fake_payloads)
+    lifecycle_ctx.rr.main_graph.astream = fake_astream
+
+    resp1 = await client.post(
+        "/api/v1/me/chat/stream", json=make_payload("你好"), headers=headers,
+    )
+    assert resp1.status_code == 200
+    frames1 = _parse_sse_stream(resp1.text)
+    sid = frames1[0]["data"]["session_id"]
+    assert frames1[-1]["type"] == "end"
+
+    # 验证 Turn1：从 DB 重新读（避免 identity-map 缓存）
+    lifecycle_ctx.assert_sess.expire_all()
+    msgs1 = (
+        (
+            await lifecycle_ctx.assert_sess.execute(
+                select(Message)
+                .where(Message.session_id == sid)
+                .order_by(Message.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(msgs1) == 2  # human + ai
+    assert msgs1[0].role == MessageRole.human
+    assert msgs1[0].turn_number == 1
+    assert msgs1[1].role == MessageRole.ai
+    assert msgs1[1].turn_number == 1
+
+    sess1 = await lifecycle_ctx.assert_sess.get(SessionModel, sid)
+    assert sess1.ai_turn_counter == 1
+
+    # 清除节流锁，使 Turn2 不被 429
+    await lifecycle_ctx.redis_client.delete(f"chat:throttle:{child.id}")
+
+    # --- Turn 2 ---
+    fake_payloads2 = [{"delta": "第二轮回复"}]
+    fake_astream2 = _make_fake_graph_astream(fake_payloads2)
+    lifecycle_ctx.rr.main_graph.astream = fake_astream2
+
+    resp2 = await client.post(
+        "/api/v1/me/chat/stream",
+        json=make_payload("继续", session_id=str(sid)),
+        headers=headers,
+    )
+    assert resp2.status_code == 200
+    frames2 = _parse_sse_stream(resp2.text)
+    assert frames2[-1]["type"] == "end"
+
+    # 验证 Turn2：从 DB 重新读
+    lifecycle_ctx.assert_sess.expire_all()
+    msgs2 = (
+        (
+            await lifecycle_ctx.assert_sess.execute(
+                select(Message)
+                .where(Message.session_id == sid)
+                .order_by(Message.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # H1 + A1 + H2 + A2 = 4 条
+    assert len(msgs2) == 4, f"期望 4 条，实际 {len(msgs2)}"
+    assert msgs2[2].role == MessageRole.human
+    assert msgs2[2].turn_number == 2
+    assert msgs2[3].role == MessageRole.ai
+    assert msgs2[3].turn_number == 2
+
+    sess2 = await lifecycle_ctx.assert_sess.get(SessionModel, sid)
+    assert sess2.ai_turn_counter == 2
+
+    # (d) Turn2 能取到 Turn1 的行（验证多轮历史可见）
+    assert msgs2[0].role == MessageRole.human  # H1
+    assert msgs2[1].role == MessageRole.ai     # A1
+    assert msgs2[0].status == MessageStatus.active
+    assert msgs2[1].status == MessageStatus.active
+
+
+@pytest.mark.asyncio
+async def test_multi_turn_stop_with_ai(lifecycle_ctx):
+    """(b) StopWithAi：有内容时 stop → ai 行 + turn_number + counter 自增。"""
+    from uuid import uuid4
+
+    import asyncio
+
+    from app.chat.locks import running_streams
+
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+
+    # 预埋 session（已知 sid，供 bg task 使用）
+    sid = uuid4()
+    lifecycle_ctx.seed_sess.add(
+        SessionModel(id=sid, child_user_id=child.id, title="test")
+    )
+    await lifecycle_ctx.seed_sess.commit()
+
+    _gate = asyncio.Event()
+    _ready = asyncio.Event()
+
+    async def _fake_astream(initial_state, stream_mode="custom", **kwargs):
+        yield {"delta": "partial "}
+        _ready.set()
+        await _gate.wait()
+        yield {}
+
+    lifecycle_ctx.rr.main_graph.astream = _fake_astream
+
+    # 在 bg task 中启动 POST
+    resp_task = asyncio.create_task(
+        client.post(
+            "/api/v1/me/chat/stream",
+            json=make_payload("hello", session_id=str(sid)),
+            headers=headers,
+        ),
+    )
+
+    # 等待 fake 首次 yield（此时 bg task 已在 _gate 上等待）
+    await asyncio.wait_for(_ready.wait(), timeout=5)
+
+    # 设置停止信号
+    running_streams[str(sid)].set()
+    _gate.set()
+
+    resp = await resp_task
+    assert resp.status_code == 200
+    frames = _parse_sse_stream(resp.text)
+    assert frames[-1]["type"] == "stopped", f"尾帧应是 stopped，实际 {frames[-1]}"
+    assert "aid" in frames[-1]["data"], "StopWithAi 应带 aid"
+
+    lifecycle_ctx.assert_sess.expire_all()
+    msgs = (
+        (
+            await lifecycle_ctx.assert_sess.execute(
+                select(Message)
+                .where(Message.session_id == sid)
+                .order_by(Message.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(msgs) == 2  # human + ai
+    assert msgs[1].role == MessageRole.ai
+    assert msgs[1].turn_number == 1
+    assert msgs[1].finish_reason == "user_stopped"
+
+    sess = await lifecycle_ctx.assert_sess.get(SessionModel, sid)
+    assert sess.ai_turn_counter == 1
+
+
+@pytest.mark.asyncio
+async def test_multi_turn_stop_no_ai(lifecycle_ctx):
+    """(c) StopNoAi：无内容时 stop → 不写 ai 行、counter 不变。"""
+    from uuid import uuid4
+
+    import asyncio
+
+    from app.chat.locks import running_streams
+
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+
+    sid = uuid4()
+    lifecycle_ctx.seed_sess.add(
+        SessionModel(id=sid, child_user_id=child.id, title="test")
+    )
+    await lifecycle_ctx.seed_sess.commit()
+
+    _gate = asyncio.Event()
+    _ready = asyncio.Event()
+
+    async def _fake_astream(initial_state, stream_mode="custom", **kwargs):
+        _ready.set()
+        await _gate.wait()
+        yield {}
+
+    lifecycle_ctx.rr.main_graph.astream = _fake_astream
+
+    resp_task = asyncio.create_task(
+        client.post(
+            "/api/v1/me/chat/stream",
+            json=make_payload("hello", session_id=str(sid)),
+            headers=headers,
+        ),
+    )
+
+    await asyncio.wait_for(_ready.wait(), timeout=5)
+
+    running_streams[str(sid)].set()
+    _gate.set()
+
+    resp = await resp_task
+    assert resp.status_code == 200
+    frames = _parse_sse_stream(resp.text)
+    assert frames[-1]["type"] == "stopped"
+    assert "aid" not in frames[-1]["data"], "StopNoAi 不应带 aid"
+
+    lifecycle_ctx.assert_sess.expire_all()
+    msgs = (
+        (
+            await lifecycle_ctx.assert_sess.execute(
+                select(Message)
+                .where(Message.session_id == sid)
+                .order_by(Message.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # 只有 human 行（pre-seeded session 没有 human，但 commit① 会写一条）
+    assert len(msgs) == 1, f"StopNoAi 应只有 1 条 human 行，实际 {len(msgs)}"
+    assert msgs[0].role == MessageRole.human
+
+    sess = await lifecycle_ctx.assert_sess.get(SessionModel, sid)
+    assert sess.ai_turn_counter == 0  # 未自增
+
+
+# ---------------------------------------------------------------------------
 # SSE helpers
 # ---------------------------------------------------------------------------
 

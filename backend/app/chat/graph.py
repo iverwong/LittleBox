@@ -72,20 +72,23 @@ async def persist_ai_turn(
     sid: uuid.UUID,
     finish_reason: str,
     content: str,
+    turn_number: int,
     intervention_type: InterventionType | None = None,
 ) -> uuid.UUID:
-    """Persist one AI turn as an active message row (M6-patch3: no longer updates last_active_at).
+    """持久化一条 AI 消息行 + 同事务自增 ai_turn_counter（M9-patch1 单写点收敛）。
 
-    T5 single-write-point: called from me.py generator after the stream ends.
-    This helper does NOT touch the messages table inside the graph.
-    last_active_at 由 commit① 独占（F 决策），commit② 不再覆写。
+    收敛后：me.py 的两个写行分支（StopWithAi / 自然结束）统一调此函数，
+    不再内联手搓 Message。调用方负责 usage_meta 记账和 enqueue_audit。
+
+    last_active_at 由 commit① 独占，本函数不覆写（F 决策 / M6-patch3）。
 
     Args:
         db: async DB session
         sid: session UUID
         finish_reason: LLM stop reason (stop / length / content_filter / user_stopped)
         content: accumulated text content
-        intervention_type: None=normal, crisis=redline=guided=override type
+        turn_number: 当前轮号（commit① human + commit② ai 共享同号）
+        intervention_type: None=normal, crisis/redline/guided/override
 
     Returns:
         The id of the newly inserted AI message row (uuid.UUID).
@@ -96,6 +99,7 @@ async def persist_ai_turn(
         content=content,
         status=MessageStatus.active,
         finish_reason=finish_reason,
+        turn_number=turn_number,
         intervention_type=intervention_type,
     )
     db.add(msg)

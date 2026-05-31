@@ -24,7 +24,7 @@ from app.auth.deps import get_current_account, require_child
 from app.auth.redis_client import get_redis
 from app.chat.compression import CONTEXT_COMPRESS_THRESHOLD_TOKENS
 from app.chat.context_schema import ChatContextSchema
-from app.chat.graph import enqueue_audit
+from app.chat.graph import enqueue_audit, persist_ai_turn
 from app.chat.locks import (
     acquire_session_lock,
     acquire_throttle_lock,
@@ -615,18 +615,14 @@ async def _run_llm_pipeline(
                 # ---- commit② 三终态（关注点 #1） ----
                 if user_stopped:
                     if has_emitted_content:
-                        # StopWithAi：写 ai 行 + enqueue_audit + 带 aid 的 stopped 帧
-                        ai_msg = Message(
-                            session_id=sid,
-                            role=MessageRole.ai,
+                        # StopWithAi：persist_ai_turn 写 ai 行 + 自增 → usage 记账 → commit → audit
+                        aid = await persist_ai_turn(
+                            db, sid,
                             content=accumulated,
-                            status=MessageStatus.active,
                             finish_reason="user_stopped",
                             turn_number=turn_number,
+                            intervention_type=None,
                         )
-                        db.add(ai_msg)
-                        await db.flush()
-                        aid = ai_msg.id
                         if usage_meta:
                             _usage_total = usage_meta["input_tokens"] + usage_meta["output_tokens"]
                             session.context_size_tokens = _usage_total
@@ -652,18 +648,14 @@ async def _run_llm_pipeline(
                         # StopNoAi：不写 ai 行、不发 audit、不带 aid 的 stopped 帧
                         _put(_frame_sse_event("stopped", {"finish_reason": "user_stopped"}))
                 else:
-                    # 自然结束：写 ai 行 + enqueue_audit + end 帧带 aid
-                    ai_msg = Message(
-                        session_id=sid,
-                        role=MessageRole.ai,
+                    # 自然结束：persist_ai_turn 写 ai 行 + 自增 → usage 记账 → commit → audit
+                    aid = await persist_ai_turn(
+                        db, sid,
                         content=accumulated,
-                        status=MessageStatus.active,
                         finish_reason=last_finish_reason,
                         turn_number=turn_number,
+                        intervention_type=None,
                     )
-                    db.add(ai_msg)
-                    await db.flush()
-                    aid = ai_msg.id
                     if usage_meta:
                         _usage_total = usage_meta["input_tokens"] + usage_meta["output_tokens"]
                         session.context_size_tokens = _usage_total
