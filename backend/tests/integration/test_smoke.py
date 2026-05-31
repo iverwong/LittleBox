@@ -17,15 +17,19 @@ pytestmark = [
 
 
 class _SmokeAuditLLM:
-    """极简 FakeLLM，仅验证 arq worker enqueue→drain 机械通断。
+    """极简 FakeLLM，验证 arq worker enqueue→drain 机械通断 + 审计图写库。
 
-    run_audit 执行时会调 audit_graph.ainvoke，audit_graph 内部
-    调 build_audit_llm → build_provider_llm("audit_deepseek")。
-    本 fake 返回无 tool_calls 的纯文本 AIMessage → audit 输出为 None
-    → run_audit raise（但 worker 仍计入 processed）。
+    返回带 AuditOutputSchema tool_call 的 AIMessage，使 run_audit 正常
+    完成 write_results（包括 audit_records INSERT + rolling_summaries upsert）。
     """
     async def ainvoke(self, messages, **kwargs):
-        return AIMessage(content="冒烟测试审查回复")
+        from tests.integration.chat._helpers import make_audit_tool_call
+        return AIMessage(content="", tool_calls=make_audit_tool_call(
+            turn_summary="冒烟测试",
+        ))
+    async def astream(self, messages, **kwargs):
+        from langchain_core.messages import AIMessageChunk
+        yield AIMessageChunk(content="冒烟测试")
     def bind_tools(self, tools, **kwargs):
         return self
     def with_retry(self, **kwargs):
@@ -88,27 +92,47 @@ class TestInfrastructureSmoke:
 
         验证：
           1. 通过 enqueue_audit helper 入队 audit job
-          2. 自建 Worker（直接导入 [run_audit] 避免入队名 bug 干扰冒烟）
+          2. 自建 Worker（使用字符串路径注册，与 graph.py 入队名一致）
              drain 消费到该 job（processed ≥ 1）
           3. redis_pool 与 enqueue 端同源（同一 integration_runtime.arq_pool）
-
-        注：本测试使用 from app.audit.worker import run_audit 直接传函数对象
-        以绕过入队名 vs 注册名不匹配（该 bug 由 Step 9 红测覆盖）。
+          4. 审计图 write_results 正常落库（需 DB 中有 family + user + session）
         """
         from arq import Worker
 
-        from app.audit.worker import WORKER_SETTINGS, run_audit
+        from app.audit.worker import WORKER_SETTINGS
         from app.chat.graph import enqueue_audit
         from app.chat.factory import set_test_llm, clear_test_llm
+        from app.models.accounts import Family, User
+        from app.models.chat import Session as SessionModel
+        from app.models.enums import UserRole, SessionStatus
         from app.state.audit_signals import AuditSignalsManager
 
         rr = integration_runtime
-        sid = uuid.uuid4()
+
+        # 创建 family + user + session（write_results 需 FK 可引用）
+        async with rr.db_session_factory() as db:
+            fam = Family()
+            db.add(fam)
+            await db.flush()
+
+            child = User(family_id=fam.id, role=UserRole.child, phone="0000", is_active=True)
+            db.add(child)
+            await db.flush()
+
+            ses = SessionModel(
+                id=uuid.uuid4(),
+                child_user_id=child.id,
+                status=SessionStatus.active,
+            )
+            db.add(ses)
+            await db.commit()
+
+        sid = ses.id
         turn = 1
-        child_id = uuid.uuid4()
+        child_id = child.id
         msg_id = uuid.uuid4()
 
-        # 自建 worker：传函数对象确保注册名 == enqueue 名
+        # 自建 worker：使用字符串路径注册，与 enqueue_audit 入队名一致
         async def _on_startup(ctx):
             ctx["resources"] = rr
             ctx["signals_manager"] = AuditSignalsManager(
@@ -117,7 +141,7 @@ class TestInfrastructureSmoke:
             )
 
         worker = Worker(
-            functions=[run_audit],  # 直接传函数对象，注册名为 "run_audit"
+            functions=["app.audit.worker.run_audit"],
             redis_pool=rr.arq_pool,
             burst=True,
             on_startup=_on_startup,

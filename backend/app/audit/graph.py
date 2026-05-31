@@ -360,6 +360,9 @@ async def write_results(
 
     T11：db_session_factory 从 runtime.context 取，替代模块级会话工厂。
     双引擎遗留标注（§A.2）：patch1 / M9 主体期统一。
+
+    注意：上下文管理器仅关闭 session 不会自动提交。
+    write_audit_results 写入后必须显式 commit 确保数据持久化。
     """
     output = state["structured_output"]
     if output is None:
@@ -379,6 +382,7 @@ async def write_results(
                 turn_summary=output.turn_summary,
                 target_message_id=ctx.target_message_id,
             )
+            await db.commit()
 
     return {"structured_output": output}
 
