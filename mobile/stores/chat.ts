@@ -1009,6 +1009,21 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       return;
     }
 
+    // M9.5 · flow_pause 背压帧：复用 backgroundClose Resume 通道（A 方案）。
+    // - abort('backgroundClose') → onClose → _cleanupStream('backgroundClose')：
+    //   保留 ai 'streaming' 态 + inProgress/streamPhase、删 activeStream，
+    //   并把 chatStream 内 closed 置真 → 挡掉随后连接关闭的 transport 'error' 帧（防双处理）。
+    // - 立即在前台触发 _handleAppStateActive（与 AppState active 同构）：
+    //   弱网 → _resumeBranchDecide 抛 ApiError → catch → _markDisconnected 降级（↻ 重连）；
+    //   网络已恢复 / 仅瞬时背压 → OK2 → loadMessages 拉权威态秒渲染整段 ai。
+    if (event.type === 'flow_pause') {
+      const stream = get().activeStreams.get(storeKey);
+      if (!stream) return;
+      stream.handle.abort('backgroundClose');
+      void get()._handleAppStateActive(storeKey);
+      return;
+    }
+
     let migratedTo: SessionId | undefined;
 
     set((state) => {
