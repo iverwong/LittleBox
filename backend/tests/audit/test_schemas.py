@@ -1,4 +1,5 @@
 """M8 audit schemas 单元测试：validator 边界覆盖 ≥27 条。"""
+
 from __future__ import annotations
 
 import pytest
@@ -19,16 +20,27 @@ pytestmark = pytest.mark.audit
 class TestAuditDimensionScores:
     """7 维度 × Field(ge=0, le=9) 范围校验。"""
 
-    @pytest.mark.parametrize("field", [
-        "emotional", "social", "romance", "values",
-        "boundaries", "academic", "lifestyle",
-    ])
-    @pytest.mark.parametrize("value,should_pass", [
-        (-1, False),
-        (0, True),
-        (9, True),
-        (10, False),
-    ])
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "emotional",
+            "social",
+            "romance",
+            "values",
+            "boundaries",
+            "academic",
+            "lifestyle",
+        ],
+    )
+    @pytest.mark.parametrize(
+        "value,should_pass",
+        [
+            (-1, False),
+            (0, True),
+            (9, True),
+            (10, False),
+        ],
+    )
     def test_range(self, field: str, value: int, should_pass: bool):
         kwargs = {field: value}
         if should_pass:
@@ -108,7 +120,7 @@ class TestAuditOutputSchema:
             guidance="a" * 300,
             turn_summary="ok",
         )
-        assert len(s.guidance) == 300
+        assert s.guidance_injection and len(s.guidance_injection) == 300
 
     def test_guidance_too_long(self):
         with pytest.raises(ValidationError):
