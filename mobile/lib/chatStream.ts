@@ -35,6 +35,7 @@ export type SseEvent =
 export type ChatStreamCloseReason =
   | 'end'
   | 'stopped'
+  | 'flow_pause'
   | 'error'
   | 'abort'
   | 'firstFrameTimeout'
