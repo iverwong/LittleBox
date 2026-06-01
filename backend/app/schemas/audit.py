@@ -10,7 +10,6 @@ LLM tool 用 `AppendNote` / `ReplaceInNotes` 由 LangChain `bind_tools()` 消费
 TODO(M9+): provider 切换时补充英文 Field(description=...) 实现双语兼容；
 当前 DeepSeek 对中文 description 理解正常。
 """
-
 from __future__ import annotations
 
 from datetime import datetime
@@ -62,7 +61,9 @@ class AuditOutputSchema(BaseModel):
     由 `with_structured_output(AuditOutputSchema, include_raw=True)` 消费。
     """
 
-    dimension_scores: AuditDimensionScores = Field(description="7 维度评分（0-9）")
+    dimension_scores: AuditDimensionScores = Field(
+        description="7 维度评分（0-9）"
+    )
     crisis_detected: bool = Field(
         default=False,
         description="是否检测到危机信号（自残/自杀/虐待等紧急情况）",
@@ -79,10 +80,10 @@ class AuditOutputSchema(BaseModel):
         default=None,
         description="红线触发详情，redline_triggered=True 时必须提供",
     )
-    guidance_injection: str | None = Field(
-        default=None,
+    guidance: str = Field(
+        default="",
         max_length=300,
-        description="仅当需要对AI做轻度引导注入时才填写注入文本；正常无风险轮次必须留空（None）",
+        description="家长引导建议，≤300 字符；M8 期透传，M9 接入干预节点真消费",
     )
     turn_summary: str = Field(
         max_length=100,

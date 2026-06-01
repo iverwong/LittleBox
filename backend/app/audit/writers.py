@@ -67,7 +67,7 @@ async def write_audit_results(
         dimension_scores=dims,
         crisis_detected=structured_output.crisis_detected,
         crisis_topic=structured_output.crisis_topic,
-        guidance_injection=structured_output.guidance_injection,    # schema→ORM 重命名
+        guidance_injection=structured_output.guidance,    # schema→ORM 重命名
         redline_triggered=structured_output.redline_triggered,
         redline_detail=structured_output.redline_detail,
         notify_sent=False,   # M8 期不发送通知；server_default 不足，ORM 需显式
