@@ -80,10 +80,10 @@ class AuditOutputSchema(BaseModel):
         default=None,
         description="红线触发详情，redline_triggered=True 时必须提供",
     )
-    guidance: str = Field(
-        default="",
+    guidance_injection: str | None = Field(
+        default=None,
         max_length=300,
-        description="家长引导建议，≤300 字符；M8 期透传，M9 接入干预节点真消费",
+        description="仅当需要对AI做轻度引导注入时才填写注入文本；正常无风险轮次必须留空（None）",
     )
     turn_summary: str = Field(
         max_length=100,

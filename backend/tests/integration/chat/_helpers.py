@@ -141,7 +141,7 @@ def make_audit_tool_call(
     crisis_topic: str | None = None,
     redline_triggered: bool = False,
     redline_detail: str | None = None,
-    guidance: str = "",
+    guidance_injection: str | None = None,
     turn_summary: str = "审查正常",
 ) -> list[dict]:
     """构造 FakeAuditLLM 可用的 tool_calls 参数，模拟 AuditOutputSchema 工具调用。
@@ -151,6 +151,9 @@ def make_audit_tool_call(
     AuditOutputSchema 的 model_validator 要求：
       - crisis_detected=True → crisis_topic 非空
       - redline_triggered=True → redline_detail 非空
+
+    注意：args 键 "guidance_injection" 必须与 AuditOutputSchema 当前字段名一致；
+    pydantic v2 extra=ignore 会静默丢弃键名不匹配的字段，导致集成测试断言失败。
     """
     import uuid
 
@@ -163,7 +166,7 @@ def make_audit_tool_call(
         "crisis_topic": crisis_topic,
         "redline_triggered": redline_triggered,
         "redline_detail": redline_detail,
-        "guidance": guidance,
+        "guidance_injection": guidance_injection,
         "turn_summary": turn_summary,
     }
     return [{

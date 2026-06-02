@@ -18,7 +18,7 @@ _AUDIT_OUT = AuditOutputSchema(
     crisis_topic=None,
     redline_triggered=False,
     redline_detail=None,
-    guidance="ok",
+    guidance_injection="ok",
     turn_summary="ok",
 )
 
@@ -79,7 +79,7 @@ class TestSetAndGet:
         assert payload is not None
         assert payload.status == "ready"
         assert payload.signals is not None
-        assert payload.signals.guidance == "ok"
+        assert payload.signals.guidance_injection == "ok"
 
     async def test_get_returns_none_for_missing(self, manager):
         payload = await manager.get("nonexistent")

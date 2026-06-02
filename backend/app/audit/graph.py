@@ -91,7 +91,7 @@ def _last_aimessage(messages: list[BaseMessage]) -> AIMessage | None:
 
 
 def _build_audit_output_default(
-    guidance: str = "审查循环超限，已降级",
+    guidance_injection: str | None = "审查循环超限，已降级",
     turn_summary: str = "审查超时降级",
 ) -> AuditOutputSchema:
     """构造降级用的默认 AuditOutputSchema（循环超限 / post-processing 兜底）。"""
@@ -102,7 +102,7 @@ def _build_audit_output_default(
         ),
         crisis_detected=False, crisis_topic=None,
         redline_triggered=False, redline_detail=None,
-        guidance=guidance,
+        guidance_injection=guidance_injection,
         turn_summary=turn_summary,
     )
 
@@ -222,7 +222,7 @@ async def audit_llm_call(
             return {
                 "messages": [response],
                 "structured_output": _build_audit_output_default(
-                    guidance="模型未能给出结构化结论",
+                    guidance_injection="模型未能给出结构化结论",
                     turn_summary="审查降级：模型未调用 audit_output",
                 ),
             }

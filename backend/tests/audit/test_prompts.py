@@ -64,5 +64,10 @@ class TestToolSchemas:
         props = schema["parameters"]["properties"]
         assert "dimension_scores" in props
         assert "crisis_detected" in props
-        assert "guidance" in props
-        assert props["guidance"]["maxLength"] == 300
+        assert "guidance_injection" in props
+        # 字段类型为 str | None，pydantic 用 anyOf 表达；maxLength 嵌在 string 子项
+        string_branch = next(
+            b for b in props["guidance_injection"]["anyOf"]
+            if b.get("type") == "string"
+        )
+        assert string_branch["maxLength"] == 300

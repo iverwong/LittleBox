@@ -79,7 +79,7 @@ _AUDIT_OUTPUT_ARGS = {
     "crisis_topic": None,
     "redline_triggered": False,
     "redline_detail": None,
-    "guidance": "观察情绪走向",
+    "guidance_injection": "观察情绪走向",
     "turn_summary": "情绪稳定",
 }
 
@@ -249,7 +249,7 @@ class TestAuditGraph:
         )
         assert result["tool_iter_count"] == 5
         assert result["structured_output"] is not None
-        assert result["structured_output"].guidance == "审查循环超限，已降级"
+        assert result["structured_output"].guidance_injection == "审查循环超限，已降级"
         assert "原始建议如下" in result["session_notes_working"]
 
     async def test_mixed_append_replace(self, monkeypatch):
@@ -291,4 +291,4 @@ class TestPostProcessing:
             exhausted_raises=True,  # 不允许默认响应
         )
         assert result["structured_output"] is not None
-        assert result["structured_output"].guidance == "模型未能给出结构化结论"
+        assert result["structured_output"].guidance_injection == "模型未能给出结构化结论"

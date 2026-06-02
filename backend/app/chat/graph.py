@@ -196,7 +196,7 @@ async def load_audit_state(
                 "crisis_locked": pg_fb["crisis_locked"],
                 "crisis_detected": result.signals.crisis_detected,
                 "redline_triggered": result.signals.redline_triggered,
-                "guidance": result.signals.guidance or None,
+                "guidance": result.signals.guidance_injection or None,
                 "target_message_id": pg_fb["target_message_id"],
             },
         }

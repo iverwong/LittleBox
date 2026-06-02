@@ -490,7 +490,7 @@ class TestAuditStateCascade:
             crisis_topic="crisis topic" if _crisis_detected else None,
             redline_triggered=_redline_triggered,
             redline_detail="redline detail" if _redline_triggered else None,
-            guidance=_guidance,
+            guidance_injection=_guidance,
             turn_summary="测试",
         )
 

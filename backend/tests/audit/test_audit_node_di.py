@@ -105,7 +105,7 @@ async def test_audit_llm_call_passes_settings():
                                           "academic": 0, "lifestyle": 0},
                     "crisis_detected": False, "crisis_topic": None,
                     "redline_triggered": False, "redline_detail": None,
-                    "guidance": "ok", "turn_summary": "ok",
+                    "guidance_injection": "ok", "turn_summary": "ok",
                 }, "id": "call-2",
             }],
         )

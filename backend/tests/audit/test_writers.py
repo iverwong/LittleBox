@@ -30,7 +30,7 @@ _BASE_OUTPUT = AuditOutputSchema(
     ),
     crisis_detected=False, crisis_topic=None,
     redline_triggered=False, redline_detail=None,
-    guidance="观察社交互动",
+    guidance_injection="观察社交互动",
     turn_summary="社交活跃",
 )
 
@@ -95,7 +95,7 @@ class TestWriteAuditResults:
 
     async def test_second_update(self, db_session, sid):
         """第二轮写入：UPDATE rolling_summaries（append turn_summary）。"""
-        output_2 = _BASE_OUTPUT.model_copy(update={"guidance": "继续观察", "turn_summary": "社交增多"})
+        output_2 = _BASE_OUTPUT.model_copy(update={"guidance_injection": "继续观察", "turn_summary": "社交增多"})
 
         await write_audit_results(db_session, str(sid), 1, _BASE_OUTPUT, "第一轮笔记", "第一轮摘要")
         await db_session.flush()
@@ -172,7 +172,7 @@ class TestWriteAuditResults:
     async def test_multiple_turns(self, db_session, sid):
         """3 轮正确累积 + 无回退告警。"""
         for t in range(1, 4):
-            out = _BASE_OUTPUT.model_copy(update={"guidance": f"第{t}轮"})
+            out = _BASE_OUTPUT.model_copy(update={"guidance_injection": f"第{t}轮"})
             await write_audit_results(db_session, str(sid), t, out, f"笔记{t}", f"摘要{t}")
             await db_session.flush()
 

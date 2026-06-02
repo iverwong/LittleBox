@@ -25,7 +25,7 @@ _AUDIT_OUT = AuditOutputSchema(
     dimension_scores=AuditDimensionScores(),
     crisis_detected=False, crisis_topic=None,
     redline_triggered=False, redline_detail=None,
-    guidance="ok", turn_summary="ok",
+    guidance_injection="ok", turn_summary="ok",
 )
 
 

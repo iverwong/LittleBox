@@ -62,7 +62,7 @@ class TestGuidanceRoutingGreen:
         set_test_llm(
             "audit_deepseek",
             FakeAuditLLM(tool_calls=make_audit_tool_call(
-                guidance="试试和信任的成年人聊聊",
+                guidance_injection="试试和信任的成年人聊聊",
                 turn_summary="同伴冲突",
             )),
         )
