@@ -571,6 +571,18 @@ async def _run_llm_pipeline(
                     initial_state,
                     context=ctx,  # type: ignore[arg-type]
                     stream_mode="custom",
+                    # LangSmith trace 配置：按 session_id / child_id 过滤 trace。
+                    # 当前调用点原本无 config，无既有键需合并（无 checkpointer /
+                    # callbacks / configurable 既有键）。
+                    config={
+                        "run_name": "main_chat",
+                        "metadata": {
+                            "session_id": str(ctx.session_id),
+                            "child_id": str(ctx.child_user_id),
+                            "turn_number": turn_number,
+                        },
+                        "tags": ["main_chat"],
+                    },
                 ):
                     if stop_event.is_set():
                         user_stopped = True
