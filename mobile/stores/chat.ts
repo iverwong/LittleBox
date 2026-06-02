@@ -1360,13 +1360,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       // Step 9 · 扩展 prefill 触发条件：
       // - firstFrameTimeout：原逻辑保持（首帧超时必然 user.serverId 缺失）
       // - error：补 5xx + session_meta 未达 的 gap（user.serverId 缺失 = 后端 0 记录 = 必须 prefill 回灌）
-      // - 统一判定逻辑：(firstFrameTimeout || error) && user.serverId 缺失
+      // - 统一判定逻辑：(firstFrameTimeout || error || abort) && user.serverId 缺失
+      // 当日首次对话时发消息，发出后立即停止，无sid，无hid。前端走regenerate不通，会走 abort 路径。
       const userMsg =
         stream && bucket
           ? bucket.messages.find((m) => m.id === stream.tempUserId)
           : undefined;
       const prefillCandidate =
-        (reason === 'firstFrameTimeout' || reason === 'error') &&
+        (reason === 'firstFrameTimeout' ||
+          reason === 'error' ||
+          reason === 'abort') &&
         userMsg != null &&
         !userMsg.serverId
           ? userMsg.content
