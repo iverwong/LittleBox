@@ -287,6 +287,34 @@ function genTempId(prefix: 'human' | 'ai'): MessageId {
   return `temp_${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/**
+ * 纯函数 · 判定 regenerate 是否可降级为「以新消息重发」。
+ *
+ * 触发场景：当日首轮对话（本地尚无 session、human 尚未拿到 serverId）发消息后，
+ * session_meta 到达前流被终止 → 该 human 在服务端零记录（无 serverId = 无 hid），
+ * 而后端 regenerate 走 Row 6「复用孤儿 human」必须以 hid 为依据 → 必然走不通。
+ *
+ * 在这种场景下「重新生成」与「重发这条 human」语义等价（无 hid 可复用、没有任何
+ * 可保留的 AI 产出、原消息从未持久化），降级为新消息重发是唯一既正确又可行的
+ * 恢复方式；sendMessage 顶部「清未达失败对」步骤会覆盖残留的 [0][1] 槽对。
+ *
+ * 边界（必须保持不变）：
+ * - human 已有 serverId（已持久化）→ false，仍走后端 regenerate（否则
+ *   服务端会重复插入 human 行）
+ * - AI 已部分流式后被停（有内容、状态为 committed）→ false，不属于本次范围
+ * - human 内容为空等真·结构异常 → false，落回不变式校验 + toast 兜底
+ */
+function canResendAsNew(failedAi: Message, orphanHuman: Message): boolean {
+  return (
+    failedAi.role === 'ai' &&
+    (failedAi.status === 'failed' || failedAi.status === 'stopped') &&
+    failedAi.content.length === 0 &&
+    orphanHuman.role === 'human' &&
+    orphanHuman.serverId == null &&
+    orphanHuman.content.trim().length > 0
+  );
+}
+
 function emptyBucket(): SessionMessageState {
   return {
     messages: [],
@@ -625,15 +653,27 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // - failed：A4 失败态 chip（原路径）
     // - stopped：thinking 阶段被 stop / abort 兜底无内容（chip 语义 = 重发）
     // 二者点 chip 后行为完全相同：复用 orphan human 走后端 Row 6 重跑 prompt。
+    //
+    // 降级分支：未达后端场景（canResendAsNew 三判定全成立）→「重新生成」与「重发
+    // 这条 human」语义等价（无 hid 可复用、无可保留 AI 产出、原消息未持久化）。
+    // 传 null sid 让 sendMessage 走 PENDING 路径开新 session；其顶部「清未达失败对」
+    // 步骤会覆盖残留的 [0][1] 槽对。命中后直接结束，不再走需要 hid 的后端 regenerate。
+    if (canResendAsNew(failedAi, orphanHuman)) {
+      console.log(
+        '[chatStore] regenerate: 未达后端场景，降级为新消息重发',
+        { sid },
+      );
+      await get().sendMessage(null, orphanHuman.content);
+      return;
+    }
     if (
       failedAi.role !== 'ai' ||
       (failedAi.status !== 'failed' && failedAi.status !== 'stopped') ||
       orphanHuman.role !== 'human' ||
       !orphanHuman.serverId
     ) {
-      // 不变式破坏：firstFrameTimeout / transport 失败时 session_meta 未达 → user.serverId 缺失，
-      // 后端 Row 6「复用孤儿 human」必须有 hid，缺失时 regenerate 这条路走不通。
-      // 用户应改走「直接重发」（pendingPrefill 已回填 ChatInput），toast 引导。
+      // 不变式破坏：真·结构异常（AI 已部分流式 / human 角色错 / 桶不足等），
+      // 不属于「未达后端」可重发场景。原 toast 保留作为兜底引导。
       console.warn('[chatStore] regenerate: invariant violated', {
         sid,
         failedAiRole: failedAi.role,
