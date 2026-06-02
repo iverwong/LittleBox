@@ -10,6 +10,7 @@ LLM tool 用 `AppendNote` / `ReplaceInNotes` 由 LangChain `bind_tools()` 消费
 TODO(M9+): provider 切换时补充英文 Field(description=...) 实现双语兼容；
 当前 DeepSeek 对中文 description 理解正常。
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -61,9 +62,7 @@ class AuditOutputSchema(BaseModel):
     由 `with_structured_output(AuditOutputSchema, include_raw=True)` 消费。
     """
 
-    dimension_scores: AuditDimensionScores = Field(
-        description="7 维度评分（0-9）"
-    )
+    dimension_scores: AuditDimensionScores = Field(description="7 维度评分（0-9）")
     crisis_detected: bool = Field(
         default=False,
         description="是否检测到危机信号（自残/自杀/虐待等紧急情况）",
