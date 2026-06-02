@@ -503,7 +503,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // PENDING 路径（sid==null）需主动切 activeSessionId/todaySessionId 到 PENDING_SESSION_KEY，
     // 否则 chat/index.tsx 会一直渲染 WelcomeShell（issue 4）。
     // session_meta migrate 时会把这两个字段一并切到真实 sid。
-    const isPendingPath = sid == null;
+    const isPendingPath = sid == null || sid === PENDING_SESSION_KEY;
     set((prev) => {
       const next = new Map(prev.messagesBySession);
       const bucket = next.get(initialKey) ?? emptyBucket();
@@ -529,7 +529,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const ctx: { storeKey: SessionId } = { storeKey: initialKey };
 
     const handle = openChatStream({
-      sid,
+      sid: isPendingPath ? null : sid,
       content: trimmed,
       onEvent: (event) => {
         const newKey = get()._onSseEvent(ctx.storeKey, event);
@@ -564,6 +564,17 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const stream = get().activeStreams.get(sid);
     if (!stream) {
       console.warn('[chatStore] stopStream: no active stream on', sid);
+      return;
+    }
+
+    // PENDING 哨兵：session_meta 未到达，后端尚未建立该 session，'__pending__' 不是合法 UUID。
+    // 绝不能拿它调 stopSession（会触发后端 asyncpg DataError）。本地 abort handle 即可：
+    // onClose('abort') → _cleanupStream 收尾，等价于上面失败兜底分支（后端本就无可停）。
+    if (sid === PENDING_SESSION_KEY) {
+      console.warn(
+        '[chatStore] stopStream: pending session, aborting locally without backend stop',
+      );
+      stream.handle.abort();
       return;
     }
 
