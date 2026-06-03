@@ -5,6 +5,7 @@ node_modules/
 
 # Expo
 .expo/
+.expo/types/
 dist/
 web-build/
 expo-env.d.ts
@@ -39,3 +40,9 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+/ios/Pods/
+/ios/.xcode.env.local
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/local.properties
