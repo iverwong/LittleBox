@@ -30,7 +30,7 @@ _AUDIT_OUTPUT = AuditOutputSchema(
     crisis_topic=None,
     redline_triggered=False,
     redline_detail=None,
-    guidance="ok",
+    guidance_injection="ok",
     turn_summary="ok",
 )
 

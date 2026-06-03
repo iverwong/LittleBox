@@ -571,6 +571,18 @@ async def _run_llm_pipeline(
                     initial_state,
                     context=ctx,  # type: ignore[arg-type]
                     stream_mode="custom",
+                    # LangSmith trace 配置：按 session_id / child_id 过滤 trace。
+                    # 当前调用点原本无 config，无既有键需合并（无 checkpointer /
+                    # callbacks / configurable 既有键）。
+                    config={
+                        "run_name": "main_chat",
+                        "metadata": {
+                            "session_id": str(ctx.session_id),
+                            "child_id": str(ctx.child_user_id),
+                            "turn_number": turn_number,
+                        },
+                        "tags": ["main_chat"],
+                    },
                 ):
                     if stop_event.is_set():
                         user_stopped = True
@@ -596,11 +608,15 @@ async def _run_llm_pipeline(
                         thinking_started = False
                         _put(_frame_sse_event("thinking_end", {}))
 
-                    # intervention_type 信号（graph 终端节点在首 delta 前发射）
+                    # intervention_type 信号（graph 终端节点在首 delta 前发射）。
+                    # 此处 payload 是 graph 终端节点在 LLM .astream() 之前写入的单次路由帧，
+                    # 严格早于后续 delta chunk 帧。_put 在此发射 SSE 事件后，
+                    # 待第一个 delta 到达（如果有）才通过 stream_graph_to_sse 映射。
                     it_raw = payload.get("intervention_type")
                     if it_raw:
                         try:
                             last_intervention_type = InterventionType(it_raw)
+                            _put(_frame_sse_event("intervention_type", {"type": it_raw}))
                         except ValueError:
                             logger.warning(
                                 "unknown intervention_type %r, falling back to None",
@@ -856,6 +872,12 @@ async def chat_stream(
 
         hid: UUID  # human 消息 ID，用于 session_meta 事件
         user_msg: Message | None = None  # 追踪本轮新增的 human message，供 commit① 用
+        # Row 6 复用孤儿行时，从 last_msg.content 取值给 ctx.user_input：
+        #   孤儿 turn_number == _turn_number（AI 没落库 → ai_turn_counter 未自增），
+        #   load_active_history_for_assembly(until_turn=_turn_number) 会按 < _turn_number
+        #   过滤把孤儿排掉；W1 末位 HumanMessage 用 ctx.user_input 拼装，若不喂原始
+        #   问题文本则 LLM 收到空 user 轮（仅在 regenerate 路径出现，Row 1/3/5 无影响）。
+        _regen_user_input: str | None = None
 
         if last_msg is None:
             # Row 1 或 Row 2
@@ -922,6 +944,7 @@ async def chat_stream(
                         raise HTTPException(400, "RegenerateForInvalid")
                     hid = last_msg.id
                     # user_msg 保持 None — 复用已有消息，不新增
+                    _regen_user_input = last_msg.content  # 喂入 ctx.user_input（见上方注释）
                 else:
                     # Row 7：孤儿 + ≠hid → 400
                     raise HTTPException(400, "RegenerateForInvalid")
@@ -948,7 +971,9 @@ async def chat_stream(
             child_profile={},
             age=_age,
             gender=_gender,
-            user_input=req.content,
+            user_input=(
+                _regen_user_input if _regen_user_input is not None else req.content
+            ),
             settings=rr.settings,
             db_session_factory=rr.db_session_factory,
             audit_redis=rr.audit_redis,

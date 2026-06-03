@@ -155,7 +155,23 @@ async def run_audit(
             "messages": [],
             "max_iter": rr.settings.max_audit_tool_iterations,
         }
-        result: dict[str, Any] = await rr.audit_graph.ainvoke(state, context=audit_ctx)  # type: ignore[reportArgumentType]
+        result: dict[str, Any] = await rr.audit_graph.ainvoke(
+            state,
+            context=audit_ctx,  # type: ignore[reportArgumentType]
+            # LangSmith trace 配置：按 session_id / child_id 过滤 trace。
+            # 当前调用点原本无 config，无既有键需合并（无 checkpointer /
+            # callbacks / configurable 既有键）。
+            config={
+                "run_name": "audit",
+                "metadata": {
+                    "session_id": str(audit_ctx.session_id),
+                    "child_id": str(audit_ctx.child_user_id),
+                    "turn_number": turn_number,
+                    "target_message_id": str(audit_ctx.target_message_id),
+                },
+                "tags": ["audit"],
+            },
+        )
         output = result.get("structured_output")
         if output is not None:
             await manager.set_ready(

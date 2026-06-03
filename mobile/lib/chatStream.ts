@@ -29,11 +29,13 @@ export type SseEvent =
   | { type: 'delta'; content: string }
   | { type: 'end'; finish_reason: string; aid: string }
   | { type: 'stopped'; finish_reason: 'user_stopped'; aid?: string }
+  | { type: 'flow_pause'; reason?: string }
   | { type: 'error'; message: string; code?: string };
 
 export type ChatStreamCloseReason =
   | 'end'
   | 'stopped'
+  | 'flow_pause'
   | 'error'
   | 'abort'
   | 'firstFrameTimeout'
@@ -76,6 +78,7 @@ type CustomEventName =
   | 'delta'
   | 'end'
   | 'stopped'
+  | 'flow_pause'
   | 'error';
 
 function safeParseData(raw: unknown): Record<string, unknown> {
@@ -228,6 +231,19 @@ export function openChatStream(args: OpenChatStreamArgs): ChatStreamHandle {
       aid: typeof payload.aid === 'string' ? payload.aid : undefined,
     });
     close('stopped');
+  });
+
+  // M9.5 · 后端有界队列 overflow 时段二发 flow_pause 帧并关流（段一 headless 跑完 commit②）。
+  // 本层只解析透传，不在此 close —— 由 store 决定走 backgroundClose Resume 通道。
+  // markFirstFrame：flow_pause 也算后端已响应，避免与首帧超时计时器竞争。
+  es.addEventListener('flow_pause', (event) => {
+    if (closed) return;
+    markFirstFrame();
+    const payload = safeParseData((event as { data?: unknown }).data);
+    onEvent({
+      type: 'flow_pause',
+      reason: typeof payload.reason === 'string' ? payload.reason : undefined,
+    });
   });
 
   // 'error' 两类来源:

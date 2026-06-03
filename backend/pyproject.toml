@@ -10,14 +10,14 @@ dependencies = [
     "alembic",
     "redis[hiredis]",
     "pydantic-settings",
-    "langchain>=0.3.0",
-    "langgraph>=0.2.0",
-    "langchain-openai>=0.2.0",
-    "langchain-deepseek>=0.1",
-    "openai>=1.30.0",
-    "argon2-cffi>=23.1.0",
+    "langchain",
+    "langgraph",
+    "langchain-openai",
+    "langchain-deepseek",
+    "openai",
+    "argon2-cffi",
     "regex",
-    "arq>=0.26",
+    "arq",
 ]
 
 [project.optional-dependencies]
@@ -27,8 +27,8 @@ dev = [
     "httpx",
     "ruff",
     "basedpyright",
-    "fakeredis>=2.20.0",
-    "respx>=0.22",
+    "fakeredis",
+    "respx",
 ]
 
 [tool.pytest.ini_options]
@@ -38,6 +38,7 @@ asyncio_default_test_loop_scope = "session"
 markers = [
     "live: needs real LLM API",
     "audit: audit pipeline tests",
+    "integration: needs real DB/Redis/arq worker",
 ]
 
 [tool.ruff]

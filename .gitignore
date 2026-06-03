@@ -1,76 +1,29 @@
-# Virtual environments
-venv/
-ENV/
-env/
-.venv/
+# Cross-cutting ignore rules. End-specific (backend / mobile) rules live in
+# their own .gitignore: see /backend/.gitignore and /mobile/.gitignore.
 
-# Node
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnp/
-.pnp.js
-
-# Expo
-.expo/
-dist/
-web-build/
-
-# macOS
-.DS_Store
-*.pem
-
-# IDE
+# === IDE ===
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
 
-# Environment
+# === OS ===
+.DS_Store
+Thumbs.db
+*.pem
+
+# === Environment ===
+# Root .env (实际部署/开发共用),由用户自己管理; 局部覆盖在各自端内处理
 .env
 .env.local
 .env.*.local
 
-# Docker
-.dockerignore
-
-# Test coverage
-.coverage
-htmlcov/
-.pytest_cache/
-.mypy_cache/
-
-# UV
-.uv/
-
-# Probe artifacts (LLM provider probe run outputs, ~70 JSON dumps)
-/backend/tests/audit/llm_provider_probe/artifacts/
-
-# PostgreSQL data
-pgdata/
-
-# Claude Code
+# === Claude Code ===
 .claude/
 
-# Backend-only Python paths (scoped to /backend/ to avoid matching mobile/ etc.)
-/backend/__pycache__/
-/backend/build/
-/backend/develop-eggs/
-/backend/dist/
-/backend/downloads/
-/backend/eggs/
-/backend/.eggs/
-/backend/lib/
-/backend/parts/
-/backend/sdist/
-/backend/var/
-/backend/wheels/
-/backend/*.egg-info/
-/backend/.installed.cfg
-/backend/*.egg
-/backend/.venv/
-/backend/venv/
-/backend/ENV/
-/backend/env/
+# === PostgreSQL data (mounted volume at repo root) ===
+pgdata/
+
+# === Docker ===
+.dockerignore

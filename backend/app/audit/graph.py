@@ -91,10 +91,16 @@ def _last_aimessage(messages: list[BaseMessage]) -> AIMessage | None:
 
 
 def _build_audit_output_default(
-    guidance: str = "审查循环超限，已降级",
+    guidance_injection: str | None = None,
     turn_summary: str = "审查超时降级",
 ) -> AuditOutputSchema:
-    """构造降级用的默认 AuditOutputSchema（循环超限 / post-processing 兜底）。"""
+    """构造降级用的默认 AuditOutputSchema（循环超限 / post-processing 兜底）。
+
+    guidance_injection 默认 None：降级路径不向主 LLM 注入引导串，
+    对齐 M9.5「正常/无结论轮必须留空」契约，避免降级串被 route_by_risk 的
+    guidance 分支误投到孩子侧 prompt（intervention_type="guided"）。
+    turn_summary 默认保留作诊断信息载体，会落 audit_records.turn_summary。
+    """
     return AuditOutputSchema(
         dimension_scores=AuditDimensionScores(
             emotional=0, social=0, romance=0, values=0,
@@ -102,7 +108,7 @@ def _build_audit_output_default(
         ),
         crisis_detected=False, crisis_topic=None,
         redline_triggered=False, redline_detail=None,
-        guidance=guidance,
+        guidance_injection=guidance_injection,
         turn_summary=turn_summary,
     )
 
@@ -216,13 +222,15 @@ async def audit_llm_call(
 
         if not response.tool_calls:
             # 两次都未调 audit_output → 降级
+            # guidance_injection 不再传运营态字符串：降级时主 LLM 不应收到
+            # 任何 guidance 注入（route_by_risk.ready 分支 guidance 为 None
+            # → 落到 main 分支而非 guidance 分支）。
             logger.warning(
                 "audit_pipeline: 模型连续两次未调用 audit_output，默认 verdict=warn"
             )
             return {
                 "messages": [response],
                 "structured_output": _build_audit_output_default(
-                    guidance="模型未能给出结构化结论",
                     turn_summary="审查降级：模型未调用 audit_output",
                 ),
             }
@@ -360,6 +368,9 @@ async def write_results(
 
     T11：db_session_factory 从 runtime.context 取，替代模块级会话工厂。
     双引擎遗留标注（§A.2）：patch1 / M9 主体期统一。
+
+    注意：上下文管理器仅关闭 session 不会自动提交。
+    write_audit_results 写入后必须显式 commit 确保数据持久化。
     """
     output = state["structured_output"]
     if output is None:
@@ -379,6 +390,7 @@ async def write_results(
                 turn_summary=output.turn_summary,
                 target_message_id=ctx.target_message_id,
             )
+            await db.commit()
 
     return {"structured_output": output}
 

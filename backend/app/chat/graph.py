@@ -129,8 +129,13 @@ async def enqueue_audit(
     manager = AuditSignalsManager(audit_redis, ttl=settings.audit_redis_ttl_seconds)
     await manager.set_pending(str(sid), turn_number, started_at=datetime.now(UTC).isoformat())
 
+    # ⚠️ 此字面量必须与 worker.py WORKER_SETTINGS["functions"] 字符串路径逐字一致。
+    # arq 0.28 的 func() 对字符串路径使用 name=name or coroutine（全路径做函数名 key）；
+    # 若两侧不匹配，worker 日志 "function '<name>' not found"，job 永不消费。
+    # 移动或重命名 worker 模块时必须同步更新此字面量。
     await arq_pool.enqueue_job(
-        "run_audit", str(sid), turn_number, str(child_user_id), str(target_message_id),
+        "app.audit.worker.run_audit",
+        str(sid), turn_number, str(child_user_id), str(target_message_id),
         _job_id=f"audit:{sid}:{turn_number}",
     )
 
@@ -191,7 +196,7 @@ async def load_audit_state(
                 "crisis_locked": pg_fb["crisis_locked"],
                 "crisis_detected": result.signals.crisis_detected,
                 "redline_triggered": result.signals.redline_triggered,
-                "guidance": result.signals.guidance or None,
+                "guidance": result.signals.guidance_injection or None,
                 "target_message_id": pg_fb["target_message_id"],
             },
         }

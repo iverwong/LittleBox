@@ -60,15 +60,23 @@ def pytest_addoption(parser):
         "--run-live", action="store_true", default=False,
         help="run tests marked as live (real LLM API)",
     )
+    parser.addoption(
+        "--run-integration", action="store_true", default=False,
+        help="run integration tests (real DB/Redis/arq)",
+    )
 
 
 def pytest_collection_modifyitems(config, items):
-    if config.getoption("--run-live"):
-        return
-    skip_live = pytest.mark.skip(reason="需要 --run-live 显式触发")
-    for item in items:
-        if "live" in item.keywords:
-            item.add_marker(skip_live)
+    if not config.getoption("--run-live"):
+        skip_live = pytest.mark.skip(reason="需要 --run-live 显式触发")
+        for item in items:
+            if item.get_closest_marker("live"):
+                item.add_marker(skip_live)
+    if not config.getoption("--run-integration"):
+        skip_int = pytest.mark.skip(reason="需要 --run-integration 显式触发")
+        for item in items:
+            if item.get_closest_marker("integration"):
+                item.add_marker(skip_int)
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text

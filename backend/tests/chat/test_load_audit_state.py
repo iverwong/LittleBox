@@ -82,7 +82,7 @@ _AUDIT_OUTPUT = AuditOutputSchema(
     crisis_topic=None,
     redline_triggered=False,
     redline_detail=None,
-    guidance="test guidance",
+    guidance_injection="test guidance",
     turn_summary="ok",
 )
 

@@ -105,23 +105,23 @@ class TestAuditOutputSchema:
     def test_guidance_max_length_ok(self):
         s = AuditOutputSchema(
             dimension_scores=AuditDimensionScores(),
-            guidance="a" * 300,
+            guidance_injection="a" * 300,
             turn_summary="ok",
         )
-        assert len(s.guidance) == 300
+        assert s.guidance_injection and len(s.guidance_injection) == 300
 
     def test_guidance_too_long(self):
         with pytest.raises(ValidationError):
             AuditOutputSchema(
                 dimension_scores=AuditDimensionScores(),
-                guidance="a" * 301,
+                guidance_injection="a" * 301,
                 turn_summary="ok",
             )
 
     def test_turn_summary_max_length_ok(self):
         s = AuditOutputSchema(
             dimension_scores=AuditDimensionScores(),
-            guidance="ok",
+            guidance_injection="ok",
             turn_summary="a" * 100,
         )
         assert len(s.turn_summary) == 100
@@ -130,7 +130,7 @@ class TestAuditOutputSchema:
         with pytest.raises(ValidationError):
             AuditOutputSchema(
                 dimension_scores=AuditDimensionScores(),
-                guidance="ok",
+                guidance_injection="ok",
                 turn_summary="a" * 101,
             )
 
@@ -141,7 +141,7 @@ class TestAuditOutputSchema:
                 dimension_scores=AuditDimensionScores(),
                 crisis_detected=True,
                 crisis_topic=None,
-                guidance="ok",
+                guidance_injection="ok",
                 turn_summary="ok",
             )
 
@@ -151,7 +151,7 @@ class TestAuditOutputSchema:
                 dimension_scores=AuditDimensionScores(),
                 crisis_detected=False,
                 crisis_topic="some topic",
-                guidance="ok",
+                guidance_injection="ok",
                 turn_summary="ok",
             )
 
@@ -160,7 +160,7 @@ class TestAuditOutputSchema:
             dimension_scores=AuditDimensionScores(),
             crisis_detected=True,
             crisis_topic="提到自残倾向",
-            guidance="ok",
+            guidance_injection="ok",
             turn_summary="ok",
         )
         assert s.crisis_topic == "提到自残倾向"
@@ -172,7 +172,7 @@ class TestAuditOutputSchema:
                 dimension_scores=AuditDimensionScores(),
                 redline_triggered=True,
                 redline_detail=None,
-                guidance="ok",
+                guidance_injection="ok",
                 turn_summary="ok",
             )
 
@@ -182,7 +182,7 @@ class TestAuditOutputSchema:
                 dimension_scores=AuditDimensionScores(),
                 redline_triggered=False,
                 redline_detail="some detail",
-                guidance="ok",
+                guidance_injection="ok",
                 turn_summary="ok",
             )
 
@@ -191,7 +191,7 @@ class TestAuditOutputSchema:
             dimension_scores=AuditDimensionScores(),
             redline_triggered=True,
             redline_detail="涉及暴力言论",
-            guidance="ok",
+            guidance_injection="ok",
             turn_summary="ok",
         )
         assert s.redline_detail == "涉及暴力言论"
@@ -250,7 +250,7 @@ class TestAuditSignalsPayload:
             turn=1,
             signals=AuditOutputSchema(
                 dimension_scores=AuditDimensionScores(),
-                guidance="ok",
+                guidance_injection="ok",
                 turn_summary="ok",
             ),
         )
@@ -277,7 +277,7 @@ class TestAuditSignalsPayload:
                 turn=1,
                 signals=AuditOutputSchema(
                     dimension_scores=AuditDimensionScores(),
-                    guidance="ok",
+                    guidance_injection="ok",
                     turn_summary="ok",
                 ),
             )

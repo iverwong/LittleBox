@@ -409,3 +409,135 @@ class TestAuditLlmRetry:
             from langchain_core.messages import HumanMessage
             result = await llm.ainvoke([HumanMessage(content="你好")])
             assert result.content is not None
+
+
+# ---- T8: 集成测试注入缝（M9.5 Step 5） ----
+# 验证 set_test_llm / clear_test_llm / build_provider_llm override 行为。
+
+
+class _FakeRunnable:
+    """最小 Runnable 假实现，仅用于验证注入缝路由是否正确。"""
+    async def astream(self, input, config=None):  # noqa: A003
+        yield self
+    async def ainvoke(self, input, config=None):
+        return self
+    def bind_tools(self, tools, **kwargs):  # noqa: A003
+        """bind_tools 链式方法：build_audit_llm 内部调此包装 with_retry。"""
+        return self
+    def with_retry(self, **kwargs):
+        """with_retry 链式方法：build_audit_llm 内部使用。"""
+        return self
+    def with_fallbacks(self, fallbacks, **kwargs):
+        """with_fallbacks 链式方法：build_audit_llm 内部使用。"""
+        return self
+
+
+class TestInjectionSeam:
+    """build_provider_llm 注入缝：按 provider 名 dispatch 的 override。"""
+
+    def teardown_method(self) -> None:
+        """每测试后清理 override，避免跨测试泄漏。"""
+        from app.chat.factory import clear_test_llm
+        clear_test_llm()
+
+    def test_set_provider_override_returns_fake(self) -> None:
+        """set_test_llm("deepseek", fake) → build_provider_llm 返回 fake。"""
+        from app.chat.factory import build_provider_llm, set_test_llm
+        fake = _FakeRunnable()
+        set_test_llm("deepseek", fake)
+        result = build_provider_llm("deepseek", None)
+        assert result is fake
+
+    def test_audit_provider_override_returns_fake(self) -> None:
+        """set_test_llm("audit_deepseek", fake) → build_provider_llm 返回 fake。"""
+        from app.chat.factory import build_provider_llm, set_test_llm
+        fake = _FakeRunnable()
+        set_test_llm("audit_deepseek", fake)
+        result = build_provider_llm("audit_deepseek", None)
+        assert result is fake
+
+    def test_override_only_affects_specified_provider(self) -> None:
+        """只 override "deepseek" 时，"openai" 仍走 registry。"""
+        from app.chat.factory import (
+            _PROVIDER_REGISTRY,
+            build_provider_llm,
+            set_test_llm,
+        )
+        from langchain_openai import ChatOpenAI
+        fake = _FakeRunnable()
+        set_test_llm("deepseek", fake)
+
+        result = build_provider_llm("deepseek", None)
+        assert result is fake
+
+        openai_llm = build_provider_llm("openai", _FakeSettings())
+        assert isinstance(openai_llm, ChatOpenAI)
+
+    def test_clear_single_provider(self) -> None:
+        """clear_test_llm("deepseek") 只清除该 provider 的 override。"""
+        from app.chat.factory import (
+            build_provider_llm,
+            clear_test_llm,
+            set_test_llm,
+        )
+        fake_ds = _FakeRunnable()
+        fake_audit = _FakeRunnable()
+        set_test_llm("deepseek", fake_ds)
+        set_test_llm("audit_deepseek", fake_audit)
+
+        clear_test_llm("deepseek")
+        # deepseek 恢复 registry，audit_deepseek 仍 override
+        result_ds = build_provider_llm("deepseek", _FakeSettings())
+        from langchain_deepseek import ChatDeepSeek
+        assert isinstance(result_ds, ChatDeepSeek)
+
+        result_audit = build_provider_llm("audit_deepseek", None)
+        assert result_audit is fake_audit
+
+    def test_clear_all_providers(self) -> None:
+        """clear_test_llm() 清除全部 provider 的 override。"""
+        from app.chat.factory import (
+            build_provider_llm,
+            clear_test_llm,
+            set_test_llm,
+        )
+        set_test_llm("deepseek", _FakeRunnable())
+        set_test_llm("audit_deepseek", _FakeRunnable())
+        clear_test_llm()
+        # 两个 provider 都恢复 registry
+        result_ds = build_provider_llm("deepseek", _FakeSettings())
+        from langchain_deepseek import ChatDeepSeek
+        assert isinstance(result_ds, ChatDeepSeek)
+
+        result_audit = build_provider_llm("audit_deepseek", _FakeSettings())
+        assert isinstance(result_audit, ChatDeepSeek)
+
+    def test_build_main_llm_respects_override(self) -> None:
+        """build_main_llm 内部调 build_provider_llm("deepseek", ...)，应返回 override。"""
+        from app.chat.factory import build_main_llm, set_test_llm
+        fake = _FakeRunnable()
+        set_test_llm("deepseek", fake)
+        result = build_main_llm(_FakeSettings(enable_fallback=False))
+        assert result is fake
+
+    def test_build_crisis_llm_respects_override(self) -> None:
+        """build_crisis_llm 内部调 build_provider_llm("audit_deepseek", ...)，应返回 override。"""
+        from app.chat.factory import build_crisis_llm, set_test_llm
+        fake = _FakeRunnable()
+        set_test_llm("audit_deepseek", fake)
+        result = build_crisis_llm(_FakeSettings())
+        assert result is fake
+
+    def test_build_audit_llm_respects_override(self) -> None:
+        """build_audit_llm 内部调 build_provider_llm("audit_deepseek", ...)，应返回 override。"""
+        from app.audit.llm import build_audit_llm
+        from app.chat.factory import set_test_llm
+        fake = _FakeRunnable()
+        set_test_llm("audit_deepseek", fake)
+        result = build_audit_llm(_FakeSettings())
+        assert result is fake
+
+    def test_override_empty_after_teardown(self) -> None:
+        """teardown_method 后 _test_llm_overrides 应为空。"""
+        from app.chat.factory import _test_llm_overrides
+        assert _test_llm_overrides == {}

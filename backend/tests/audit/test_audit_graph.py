@@ -79,7 +79,7 @@ _AUDIT_OUTPUT_ARGS = {
     "crisis_topic": None,
     "redline_triggered": False,
     "redline_detail": None,
-    "guidance": "观察情绪走向",
+    "guidance_injection": "观察情绪走向",
     "turn_summary": "情绪稳定",
 }
 
@@ -249,7 +249,12 @@ class TestAuditGraph:
         )
         assert result["tool_iter_count"] == 5
         assert result["structured_output"] is not None
-        assert result["structured_output"].guidance == "审查循环超限，已降级"
+        # M9.5 契约：降级时 guidance_injection 必须为 None，
+        # 避免降级串被 load_audit_state 透传后命中 route_by_risk.guidance 分支
+        # 把运营态字符串误注入主 LLM（intervention_type="guided"）。
+        assert result["structured_output"].guidance_injection is None
+        # 降级覆盖从 guidance 串迁到 turn_summary，避免覆盖空洞
+        assert result["structured_output"].turn_summary == "审查超时降级"
         assert "原始建议如下" in result["session_notes_working"]
 
     async def test_mixed_append_replace(self, monkeypatch):
@@ -291,4 +296,7 @@ class TestPostProcessing:
             exhausted_raises=True,  # 不允许默认响应
         )
         assert result["structured_output"] is not None
-        assert result["structured_output"].guidance == "模型未能给出结构化结论"
+        # M9.5 契约：模型两轮都未给结构化结论时，guidance_injection 必须为 None
+        assert result["structured_output"].guidance_injection is None
+        # 降级覆盖迁到 turn_summary，保留诊断信息
+        assert result["structured_output"].turn_summary == "审查降级：模型未调用 audit_output"

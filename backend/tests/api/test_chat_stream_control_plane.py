@@ -41,6 +41,7 @@ from fakeredis.aioredis import FakeRedis
 from httpx import AsyncClient
 from sqlalchemy import select
 
+from app.api.me import _frame_sse_event
 from app.auth.redis_ops import commit_with_redis
 from app.auth.tokens import issue_token
 from app.chat.graph import build_main_graph
@@ -471,6 +472,63 @@ async def test_decision_row6_content_must_be_empty(
                 "/api/v1/me/chat/stream", json=body, headers=headers
             )
     assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_decision_row6_orphan_reuse_feeds_user_input(lifecycle_ctx):
+    """Row 6 regression: ctx.user_input 必须等于孤儿原始 content，不是空串。
+
+    链路：StopNoAi → 孤儿 H2 (turn=K, content="原问题") → 重新生成 → 决策矩阵
+    Row 6 命中（content="" + regenerate_for=hid）→ 复用孤儿行、_turn_number = K
+    → load_active_history_for_assembly(until_turn=K) 按 turn_number < K 过滤把
+    H2 排除 → W1 末位 HumanMessage 用 ctx.user_input 拼装；修复前 ctx.user_input=""
+    LLM 收到空 user 轮，仅 regenerate 路径触发，Row 1/3/5 不受影响。
+
+    验证点：me.py 必须在 Row 6 命中时把 _regen_user_input 置为 last_msg.content，
+    并让 ChatContextSchema.user_input 优先使用它。
+    """
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+    sid = uuid4()
+
+    lifecycle_ctx.seed_sess.add(
+        SessionModel(id=sid, child_user_id=child.id, title="test", status=MessageStatus.active)
+    )
+    orphan = Message(
+        session_id=sid,
+        role=MessageRole.human,
+        status=MessageStatus.active,
+        content="原问题",
+        turn_number=2,
+    )
+    lifecycle_ctx.seed_sess.add(orphan)
+    await lifecycle_ctx.seed_sess.flush()
+    orphan_id = orphan.id
+    await lifecycle_ctx.seed_sess.commit()
+
+    captured: dict = {}
+
+    async def fake_run_llm_pipeline(*args, **kwargs):
+        # 抓 me.py 装配出的 ctx，验证 user_input 不为空
+        captured["user_input"] = kwargs["ctx"].user_input
+        captured["session_id"] = kwargs["ctx"].session_id
+        # 推 end + None 让 _stream_generator 正常终止
+        kwargs["queue"].put_nowait(
+            _frame_sse_event("end", {"finish_reason": "stop", "aid": str(uuid4())})
+        )
+        kwargs["queue"].put_nowait(None)
+
+    body = make_payload(content="", session_id=str(sid), regenerate_for=str(orphan_id))
+
+    with patch("app.api.me._run_llm_pipeline", new=fake_run_llm_pipeline):
+        resp = await client.post("/api/v1/me/chat/stream", json=body, headers=headers)
+
+    assert resp.status_code == 200
+    assert captured.get("session_id") == sid
+    # 核心断言：FIX 后 ctx.user_input == 孤儿原始 content
+    assert captured.get("user_input") == "原问题", (
+        "Row 6 must populate ctx.user_input from last_msg.content; "
+        "otherwise build_messages_main's W1 wrapper gives the LLM an empty user turn"
+    )
 
 
 # ---------------------------------------------------------------------------

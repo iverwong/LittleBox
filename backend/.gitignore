@@ -1,4 +1,49 @@
-uv.lock
+# Backend-specific ignore rules. Cross-cutting rules live in the root .gitignore.
+# uv.lock is committed on purpose — see uv 官方推荐: 锁定依赖,保证团队/CI 一致.
+
+# === Python ===
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.python-version
+.tool-versions
+
+# === Testing ===
 .pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# === Linting / Type checking ===
+.ruff_cache/
+.basedpyright_cache/
+
+# === Virtual environment ===
+.venv/
+venv/
+env/
+ENV/
+
+# === UV ===
+.uv/
+
+# === Probe / fixture artifacts (LLM provider probe dumps ~70 JSON) ===
+/tests/audit/llm_provider_probe/artifacts/
+
+# === Distribution / build artifacts (PEP 517 standard) ===
+/build/
+/develop-eggs/
+/dist/
+/downloads/
+/eggs/
+/.eggs/
+/lib/
+/parts/
+/sdist/
+/var/
+/wheels/
+/*.egg-info/
+/.installed.cfg
+/*.egg

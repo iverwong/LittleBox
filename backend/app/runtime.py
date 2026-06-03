@@ -123,6 +123,6 @@ async def build_runtime(settings: Settings) -> RuntimeResources:
 
 async def teardown_runtime(rr: RuntimeResources) -> None:
     """反向关闭：arq_pool → audit_redis → db_engine。图无需关闭。"""
-    await rr.arq_pool.close(close_connection_pool=True)
+    await rr.arq_pool.aclose(close_connection_pool=True)
     await rr.audit_redis.aclose()
     await rr.db_engine.dispose()
