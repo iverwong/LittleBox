@@ -568,7 +568,7 @@ async def get_my_profile(
     if profile is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "profile not found")
     return ChildProfileOut(
-        id=profile.child_user_id,
+        child_user_id=profile.child_user_id,
         nickname=profile.nickname,
         gender=profile.gender.value,
         birth_date=profile.birth_date,

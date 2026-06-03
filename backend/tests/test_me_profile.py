@@ -71,7 +71,7 @@ class TestGetMyProfileSuccess:
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert data["id"] == child_id
+        assert data["child_user_id"] == child_id
         assert data["nickname"] == "小明"
         assert data["gender"] == "male"
         assert "birth_date" in data
