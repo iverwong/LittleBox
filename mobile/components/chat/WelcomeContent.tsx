@@ -13,9 +13,9 @@ import { Mascot } from '@/components/mascot/Mascot'
 import { api } from '@/services/api/client'
 
 /**
- * 后端 wire 字段名是 "id"（见 backend/app/schemas/children.py:ChildProfileOut），
- * 语义是 child 的 User.id（= ChildProfile.child_user_id）。
- * 在前端 type 中显式命名为 child_user_id，避免与 ChildProfile.id 混淆。
+ * GET /me/profile 响应类型。
+ * child_user_id 是 child 的 User.id（≠ ChildProfile.id PK）——见后端
+ * app/schemas/children.py:ChildProfileOut 上个 commit 的命名调整。
  */
 type ChildProfileOut = {
     child_user_id: string
@@ -30,24 +30,10 @@ export function WelcomeContent() {
     useEffect(() => {
         let cancelled = false
         const fetchProfile = async () => {
-            // 拉 wire：id 在此处是 User.id
-            const result = await api.get<{
-                id: string
-                nickname: string | null
-                gender: string
-                birth_date: string
-            }>('/me/profile')
+            const result = await api.get<ChildProfileOut>('/me/profile')
             if (cancelled) return
-            if (result.ok) {
-                const profile: ChildProfileOut = {
-                    child_user_id: result.data.id,
-                    nickname: result.data.nickname,
-                    gender: result.data.gender,
-                    birth_date: result.data.birth_date,
-                }
-                if (profile.nickname) {
-                    setNickname(profile.nickname)
-                }
+            if (result.ok && result.data.nickname) {
+                setNickname(result.data.nickname)
             }
             // 失败 / 404 / nickname 为 null：静默走 fallback 文案
         }
