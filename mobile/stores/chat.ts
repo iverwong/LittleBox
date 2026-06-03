@@ -599,7 +599,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // 绝不能拿它调 stopSession（会触发后端 asyncpg DataError）。本地 abort handle 即可：
     // onClose('abort') → _cleanupStream 收尾，等价于上面失败兜底分支（后端本就无可停）。
     if (sid === PENDING_SESSION_KEY) {
-      console.warn(
+      console.log(
         '[chatStore] stopStream: pending session, aborting locally without backend stop',
       );
       stream.handle.abort();
@@ -659,10 +659,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // 传 null sid 让 sendMessage 走 PENDING 路径开新 session；其顶部「清未达失败对」
     // 步骤会覆盖残留的 [0][1] 槽对。命中后直接结束，不再走需要 hid 的后端 regenerate。
     if (canResendAsNew(failedAi, orphanHuman)) {
-      console.log(
-        '[chatStore] regenerate: 未达后端场景，降级为新消息重发',
-        { sid },
-      );
+      console.log('[chatStore] regenerate: 未达后端场景，降级为新消息重发', {
+        sid,
+      });
       await get().sendMessage(null, orphanHuman.content);
       return;
     }
