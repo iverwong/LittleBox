@@ -850,7 +850,12 @@ async def chat_stream(
         # child 与 child_profile 强绑定（M4 创建流程）：profile 缺失是异常状态，
         # 不应静默兜底用默认人设喂 LLM，直接 404 让外层流程修复。
         # child_profile={} 字段保留作为家长端配置扩展点（实时生效，不缓存）。
-        child_profile = await db.get(ChildProfile, current.id)
+        # 按 child_user_id 查（不是 PK id —— ChildProfile.id 是 gen_random_uuid()，
+        # 跟 current.id 不同源；用 db.get 按 PK 查永远 miss，会让所有 child 走兜底
+        # 或 404 路径，见 f12171b 的隐式 bug 暴露）。
+        child_profile = await db.scalar(
+            select(ChildProfile).where(ChildProfile.child_user_id == current.id)
+        )
         if child_profile is None:
             raise HTTPException(404, "ChildProfileNotFound")
         from app.chat.prompts import compute_age
