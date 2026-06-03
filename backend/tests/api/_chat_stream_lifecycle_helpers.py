@@ -142,26 +142,13 @@ async def lifecycle_ctx(engine, redis_client, concurrent_db_sessions):
 
 
 async def seed_child_user(sess) -> User:
-    """Seed a child user + family using the given session.
+    """Seed a child user + family + ChildProfile (委托 conftest 的共享 helper)。
 
-    Returns the created User (committed).
+    Returns the created User (committed)。
     """
-    fam = Family()
-    sess.add(fam)
-    await sess.flush()
+    from tests.conftest import make_child_user_with_profile
 
-    user = User(
-        family_id=fam.id,
-        role=UserRole.child,
-        phone="0000",
-        is_active=True,
-    )
-    sess.add(user)
-    await sess.flush()
-
-    sess.add(FamilyMember(family_id=fam.id, user_id=user.id, role=UserRole.child))
-    await sess.commit()
-    return user
+    return await make_child_user_with_profile(sess)
 
 
 async def make_auth_headers(sess, redis_client, user) -> dict:

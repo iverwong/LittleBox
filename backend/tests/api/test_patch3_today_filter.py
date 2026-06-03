@@ -50,19 +50,6 @@ async def api_client(app):
 
 
 @pytest.fixture
-async def child_user(db_session):
-    fam = Family()
-    db_session.add(fam)
-    await db_session.flush()
-    user = User(family_id=fam.id, role=UserRole.child, phone="0007", is_active=True)
-    db_session.add(user)
-    await db_session.flush()
-    db_session.add(FamilyMember(family_id=fam.id, user_id=user.id, role=UserRole.child))
-    await db_session.commit()
-    return user
-
-
-@pytest.fixture
 async def auth_headers_child(db_session, redis_client, child_user):
     device_id = "test-device-g7"
     token = await issue_token(

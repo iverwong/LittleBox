@@ -100,27 +100,6 @@ async def api_client_with_eval(app_with_eval):
 
 
 @pytest.fixture
-async def child_user(db_session):
-    """Child + family (no ChildProfile — profile loading is deferred to 8c)."""
-    fam = Family()
-    db_session.add(fam)
-    await db_session.flush()
-
-    user = User(
-        family_id=fam.id,
-        role=UserRole.child,
-        phone="0000",
-        is_active=True,
-    )
-    db_session.add(user)
-    await db_session.flush()
-
-    db_session.add(FamilyMember(family_id=fam.id, user_id=user.id, role=UserRole.child))
-    await db_session.commit()
-    return user
-
-
-@pytest.fixture
 async def auth_headers_child(db_session, redis_client_with_eval, child_user):
     """Return (headers, child_user) with a valid child token + device-id."""
     device_id = "test-device-8b"

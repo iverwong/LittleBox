@@ -408,28 +408,52 @@ async def inactive_parent(db_session: AsyncSession) -> tuple:
     return user, pw
 
 
-@pytest_asyncio.fixture
-async def child_user(db_session: AsyncSession):
-    """种一个 child + family（无 password_hash）。"""
-    from app.models.accounts import Family, FamilyMember, User
-    from app.models.enums import UserRole
+async def make_child_user_with_profile(sess: AsyncSession):
+    """种一个 child + family + ChildProfile (commit 后返回 User)。
+
+    M4 创建流程强绑定 child_profile (fix me-childprofile-404 后, 缺失即 404,
+    不再静默兜底), 故任何需要走 chat stream 路由的测试都必须经本函数
+    种出 ChildProfile。pytest fixture `child_user` 与 lifecycle helper
+    `seed_child_user` 都委托给本函数, 避免 fixture 重复。
+    """
+    from datetime import date
+
+    from app.models.accounts import ChildProfile, Family, FamilyMember, User
+    from app.models.enums import Gender, UserRole
 
     fam = Family()
-    db_session.add(fam)
-    await db_session.flush()
+    sess.add(fam)
+    await sess.flush()
 
+    # child 不设 phone —— User.phone 注释明确"仅父账号"。
+    # 用 None 让 partial unique index `users.phone` (WHERE role='parent' AND
+    # is_active=true) 不会误伤, 也避免与 seeded_parent 假 phone 撞车。
     user = User(
         family_id=fam.id,
         role=UserRole.child,
-        phone="0000",  # 固定 phone，避免随机生成与 seeded_parent 冲突
         is_active=True,
     )
-    db_session.add(user)
-    await db_session.flush()
+    sess.add(user)
+    await sess.flush()
 
-    db_session.add(FamilyMember(family_id=fam.id, user_id=user.id, role=UserRole.child))
-    await db_session.commit()
+    sess.add(FamilyMember(family_id=fam.id, user_id=user.id, role=UserRole.child))
+    sess.add(
+        ChildProfile(
+            child_user_id=user.id,
+            created_by=user.id,
+            birth_date=date(2015, 1, 1),
+            gender=Gender.male,
+            nickname="test",
+        )
+    )
+    await sess.commit()
     return user
+
+
+@pytest_asyncio.fixture
+async def child_user(db_session: AsyncSession):
+    """种一个 child + family + ChildProfile (委托 make_child_user_with_profile)。"""
+    return await make_child_user_with_profile(db_session)
 
 
 @pytest_asyncio.fixture
