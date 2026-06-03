@@ -847,15 +847,16 @@ async def chat_stream(
             raise HTTPException(403, "SessionForbidden")
 
         # ---- 准备 child_profile 数据（无 DB 写入依赖） ----
+        # child 与 child_profile 强绑定（M4 创建流程）：profile 缺失是异常状态，
+        # 不应静默兜底用默认人设喂 LLM，直接 404 让外层流程修复。
+        # child_profile={} 字段保留作为家长端配置扩展点（实时生效，不缓存）。
         child_profile = await db.get(ChildProfile, current.id)
-        if child_profile is not None:
-            from app.chat.prompts import compute_age
+        if child_profile is None:
+            raise HTTPException(404, "ChildProfileNotFound")
+        from app.chat.prompts import compute_age
 
-            _age = compute_age(child_profile.birth_date)
-            _gender = child_profile.gender.value if child_profile.gender else None
-        else:
-            _age = 8  # 兜底默认值
-            _gender = None
+        _age = compute_age(child_profile.birth_date)
+        _gender = child_profile.gender.value if child_profile.gender else None
 
         # ---- decision matrix O + first-turn / subsequent-turn transaction ----
         last_msg = (
