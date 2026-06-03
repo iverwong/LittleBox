@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +22,7 @@ from app.schemas.accounts import CurrentAccount
 
 
 async def get_current_account(
+    request: Request,
     authorization: Annotated[str | None, Header()] = None,
     x_device_id: Annotated[str | None, Header(alias="X-Device-Id")] = None,
     db: Annotated[AsyncSession, Depends(get_db)] = ...,  # type: ignore[assignment]
@@ -34,10 +35,15 @@ async def get_current_account(
     2. resolve_token 查 Redis → miss 查 DB → 回填 Redis
     3. 比对 X-Device-Id header 与 payload.device_id，不匹配则吊销并 401
     4. 若 needs_roll(parent token 今日首次续期) 则调用 roll_token_expiry + commit_with_redis
+
+    副作用：把解析出的明文 token 写入 `request.state.token`，
+    供同请求链上的 handler（如 /auth/logout）直接 `revoke_token`，
+    避免二次 split Authorization header。
     """
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing bearer token")
     token = authorization.split(" ", 1)[1].strip()
+    request.state.token = token
     payload = await resolve_token(db, redis, token)
     if payload is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid or expired token")

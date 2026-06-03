@@ -24,6 +24,7 @@ from app.models.accounts import User
 from app.models.enums import UserRole
 from app.schemas.accounts import (
     AccountOut,
+    CurrentAccount,
     LoginRequest,
     LoginResponse,
 )
@@ -73,17 +74,22 @@ async def _check_login_limit(redis: Redis, phone: str, ip: str | None) -> None:
     """
     phone_count = int(await redis.get(f"login_fail:phone:{phone}") or 0)
     if phone_count >= LOGIN_PHONE_LIMIT:
-        raise HTTPException(429, "too many attempts; try again later")
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many attempts; try again later")
     if ip is not None:
         ip_count = int(await redis.get(f"login_fail:ip:{ip}") or 0)
         if ip_count >= LOGIN_IP_LIMIT:
-            raise HTTPException(429, "too many attempts; try again later")
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many attempts; try again later")
 
 
 async def _incr_login_fail(redis: Redis, phone: str, ip: str | None) -> None:
     """失败一次，递增 phone 桶 (ip=None 时跳过 IP 桶)。
 
     同样地, IP 不可信时不递增 IP 计数 —— 不让 "unknown" 共享桶被建立。
+
+    Redis 写入策略: 失败路径无 DB 状态变更, 走 redis.pipeline 直写,
+    不经 stage_redis_op/commit_with_redis (避免一次多余的 commit 触发)。
+    成功路径 (login) 走 staging, 随 commit_with_redis 一起 flush,
+    保证 DB token 签发 + Redis 计数清零的原子性。
     """
     async with redis.pipeline(transaction=False) as pipe:
         pipe.incr(f"login_fail:phone:{phone}")
@@ -156,14 +162,18 @@ async def login(
     )
 
 
-@router.post("/logout", status_code=204)
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(
-    authorization: Annotated[str, Header()],
-    current: Annotated[User, Depends(require_parent)],
+    request: Request,
+    current: Annotated[CurrentAccount, Depends(require_parent)],
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> None:
-    """主动下线当前父账号 token。限 parent。"""
-    token = authorization.split(" ", 1)[1].strip()
-    await revoke_token(db, token)
+    """主动下线当前父账号 token。限 parent。
+
+    token 从 `request.state.token` 取 (get_current_account 已 stash),
+    不再二次 split Authorization header —— 避免前次审查发现的
+    "Authorization: Bearer / Token xxx" 静默 no-op 漏洞。
+    """
+    await revoke_token(db, request.state.token)
     await commit_with_redis(db, redis)
