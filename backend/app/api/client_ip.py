@@ -1,65 +1,50 @@
 """客户端 IP 解析 —— 全局唯一的 IP 提取点。
 
-散落在各路由里的 `request.client.host` 读取行为在此收敛;
-未来部署到反代后 (nginx / ALB) 时, 只需在 Settings 开 trust_proxy_headers
-+ uvicorn 启动加 --forwarded-allow-ips, 即可识别真实客户端 IP, 业务代码无改动。
+反代部署契约 (重要):
+    本函数不做 X-Forwarded-For / X-Real-IP 解析。那条路会引入
+    "信任客户端伪造头" 的旁路:
+
+        经 nginx ($proxy_add_x_forwarded_for) 后, 头变成
+            X-Forwarded-For: <attacker>, <real-client>
+        最左段恰恰是攻击者可控的那一段。取最左段等于让客户端
+        自报家门, 限流被绕过, 也可定向投毒。
+
+    即便契约要求 "uvicorn --forwarded-allow-ips=<反代 CIDR>" 配齐,
+    该参数只净化 scope["client"] (uvicorn 层职责), 不会触碰 app
+    自己直接读的原始 XFF 头。所以本函数绝不在 app 层解析 XFF。
+
+    反代部署应让 uvicorn 的 ProxyHeadersMiddleware 完成 IP 净化:
+        uvicorn app.main:app --proxy-headers \\
+            --forwarded-allow-ips=<反代 IP 或 CIDR>
+    uvicorn 据此:
+        1. 校验直接 peer IP 是否在 --forwarded-allow-ips 白名单
+        2. 是 → 取 XFF 最右一个非可信跳, 写入 scope["client"].host
+        3. 否 → 忽略 XFF, scope["client"] 保留真实 peer IP
+
+    之后本函数返回的就是 uvicorn 净化后的客户端 IP, 业务代码无
+    任何额外信任判断, 也不再有可被伪造的接缝。
+
+历史: 早期实现曾在 app 层做 XFF 最左段解析, 已删除。
+trust_proxy_headers / LB_TRUST_PROXY_HEADERS 已同步移除, 不再使用。
 
 None 语义:
-    返回 None 表示"无法解析出可信的客户端 IP" —— 通常是
-    (a) 裸 socket 部署且 ASGI scope 未传 client
-    (b) request.client.host 为空
-    调用方 (如限流) 应将 None 视为"不参与该维度限流", 而非塞进
-    "unknown" 共享桶 —— 共享桶会被不同物理客户端合并, 触发误伤式 DoS。
+    返回 None 表示 ASGI scope 未传 client (常见于裸 socket 部署
+    或 ASGI 异常)。调用方 (如限流) 应将 None 视为"不参与该维度限流",
+    而非塞进 "unknown" 共享桶。
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
-
 from fastapi import Request
 
-if TYPE_CHECKING:
-    pass
 
+def get_client_ip(request: Request) -> str | None:
+    """返回 uvicorn 净化后的客户端 IP, 无 client 信息时返回 None。
 
-class _SettingsLike(Protocol):
-    """仅依赖 trust_proxy_headers 字段, 便于单测传入轻量替身。"""
-
-    trust_proxy_headers: bool
-
-
-def get_client_ip(request: Request, settings: _SettingsLike) -> str | None:
-    """解析 request 的客户端 IP, 无法解析时返回 None。
-
-    Args:
-        request: FastAPI/Starlette Request 对象。
-        settings: 任意含 `trust_proxy_headers: bool` 字段的对象
-            (生产用 app.config.Settings, 单测可传 SimpleNamespace 等)。
-
-    Returns:
-        解析到的 IP 字符串; 解析不到返回 None (NOT "unknown")。
-
-    解析优先级 (trust_proxy_headers=True 时):
-        1. X-Forwarded-For 首段 (逗号分隔, 去空白)
-        2. X-Real-IP
-        3. 回退到 request.client.host
-
-    trust_proxy_headers=False 时:
-        1. 直接返回 request.client.host
-        2. request.client 为 None 或 host 为空 → 返回 None
+    不解析 XFF / X-Real-IP / 任何代理头 —— 见模块级契约注释。
+    反代净化由 uvicorn ProxyHeadersMiddleware 负责 (启动时
+    配 --forwarded-allow-ips)。
     """
-    if settings.trust_proxy_headers:
-        xff = request.headers.get("x-forwarded-for")
-        if xff:
-            first = xff.split(",")[0].strip()
-            if first:
-                return first
-        xri = request.headers.get("x-real-ip")
-        if xri:
-            stripped = xri.strip()
-            if stripped:
-                return stripped
-
     if request.client and request.client.host:
         return request.client.host
     return None

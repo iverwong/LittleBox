@@ -20,7 +20,6 @@ from app.auth.tokens import (
     revoke_all_active_tokens,
     revoke_token,
 )
-from app.config import settings
 from app.db import get_db
 from app.models.accounts import User
 from app.models.enums import UserRole
@@ -76,12 +75,11 @@ async def login(
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> LoginResponse:
     """父账号登录：phone + password → opaque token。"""
-    client_ip = get_client_ip(request, settings)
+    client_ip = get_client_ip(request)
     if client_ip is None:
-        # 解析不到可信 IP —— 通常是裸 socket 部署 + scope.client 缺失,
-        # 或者是反代没配 forwarded-allow-ips 又 trust_proxy_headers=True 的误配。
-        # 这里只 WARN 不阻断 (fail-open): phone 桶仍在, 单账号爆破被卡住。
-        # 部署到反代后此日志应消失; 持续出现说明信任链断了。
+        # 解析不到 peer IP —— 裸 socket 部署 + scope.client 缺失
+        # 或 ASGI 异常。这里只 WARN 不阻断 (fail-open): phone 桶仍在,
+        # 单账号爆破被卡住。生产 uvicorn 直连下此日志不应出现。
         logger.warning(
             "login without resolvable client IP path=%s ua=%r",
             request.url.path,
