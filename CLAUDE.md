@@ -142,7 +142,10 @@ Note: `(group)` directories are expo-router groups — they group routes without
 - **Parent token**: 7-day rolling, renewed on each request if last_rolled_date != today (Asia/Shanghai); child tokens never expire
 - **Child bind flow**: Parent generates `bind_token` (16-byte, 5min TTL in Redis) → QR code → child scans via `POST /api/v1/bind-tokens/{bind_token}/redeem`
 - **Auth depends**: `get_current_account` → `require_parent` / `require_child` role guards
-- **Device binding**: All tokens bound to `X-Device-Id` header; mismatches trigger immediate revocation
+- **Device binding (两阶段)**:
+  - **签发阶段** — 父端 `POST /api/v1/auth/login` body 携带 `device_id` (Expo SecureStore 持久化的 UUID v4), 写入 `auth_tokens.device_id` 列 (永久绑定)。
+  - **校验阶段** — `get_current_account` 依赖在每次受保护请求上比对 `X-Device-Id` header 与 DB 中 device_id, 不匹配立即 revoke + 401。
+  - 两阶段必须同源 (登录时的 device_id == 后续请求的 X-Device-Id), 任一缺失 / 不一致都触发吊销。CLAUDE.md 早期描述"X-Device-Id header required; missing → 422"只覆盖校验阶段, 签发阶段是 body 字段, 别混。
 
 ### Streaming Architecture (M3, stable)
 
@@ -207,6 +210,7 @@ The following files are M3/M4 temporary artifacts scheduled for deletion at M7:
 - **`messages.role`**: DB stores `human`/`ai` (not `user`/`assistant`), aligned with LangChain `HumanMessage`/`AIMessage`.
 - **pgAdmin port**: Mapped to `16050:5050` (not `5050:5050`) to avoid conflict.
 - **RedisInsight port**: Mapped to `16540:5540` (not `5540:5540`).
+- **HTTPException 状态码**: 必须 `from fastapi import status` + 用 `status.HTTP_xxx_xxx` 常量 (如 `status.HTTP_404_NOT_FOUND`), 禁止裸数字 (`HTTPException(404, ...)`)。便于 IDE 跳转 / 全局审计 / 改名一处生效。`status_code=...` 在路由装饰器里同样规则 (`status_code=status.HTTP_204_NO_CONTENT`)。
 
 ### Test Isolation Discipline (M6-patch)
 - **所有涉及 DB / Redis 的测试必须通过 conftest fixture 进入**：

@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,7 +57,7 @@ async def create_bind_token(
     )
     child = (await db.execute(stmt)).scalar_one_or_none()
     if child is None:
-        raise HTTPException(404, "child not found in family")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "child not found in family")
 
     token = await issue_bind_token(
         redis, parent_user_id=parent.id, child_user_id=child.id,
@@ -88,7 +88,7 @@ async def get_bind_token_status(
     if await redis.exists(f"{BIND_KEY_PREFIX}{bind_token}"):
         return BindTokenStatusOut(status="pending")
     # 3) 两者皆无 → bind_token 已过期且未兑换（或根本不存在）
-    raise HTTPException(404, "bind token not found or expired")
+    raise HTTPException(status.HTTP_404_NOT_FOUND, "bind token not found or expired")
 
 
 @router.post("/{bind_token}/redeem", response_model=LoginResponse)
@@ -106,11 +106,11 @@ async def redeem_bind_token(
     # 由 commit_with_redis 统一 flush（DB 回滚则 bind_token 保留，5min TTL 内可重试）
     peeked = await peek_bind_token(redis, bind_token)
     if peeked is None:
-        raise HTTPException(400, "bind token invalid or expired")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "bind token invalid or expired")
     _parent_id, child_id = peeked
     child = await db.get(User, child_id)
     if child is None or not child.is_active or child.role != UserRole.child:
-        raise HTTPException(400, "child account unavailable")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "child account unavailable")
 
     # 新设备扫码吊销该 child 所有活跃 token（与 /auth/login 对齐）
     await revoke_all_active_tokens(db, child.id)

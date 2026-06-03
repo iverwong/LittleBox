@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from redis.asyncio import Redis
 from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -148,7 +148,7 @@ async def revoke_child_tokens(
     )
     child = (await db.execute(stmt)).scalar_one_or_none()
     if child is None:
-        raise HTTPException(404, "child not found in family")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "child not found in family")
     await revoke_all_active_tokens(db, child.id)
     await commit_with_redis(db, redis)
 
@@ -176,7 +176,7 @@ async def delete_child(
     )
     child = (await db.execute(stmt)).scalar_one_or_none()
     if child is None:
-        raise HTTPException(404, "child not found in family")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "child not found in family")
 
     await hard_delete_child(db, child_user_id=child_user_id, requested_by=parent.id)
     await commit_with_redis(db, redis)
