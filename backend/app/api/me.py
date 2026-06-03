@@ -872,6 +872,12 @@ async def chat_stream(
 
         hid: UUID  # human 消息 ID，用于 session_meta 事件
         user_msg: Message | None = None  # 追踪本轮新增的 human message，供 commit① 用
+        # Row 6 复用孤儿行时，从 last_msg.content 取值给 ctx.user_input：
+        #   孤儿 turn_number == _turn_number（AI 没落库 → ai_turn_counter 未自增），
+        #   load_active_history_for_assembly(until_turn=_turn_number) 会按 < _turn_number
+        #   过滤把孤儿排掉；W1 末位 HumanMessage 用 ctx.user_input 拼装，若不喂原始
+        #   问题文本则 LLM 收到空 user 轮（仅在 regenerate 路径出现，Row 1/3/5 无影响）。
+        _regen_user_input: str | None = None
 
         if last_msg is None:
             # Row 1 或 Row 2
@@ -938,6 +944,7 @@ async def chat_stream(
                         raise HTTPException(400, "RegenerateForInvalid")
                     hid = last_msg.id
                     # user_msg 保持 None — 复用已有消息，不新增
+                    _regen_user_input = last_msg.content  # 喂入 ctx.user_input（见上方注释）
                 else:
                     # Row 7：孤儿 + ≠hid → 400
                     raise HTTPException(400, "RegenerateForInvalid")
@@ -964,7 +971,9 @@ async def chat_stream(
             child_profile={},
             age=_age,
             gender=_gender,
-            user_input=req.content,
+            user_input=(
+                _regen_user_input if _regen_user_input is not None else req.content
+            ),
             settings=rr.settings,
             db_session_factory=rr.db_session_factory,
             audit_redis=rr.audit_redis,
