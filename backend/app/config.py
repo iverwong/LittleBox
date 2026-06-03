@@ -57,6 +57,15 @@ class Settings(BaseSettings):
     chat_queue_maxsize: int = 128
     # M9-patch1: 段一每帧降速钩子（默认 0.0 不触发，>0 时段一每帧 sleep）
     chat_stream_interval_s: float = 0.0
+    # M4.8-patch: 是否信任 X-Forwarded-For / X-Real-IP 解析客户端 IP
+    # 默认 False —— 裸 uvicorn TCP 部署下保持原行为（peer IP 即真实客户端 IP）。
+    # 若部署到 nginx / ALB 后面, 必须同时:
+    #   1) 启动 uvicorn 时加 --forwarded-allow-ips=<反代 IP 或 CIDR>
+    #   2) 配 LB_TRUST_PROXY_HEADERS=true
+    # 缺一不可: 缺 1 则信任链断开, 攻击者可伪造头绕过 IP 限流;
+    #          缺 2 则无法识别真实客户端, 所有用户共享反代内网 IP,
+    #          退化为"全员锁登录"。
+    trust_proxy_headers: bool = False
 
     model_config = {"env_prefix": "LB_", "env_file": ".env"}
 
