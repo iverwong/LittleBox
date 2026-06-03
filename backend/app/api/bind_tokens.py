@@ -14,9 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.bind import (
     BIND_KEY_PREFIX,
     BIND_RESULT_KEY_PREFIX,
+    consume_bind_token,
     issue_bind_token,
-    peek_bind_token,
-    stage_consume_bind_token,
     stage_record_bind_result,
 )
 from app.auth.deps import require_parent
@@ -101,13 +100,19 @@ async def redeem_bind_token(
     """子端扫码后换取永久 child token；同时吊销该 child 所有老 token。
 
     bind_token 从 path param 取；body 仅携带 device_id（device_info B0 不再由客户端传入）。
+
+    TODO(redeem-family-check):拿到 parent_id_at_issue 后补 family 边界校验
+    (parent_at_issue.family_id == child.family_id + parent is_active + role=parent),
+    防御运维 SQL 误改 family_id / 未来分家转交 API。详情见 review notes。
     """
-    # peek 不删；DB 写入成功后 stage_consume_bind_token 入 staging，
-    # 由 commit_with_redis 统一 flush（DB 回滚则 bind_token 保留，5min TTL 内可重试）
-    peeked = await peek_bind_token(redis, bind_token)
+    # consume 用 Redis GETDEL 原子「读+删」:并发 redeem 第二个必拿 None,
+    # 杜绝双发 token。bind_token 拿到后无论 DB 写入成败都不可重试(故意为之,
+    # 与 CLAUDE.md「DB 是 source of truth」一致:若 DB 无 auth_token 记录,
+    # 客户端即使拿到 bind_token 也不该再有重试机会)。
+    peeked = await consume_bind_token(redis, bind_token)
     if peeked is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "bind token invalid or expired")
-    _parent_id, child_id = peeked
+    _parent_id_at_issue, child_id = peeked  # noqa: F841  # TODO(redeem-family-check)
     child = await db.get(User, child_id)
     if child is None or not child.is_active or child.role != UserRole.child:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "child account unavailable")
@@ -123,8 +128,7 @@ async def redeem_bind_token(
         device_id=payload.device_id,
         device_info=None,  # B0: device_info no longer passed by client
     )
-    stage_consume_bind_token(db, bind_token)
-    # 同时 stage 一条 bind_result 供父端轮询端点读；DB 回滚则两条同时丢，父端保持看到 pending
+    # stage 一条 bind_result 供父端轮询端点读;DB 回滚则此条也不 flush,父端保持看到 pending
     stage_record_bind_result(db, bind_token, child.id)
     await commit_with_redis(db, redis)
     return LoginResponse(

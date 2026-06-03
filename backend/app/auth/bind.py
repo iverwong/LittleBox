@@ -1,4 +1,10 @@
-"""child 绑定 token：纯 Redis 写（issue / peek / stage_consume）。"""
+"""child 绑定 token：纯 Redis 写（issue / consume / record_result）。
+
+设计：bind_token 是 5min 一次性凭证。consume 用 Redis GETDEL 原子「读+删」,
+并发 redeem 第二个必拿 None，杜绝双发 token。DB 写入失败时 bind_token 不再可
+重试——这是有意为之,与 CLAUDE.md「DB 是 source of truth」一致(若 DB 无
+auth_token 记录,客户端即使拿到 bind_token 也不该再有重试机会)。
+"""
 from __future__ import annotations
 
 import json
@@ -35,21 +41,19 @@ async def issue_bind_token(
     return token
 
 
-async def peek_bind_token(
+async def consume_bind_token(
     redis: Redis, bind_token: str,
 ) -> Optional[tuple[uuid.UUID, uuid.UUID]]:
-    """只 GET 不删。后续 DB 写入 + stage_consume_bind_token + commit_with_redis
-    完成后才真正把 bind_token 从 Redis 删掉，DB 回滚则自动放弃删除（bind_token
-    还在 5min TTL 内可重试）。"""
-    raw = await redis.get(f"{BIND_KEY_PREFIX}{bind_token}")
+    """GETDEL：原子地「读+删」,并发 redeem 第二个必拿 None。
+
+    返回 (parent_user_id, child_user_id) 供调用方做 family 边界/角色等校验。
+    bind_token 一旦被 consume 即不可重试(无论后续 DB 写入成败)。
+    """
+    raw = await redis.getdel(f"{BIND_KEY_PREFIX}{bind_token}")
     if raw is None:
         return None
     data = json.loads(raw)
     return uuid.UUID(data["parent_user_id"]), uuid.UUID(data["child_user_id"])
-
-
-def stage_consume_bind_token(db: AsyncSession, bind_token: str) -> None:
-    stage_redis_op(db, RedisOp(kind="delete", key=f"{BIND_KEY_PREFIX}{bind_token}"))
 
 
 def stage_record_bind_result(
