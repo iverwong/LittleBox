@@ -137,7 +137,7 @@ async def redeem_bind_token(
             id=child.id,
             role=child.role,
             family_id=child.family_id,
-            phone=None,
-            is_active=True,
+            phone=child.phone,
+            is_active=child.is_active,
         ),
     )
