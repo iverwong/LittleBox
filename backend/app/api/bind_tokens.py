@@ -30,6 +30,7 @@ from app.schemas.accounts import (
     BindTokenResponse,
     BindTokenStatusOut,
     CreateBindTokenRequest,
+    CurrentAccount,
     LoginResponse,
     RedeemBindTokenRequest,
 )
@@ -40,7 +41,7 @@ router = APIRouter(prefix="/api/v1/bind-tokens", tags=["bind_tokens"])
 @router.post("", response_model=BindTokenResponse, status_code=201)
 async def create_bind_token(
     payload: CreateBindTokenRequest,
-    parent: Annotated[User, Depends(require_parent)],
+    parent: Annotated[CurrentAccount, Depends(require_parent)],
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> BindTokenResponse:
