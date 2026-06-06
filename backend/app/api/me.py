@@ -42,17 +42,17 @@ from app.chat.sse import build_flow_pause_frame, stream_graph_to_sse
 from app.core.db import get_db
 from app.core.runtime import RuntimeResources
 from app.domain.accounts.schemas import AccountOut, ChildProfileOut, CurrentAccount
-from app.models.accounts import ChildProfile, User
-from app.models.chat import Message
-from app.models.chat import Session as SessionModel
-from app.models.enums import InterventionType, MessageRole, MessageStatus, SessionStatus
-from app.schemas.sessions import (
+from app.domain.chat.schemas import (
     ChatStreamRequest,
     MessageListItem,
     MessageListResponse,
     SessionListItem,
     SessionListResponse,
 )
+from app.models.accounts import ChildProfile, User
+from app.models.chat import Message
+from app.models.chat import Session as SessionModel
+from app.models.enums import InterventionType, MessageRole, MessageStatus, SessionStatus
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/me", tags=["me"])

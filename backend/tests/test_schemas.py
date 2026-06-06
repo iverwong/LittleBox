@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 import uuid
 
-from app.schemas.sessions import SessionListResponse, SessionListItem
+from app.domain.chat.schemas import SessionListResponse, SessionListItem
 
 
 class TestSessionListResponse:
