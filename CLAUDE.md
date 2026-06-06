@@ -154,3 +154,13 @@ mobile/
 - **HTTPException 状态码**: 必须 `from fastapi import status` + 用 `status.HTTP_xxx_xxx` 常量(例如 `status.HTTP_404_NOT_FOUND`),禁止裸数字 (`HTTPException(404, ...)`)。便于 IDE 跳转/全局审计/改名一处生效。`status_code=...` 在路由装饰器里同样规则 (`status_code=status.HTTP_204_NO_CONTENT`)
 - **Python 3.14 PEP 758**: `except` / `except*` 支持不带括号的多个异常类型 (`except A, B:`)
 - **`messages.role`**: DB 存 `human`/`ai`(不是 `user`/`assistant`),对齐 LangChain `HumanMessage`/`AIMessage`
+
+### 静态检查与格式
+
+后端用 **ruff**(lint + format)和 **basedpyright**(类型检查),配置都在 `backend/pyproject.toml`。提交前在容器内跑一下:
+
+```
+docker compose exec api ruff check app
+docker compose exec api ruff format app
+docker compose exec api basedpyright app
+```
