@@ -62,7 +62,7 @@ class TestSseFrameOrderGreen:
         防止 call_redline_llm 调用真实 API。
         """
         from datetime import datetime, timezone
-        from app.state.audit_signals import AuditSignalsManager
+        from app.domain.audit.signals import AuditSignalsManager
         from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
 
         child, headers = await seed_integration_child(integration_runtime)

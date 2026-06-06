@@ -18,7 +18,7 @@ import pytest
 from app.chat.graph import load_audit_state
 from app.chat.state import MainDialogueState
 from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
-from app.state.audit_signals import AuditWaitResult
+from app.domain.audit.signals import AuditWaitResult
 
 pytestmark = [
     pytest.mark.audit,

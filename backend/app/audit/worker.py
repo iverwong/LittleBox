@@ -29,7 +29,7 @@ from arq.connections import RedisSettings
 
 from app.audit.graph import AuditGraphState
 from app.core.config import settings
-from app.state.audit_signals import AuditSignalsManager
+from app.domain.audit.signals import AuditSignalsManager
 
 logger = logging.getLogger("audit.worker")
 

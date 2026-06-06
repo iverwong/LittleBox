@@ -70,7 +70,7 @@ def _make_ctx(
     turn: int = 1,
 ) -> dict:
     """构造模拟 ARQ ctx，含 RuntimeResources + signals_manager。"""
-    from app.state.audit_signals import AuditSignalsManager
+    from app.domain.audit.signals import AuditSignalsManager
     from fakeredis.aioredis import FakeRedis
 
     redis = FakeRedis(decode_responses=True)

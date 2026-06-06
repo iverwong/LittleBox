@@ -48,10 +48,10 @@ from app.chat.prompts import (
 )
 from app.chat.state import AuditState, MainDialogueState
 from app.core.config import settings
+from app.domain.audit.signals import AuditSignalsManager
 from app.models.audit import RollingSummary
 from app.models.chat import Message, Session
 from app.models.enums import InterventionType, MessageRole, MessageStatus
-from app.state.audit_signals import AuditSignalsManager
 
 if TYPE_CHECKING:
     from arq.connections import ArqRedis

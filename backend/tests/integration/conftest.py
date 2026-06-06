@@ -363,7 +363,7 @@ async def arq_worker(integration_runtime: Any) -> AsyncGenerator[Callable[[], in
     from arq import Worker
 
     from app.audit.worker import WORKER_SETTINGS
-    from app.state.audit_signals import AuditSignalsManager
+    from app.domain.audit.signals import AuditSignalsManager
 
     rr = integration_runtime
 

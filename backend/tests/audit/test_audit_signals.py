@@ -7,7 +7,7 @@ import pytest
 from fakeredis.aioredis import FakeRedis
 
 from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
-from app.state.audit_signals import AuditSignalsManager
+from app.domain.audit.signals import AuditSignalsManager
 
 pytestmark = pytest.mark.audit
 

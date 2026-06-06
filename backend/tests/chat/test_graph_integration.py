@@ -477,7 +477,7 @@ class TestAuditStateCascade:
 
         from app.chat.graph import _pg_crisis_fallback
         from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
-        from app.state.audit_signals import AuditWaitResult
+        from app.domain.audit.signals import AuditWaitResult
 
         # AuditOutputSchema validation: guidance 必填 string；crisis_topic/redline_detail
         # 在对应 trigger=True 时必须非空。

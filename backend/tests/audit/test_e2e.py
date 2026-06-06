@@ -13,7 +13,7 @@ from fakeredis.aioredis import FakeRedis
 
 from app.chat.graph import enqueue_audit
 from app.audit.worker import run_audit
-from app.state.audit_signals import AuditSignalsManager
+from app.domain.audit.signals import AuditSignalsManager
 from app.models.accounts import Family, FamilyMember, User
 from app.models.enums import UserRole
 from app.models.chat import Session as SessionModel
