@@ -63,7 +63,7 @@ class TestSseFrameOrderGreen:
         """
         from datetime import datetime, timezone
         from app.state.audit_signals import AuditSignalsManager
-        from app.schemas.audit import AuditDimensionScores, AuditOutputSchema
+        from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
 
         child, headers = await seed_integration_child(integration_runtime)
         set_test_llm("deepseek", FakeMainLLM())

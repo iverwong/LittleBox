@@ -17,7 +17,7 @@ from app.state.audit_signals import AuditSignalsManager
 from app.models.accounts import Family, FamilyMember, User
 from app.models.enums import UserRole
 from app.models.chat import Session as SessionModel
-from app.schemas.audit import AuditDimensionScores, AuditOutputSchema
+from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
 
 pytestmark = pytest.mark.audit
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.audit import (
+from app.domain.audit.schemas import (
     AppendNote,
     AuditDimensionScores,
     AuditOutputSchema,

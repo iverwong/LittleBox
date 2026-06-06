@@ -22,8 +22,8 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
+from app.domain.audit.schemas import AuditOutputSchema, TurnSummaryEntry
 from app.models.audit import AuditRecord, RollingSummary
-from app.schemas.audit import AuditOutputSchema, TurnSummaryEntry
 
 logger = logging.getLogger("audit.db")
 

@@ -16,7 +16,7 @@ import pytest
 
 from app.audit.worker import MAX_TRIES, run_audit
 from app.core.runtime import RuntimeResources
-from app.schemas.audit import AuditDimensionScores, AuditOutputSchema
+from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
 
 pytestmark = pytest.mark.audit
 

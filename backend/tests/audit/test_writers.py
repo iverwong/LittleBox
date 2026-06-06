@@ -12,7 +12,7 @@ from app.audit.writers import write_audit_results
 from app.models.accounts import Family, User
 from app.models.audit import RollingSummary
 from app.models.enums import UserRole
-from app.schemas.audit import (
+from app.domain.audit.schemas import (
     AuditDimensionScores,
     AuditOutputSchema,
 )

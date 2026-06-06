@@ -14,7 +14,7 @@ from typing import Literal
 from pydantic import ValidationError
 from redis.asyncio import Redis
 
-from app.schemas.audit import AuditOutputSchema, AuditSignalsPayload
+from app.domain.audit.schemas import AuditOutputSchema, AuditSignalsPayload
 
 logger = logging.getLogger("audit.signals")
 

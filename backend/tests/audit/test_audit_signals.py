@@ -6,7 +6,7 @@ import asyncio
 import pytest
 from fakeredis.aioredis import FakeRedis
 
-from app.schemas.audit import AuditDimensionScores, AuditOutputSchema
+from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
 from app.state.audit_signals import AuditSignalsManager
 
 pytestmark = pytest.mark.audit
