@@ -1,4 +1,5 @@
 """bind_tokens 路由：绑定凭证完整生命周期（创建 / status / redeem）。"""
+
 from __future__ import annotations
 
 import json
@@ -23,17 +24,16 @@ from app.auth.redis_client import get_redis
 from app.auth.redis_ops import commit_with_redis
 from app.auth.tokens import issue_token, revoke_all_active_tokens
 from app.core.db import get_db
-from app.models.accounts import User
-from app.models.enums import UserRole
-from app.schemas.accounts import (
-    AccountOut,
+from app.domain.accounts.schemas import AccountOut, CurrentAccount
+from app.domain.auth.schemas import (
     BindTokenResponse,
     BindTokenStatusOut,
     CreateBindTokenRequest,
-    CurrentAccount,
     LoginResponse,
     RedeemBindTokenRequest,
 )
+from app.models.accounts import User
+from app.models.enums import UserRole
 
 router = APIRouter(prefix="/api/v1/bind-tokens", tags=["bind_tokens"])
 
@@ -60,7 +60,9 @@ async def create_bind_token(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "child not found in family")
 
     token = await issue_bind_token(
-        redis, parent_user_id=parent.id, child_user_id=child.id,
+        redis,
+        parent_user_id=parent.id,
+        child_user_id=child.id,
     )
     return BindTokenResponse(bind_token=token)
 

@@ -41,12 +41,11 @@ from app.chat.session_policy import (
 from app.chat.sse import build_flow_pause_frame, stream_graph_to_sse
 from app.core.db import get_db
 from app.core.runtime import RuntimeResources
+from app.domain.accounts.schemas import AccountOut, ChildProfileOut, CurrentAccount
 from app.models.accounts import ChildProfile, User
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
 from app.models.enums import InterventionType, MessageRole, MessageStatus, SessionStatus
-from app.schemas.accounts import AccountOut, CurrentAccount
-from app.schemas.children import ChildProfileOut
 from app.schemas.sessions import (
     ChatStreamRequest,
     MessageListItem,
@@ -396,7 +395,8 @@ async def _run_llm_pipeline(
                     if has_emitted_content:
                         # StopWithAi：persist_ai_turn 写 ai 行 + 自增 → usage 记账 → commit → audit
                         aid = await persist_ai_turn(
-                            db, sid,
+                            db,
+                            sid,
                             content=accumulated,
                             finish_reason="user_stopped",
                             turn_number=turn_number,
@@ -429,7 +429,8 @@ async def _run_llm_pipeline(
                 else:
                     # 自然结束：persist_ai_turn 写 ai 行 + 自增 → usage 记账 → commit → audit
                     aid = await persist_ai_turn(
-                        db, sid,
+                        db,
+                        sid,
                         content=accumulated,
                         finish_reason=last_finish_reason,
                         turn_number=turn_number,
@@ -969,9 +970,7 @@ async def chat_stream(
             child_profile={},
             age=_age,
             gender=_gender,
-            user_input=(
-                _regen_user_input if _regen_user_input is not None else req.content
-            ),
+            user_input=(_regen_user_input if _regen_user_input is not None else req.content),
             settings=rr.settings,
             db_session_factory=rr.db_session_factory,
             audit_redis=rr.audit_redis,

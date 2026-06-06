@@ -1,4 +1,5 @@
 """FastAPI Depends：get_current_account / require_parent / require_child。"""
+
 from __future__ import annotations
 
 from typing import Annotated
@@ -17,8 +18,8 @@ from app.auth.tokens import (
     token_hash,
 )
 from app.core.db import get_db  # type: ignore[attr-defined]
+from app.domain.accounts.schemas import CurrentAccount
 from app.models.enums import UserRole
-from app.schemas.accounts import CurrentAccount
 
 
 async def get_current_account(
@@ -58,7 +59,9 @@ async def get_current_account(
     # 每日首次续期（parent 生效；子 token expires_at=None 时 needs_roll 永远 False）
     if needs_roll(payload):
         payload = await roll_token_expiry(
-            db, token_hash_hex=token_hash(token), payload=payload,
+            db,
+            token_hash_hex=token_hash(token),
+            payload=payload,
         )
         await commit_with_redis(db, redis)
 

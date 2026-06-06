@@ -253,7 +253,7 @@ class TestRequireParent:
         # 等等，Step 5 才有 parent-only 端点...
         # 临时方案：直接 import require_parent 测
         from app.auth.deps import require_parent
-        from app.schemas.accounts import CurrentAccount
+        from app.domain.accounts.schemas import CurrentAccount
 
         child_account = CurrentAccount(
             id=child_user.id,
@@ -271,7 +271,7 @@ class TestRequireChild:
     @pytest.mark.asyncio
     async def test_parent_token_returns_403(self) -> None:
         from app.auth.deps import require_child
-        from app.schemas.accounts import CurrentAccount
+        from app.domain.accounts.schemas import CurrentAccount
         import uuid
 
         parent_account = CurrentAccount(

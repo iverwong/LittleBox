@@ -20,14 +20,10 @@ from app.auth.tokens import (
     revoke_token,
 )
 from app.core.db import get_db
+from app.domain.accounts.schemas import AccountOut, CurrentAccount
+from app.domain.auth.schemas import LoginRequest, LoginResponse
 from app.models.accounts import User
 from app.models.enums import UserRole
-from app.schemas.accounts import (
-    AccountOut,
-    CurrentAccount,
-    LoginRequest,
-    LoginResponse,
-)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
