@@ -304,7 +304,7 @@ def _make_mock_resources(redis_client: FakeRedis):
     """创建测试用 mock RuntimeResources，避免 build_runtime 连接真实 Redis/DB。"""
     from unittest.mock import AsyncMock, MagicMock
 
-    from app.runtime import RuntimeResources
+    from app.core.runtime import RuntimeResources
 
     mock_rr = MagicMock(spec=RuntimeResources)
     mock_rr.main_graph = MagicMock()

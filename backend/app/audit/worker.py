@@ -44,7 +44,7 @@ _parsed_redis = urlparse(settings.redis_url)
 
 async def on_startup(ctx: dict[str, Any]) -> None:
     """Worker 启动：通过 RuntimeResources 构建共享资源。"""
-    from app.runtime import build_runtime
+    from app.core.runtime import build_runtime
 
     rr = await build_runtime(settings)
     ctx["resources"] = rr
@@ -58,7 +58,7 @@ async def on_startup(ctx: dict[str, Any]) -> None:
 
 async def on_shutdown(ctx: dict[str, Any]) -> None:
     """Worker 关闭：teardown RuntimeResources 替换 dispose_engine()。"""
-    from app.runtime import teardown_runtime
+    from app.core.runtime import teardown_runtime
 
     await teardown_runtime(ctx["resources"])
     logger.info("audit.worker.shutdown")
@@ -130,7 +130,7 @@ async def run_audit(
     import uuid
 
     from app.audit.context_schema import AuditContextSchema
-    from app.runtime import RuntimeResources
+    from app.core.runtime import RuntimeResources
 
     rr: RuntimeResources = ctx["resources"]
     manager: AuditSignalsManager = ctx["signals_manager"]

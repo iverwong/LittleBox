@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.audit.worker import MAX_TRIES, run_audit
-from app.runtime import RuntimeResources
+from app.core.runtime import RuntimeResources
 from app.schemas.audit import AuditDimensionScores, AuditOutputSchema
 
 pytestmark = pytest.mark.audit

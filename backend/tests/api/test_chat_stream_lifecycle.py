@@ -28,7 +28,7 @@ from app.core.config import settings as _module_settings
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
 from app.models.enums import MessageRole, MessageStatus
-from app.runtime import RuntimeResources
+from app.core.runtime import RuntimeResources
 from tests.api._chat_stream_lifecycle_helpers import (
     TABLES,
     lifecycle_ctx,

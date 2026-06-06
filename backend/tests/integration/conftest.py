@@ -269,7 +269,7 @@ async def integration_runtime(
       暴露给测试（integration_runtime 返回值），阶段二测试可通过
       rr.register_chat_task 句柄 await 段一收口。
     """
-    from app.runtime import build_runtime, teardown_runtime
+    from app.core.runtime import build_runtime, teardown_runtime
 
     s = build_integration_settings()
     rr = await build_runtime(s)

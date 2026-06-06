@@ -44,7 +44,7 @@ from app.models.accounts import ChildProfile, User
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
 from app.models.enums import InterventionType, MessageRole, MessageStatus, SessionStatus
-from app.runtime import RuntimeResources
+from app.core.runtime import RuntimeResources
 from app.schemas.accounts import AccountOut, CurrentAccount
 from app.schemas.children import ChildProfileOut
 from app.schemas.sessions import (

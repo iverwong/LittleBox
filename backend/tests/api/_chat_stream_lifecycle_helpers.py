@@ -25,7 +25,7 @@ from app.auth.redis_client import get_redis
 from app.core.config import settings as _module_settings
 from app.core.db import get_db
 from app.main import create_app
-from app.runtime import RuntimeResources
+from app.core.runtime import RuntimeResources
 from app.models.accounts import Family, FamilyMember, User
 from app.models.enums import UserRole
 

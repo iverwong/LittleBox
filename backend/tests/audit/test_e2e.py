@@ -75,7 +75,7 @@ async def test_e2e_enqueue_to_ready(concurrent_db_sessions):
     # 2) run_audit → ready
     # T10：构造 fake RuntimeResources + ctx，通过 audit_graph.ainvoke 走通
     from unittest.mock import MagicMock
-    from app.runtime import RuntimeResources
+    from app.core.runtime import RuntimeResources
     fake_rr = MagicMock(spec=RuntimeResources)
     fake_graph = AsyncMock()
     fake_graph.ainvoke = AsyncMock(return_value={"structured_output": _AUDIT_OUT})

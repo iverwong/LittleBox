@@ -14,10 +14,10 @@ from app.api.health import router as health_router
 from app.api.me import router as me_router
 from app.auth.redis_client import redis_lifespan
 from app.core.config import settings
-from app.runtime import build_runtime, teardown_runtime
+from app.core.runtime import build_runtime, teardown_runtime
 
 if TYPE_CHECKING:
-    from app.runtime import RuntimeResources
+    from app.core.runtime import RuntimeResources
 
 logger = logging.getLogger(__name__)
 
