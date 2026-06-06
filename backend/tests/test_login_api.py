@@ -190,11 +190,14 @@ class TestLoginEndpoint:
     async def test_login_child_account_401(
         self, api_client, db_session: AsyncSession, redis_client, child_user: User,
     ) -> None:
-        """child 账号用 phone 来登录 → 401（child 本就没 password_hash）。"""
-        user = child_user
+        """child 账号尝试登录 → 401（业务层只允许 role=parent）。"""
+        # child 不持有 phone（User.phone 注释明确"仅父账号"，partial unique index 也只对
+        # parent 生效），用不存在的 fake phone 触发 LoginRequest 校验通过, 让业务层
+        # `User.phone=? AND role=parent` 查询返回空 → 401 invalid credentials。
         resp = await api_client.post(
             "/api/v1/auth/login",
-            json={"phone": user.phone, "password": "anypassword1", "device_id": "dev_login_I"},
+            json={"phone": "nonexistent-child-phone-401", "password": "anypassword1",
+                  "device_id": "dev_login_I"},
         )
         assert resp.status_code == 401
         assert resp.json()["detail"] == "invalid credentials"
