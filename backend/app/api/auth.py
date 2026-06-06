@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -78,7 +78,9 @@ async def _check_login_limit(redis: Redis, phone: str, ip: str | None) -> None:
     if ip is not None:
         ip_count = int(await redis.get(f"login_fail:ip:{ip}") or 0)
         if ip_count >= LOGIN_IP_LIMIT:
-            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many attempts; try again later")
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS, "too many attempts; try again later"
+            )
 
 
 async def _incr_login_fail(redis: Redis, phone: str, ip: str | None) -> None:
