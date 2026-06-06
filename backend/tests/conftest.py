@@ -86,7 +86,7 @@ from sqlalchemy.pool import NullPool
 
 from app.auth.redis_client import get_redis
 from app.core.config import settings
-from app.db import get_db
+from app.core.db import get_db
 from app.main import create_app
 
 TEST_DB_NAME = "littlebox_test"

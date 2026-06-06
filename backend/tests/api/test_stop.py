@@ -18,7 +18,7 @@ from httpx import ASGITransport, AsyncClient
 from app.auth.redis_ops import commit_with_redis
 from app.auth.tokens import issue_token
 from app.chat.locks import running_streams
-from app.db import get_db
+from app.core.db import get_db
 from app.models.accounts import Family, FamilyMember, User
 from app.models.chat import Session as SessionModel
 from app.models.enums import SessionStatus, UserRole

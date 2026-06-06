@@ -21,7 +21,7 @@ from app.auth.tokens import issue_token
 from app.chat.graph import build_main_graph
 
 main_graph = build_main_graph()
-from app.db import get_db
+from app.core.db import get_db
 from app.models.accounts import Family, FamilyMember, User
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel

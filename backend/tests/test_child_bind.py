@@ -572,7 +572,7 @@ class TestRedeemBindToken:
         seeded_parent: tuple[User, str],
     ) -> None:
         """get_bind_token_status 运行时调 get_db → 覆盖并验证不触发。"""
-        from app.db import get_db
+        from app.core.db import get_db
 
         parent_user, _pw = seeded_parent
         device_id = "dev_status_nodb"

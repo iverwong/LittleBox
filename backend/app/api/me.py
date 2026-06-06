@@ -39,7 +39,7 @@ from app.chat.session_policy import (
     today_session_title,
 )
 from app.chat.sse import build_flow_pause_frame, stream_graph_to_sse
-from app.db import get_db
+from app.core.db import get_db
 from app.models.accounts import ChildProfile, User
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel

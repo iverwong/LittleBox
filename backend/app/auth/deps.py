@@ -16,7 +16,7 @@ from app.auth.tokens import (
     roll_token_expiry,
     token_hash,
 )
-from app.db import get_db  # type: ignore[attr-defined]
+from app.core.db import get_db  # type: ignore[attr-defined]
 from app.models.enums import UserRole
 from app.schemas.accounts import CurrentAccount
 
