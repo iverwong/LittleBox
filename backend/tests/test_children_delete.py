@@ -297,7 +297,7 @@ class TestDeleteChildTransactionRollback:
         from app.auth.password import generate_password
         from app.auth.redis_ops import discard_pending_redis_ops
         from app.auth.tokens import REDIS_KEY_PREFIX
-        from app.services.child_deletion import hard_delete_child
+        from app.domain.accounts.service import hard_delete_child
 
         parent, _pw = seeded_parent
 

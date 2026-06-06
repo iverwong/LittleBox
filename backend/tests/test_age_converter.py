@@ -5,7 +5,7 @@ from datetime import date
 
 import pytest
 
-from app.services.age_converter import age_to_birth_date, birth_date_to_age
+from app.domain.accounts.service import age_to_birth_date, birth_date_to_age
 
 
 class TestAgeToBirthDate:

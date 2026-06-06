@@ -67,7 +67,7 @@ class TestHardDeleteChildService:
         db_session.add(Notification(parent_user_id=parent.id, child_user_id=child.id, type="crisis"))
         await db_session.commit()
 
-        from app.services.child_deletion import hard_delete_child
+        from app.domain.accounts.service import hard_delete_child
         deleted_tables = await hard_delete_child(
             db_session, child_user_id=child.id, requested_by=parent.id,
         )
@@ -130,7 +130,7 @@ class TestHardDeleteChildService:
         ))
         await db_session.commit()
 
-        from app.services.child_deletion import hard_delete_child
+        from app.domain.accounts.service import hard_delete_child
         deleted_tables = await hard_delete_child(
             db_session, child_user_id=child.id, requested_by=parent.id,
         )
@@ -170,7 +170,7 @@ class TestHardDeleteChildService:
         db_session.add(FamilyMember(family_id=fam.id, user_id=child.id, role="child"))
         await db_session.commit()
 
-        from app.services.child_deletion import hard_delete_child
+        from app.domain.accounts.service import hard_delete_child
         await hard_delete_child(db_session, child_user_id=child.id, requested_by=parent.id)
         await db_session.commit()
 
@@ -240,7 +240,7 @@ class TestRedisZombieCache:
         assert await redis_client.get(redis_key) is not None
 
         # 执行 hard_delete_child + commit_with_redis
-        from app.services.child_deletion import hard_delete_child
+        from app.domain.accounts.service import hard_delete_child
         await hard_delete_child(db_session, child_user_id=child.id, requested_by=parent.id)
         await commit_with_redis(db_session, redis_client)
 
@@ -298,7 +298,7 @@ class TestRedisZombieCache:
 
         assert await redis_client.get(redis_key) is not None
 
-        from app.services.child_deletion import hard_delete_child
+        from app.domain.accounts.service import hard_delete_child
         await hard_delete_child(db_session, child_user_id=child.id, requested_by=parent.id)
         # 裸 commit（绕开 commit_with_redis）
         await db_session.commit()

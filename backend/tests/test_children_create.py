@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.accounts import Family, FamilyMember, User
 from app.models.enums import UserRole
-from app.services.age_converter import age_to_birth_date
+from app.domain.accounts.service import age_to_birth_date
 
 
 async def _login(api_client, user: User, pw: str, device_id: str = "test_device") -> str:
