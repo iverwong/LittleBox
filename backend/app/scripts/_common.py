@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, AsyncIterator
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.config import settings
+from app.core.config import settings
 
 if TYPE_CHECKING:
     from argparse import ArgumentParser

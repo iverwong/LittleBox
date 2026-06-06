@@ -20,7 +20,7 @@ from app.chat.factory import build_provider_llm
 from app.schemas.audit import AppendNote, AuditOutputSchema, ReplaceInNotes
 
 if TYPE_CHECKING:
-    from app.config import Settings
+    from app.core.config import Settings
 
 
 def build_audit_llm(settings: Settings) -> Runnable:

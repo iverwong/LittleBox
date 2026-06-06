@@ -246,7 +246,7 @@ class TestCreateChildLimit:
         assert resp.status_code == 201
 
         # Patch limit to 1 and try second child
-        from app.config import settings
+        from app.core.config import settings
 
         original = settings.max_children_per_family
         settings.max_children_per_family = 1

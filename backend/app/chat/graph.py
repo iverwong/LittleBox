@@ -47,7 +47,7 @@ from app.chat.prompts import (
     format_reentry_wrapper_redline,
 )
 from app.chat.state import AuditState, MainDialogueState
-from app.config import settings
+from app.core.config import settings
 from app.models.audit import RollingSummary
 from app.models.chat import Message, Session
 from app.models.enums import InterventionType, MessageRole, MessageStatus

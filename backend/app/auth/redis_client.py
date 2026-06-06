@@ -5,7 +5,7 @@ from urllib.parse import urlparse, urlunparse
 
 from redis.asyncio import Redis
 
-from app.config import settings
+from app.core.config import settings
 
 _redis: Redis | None = None
 _audit_redis: Redis | None = None

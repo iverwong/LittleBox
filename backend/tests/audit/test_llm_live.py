@@ -19,7 +19,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.audit.llm import build_audit_llm
 from app.audit.prompts import build_audit_system_prompt
-from app.config import Settings
+from app.core.config import Settings
 from app.schemas.audit import AppendNote, AuditOutputSchema, ReplaceInNotes
 
 pytestmark = [

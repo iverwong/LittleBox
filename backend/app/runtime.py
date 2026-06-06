@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from arq.connections import ArqRedis
 
-    from app.config import Settings
+    from app.core.config import Settings
 
 
 @dataclass(frozen=True)

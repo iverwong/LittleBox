@@ -9,7 +9,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 if TYPE_CHECKING:
-    from app.config import Settings
+    from app.core.config import Settings
 
 
 @dataclass(frozen=True)

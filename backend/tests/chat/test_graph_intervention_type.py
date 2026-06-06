@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.chat.context_schema import ChatContextSchema
 from app.chat.graph import build_main_graph
 from app.chat.state import AuditState, MainDialogueState
-from app.config import settings
+from app.core.config import settings
 from app.models.accounts import Family, FamilyMember, User
 from app.models.chat import Message, Session
 from app.models.enums import UserRole

@@ -571,7 +571,7 @@ class TestBuildRedlineContext:
     async def test_redline_summaries_window_limits(self, db_session, child_user) -> None:
         """Given turn_summaries 含 80 条, When build_redline_context, Then summaries 取最近 50 条。
         Given/When/Then: D17 window=50。"""
-        from app.config import settings
+        from app.core.config import settings
 
         sid = await _seed_session(db_session, child_user.id)
         await _seed_messages(db_session, sid, 2)

@@ -227,7 +227,7 @@ def _make_stub_runtime():
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    from app.config import settings as _app_settings
+    from app.core.config import settings as _app_settings
 
     return SimpleNamespace(
         context=SimpleNamespace(

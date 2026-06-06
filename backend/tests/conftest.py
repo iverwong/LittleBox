@@ -20,7 +20,7 @@
 - subprocess 跑 `app.scripts.*` 连真实库
 - httpx 直连真 server (localhost:8000 等)
 - redis.Redis(...) 显式连真实 host
-- from app.config import settings 后用 settings.database_url 自建 engine
+- from app.core.config import settings 后用 settings.database_url 自建 engine
 - flushdb() / flushall()
 - db_session 与 concurrent_db_sessions 混用（savepoint 语义不兼容）
 
@@ -40,7 +40,7 @@ import subprocess
 from collections.abc import AsyncGenerator
 
 # M8 audit pipeline test defaults
-# 必须早于 from app.config import settings，否则 Settings() 实例化时 env 已读完
+# 必须早于 from app.core.config import settings，否则 Settings() 实例化时 env 已读完
 os.environ.setdefault("LB_AUDIT_PROVIDER", "deepseek")
 os.environ.setdefault("LB_AUDIT_MODEL", "deepseek-v4-flash")
 os.environ.setdefault("LB_AUDIT_REASONING_EFFORT", "max")
@@ -85,7 +85,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engin
 from sqlalchemy.pool import NullPool
 
 from app.auth.redis_client import get_redis
-from app.config import settings
+from app.core.config import settings
 from app.db import get_db
 from app.main import create_app
 

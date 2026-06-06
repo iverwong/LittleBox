@@ -13,7 +13,7 @@ from app.api.children import router as children_router
 from app.api.health import router as health_router
 from app.api.me import router as me_router
 from app.auth.redis_client import redis_lifespan
-from app.config import settings
+from app.core.config import settings
 from app.runtime import build_runtime, teardown_runtime
 
 if TYPE_CHECKING:

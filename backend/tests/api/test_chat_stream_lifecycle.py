@@ -24,7 +24,7 @@ from sqlalchemy import select
 from app.api.me import _ChatStreamState, _run_llm_pipeline, _stream_generator
 from app.chat.locks import release_session_lock, running_streams
 from app.chat.sse import build_flow_pause_frame
-from app.config import settings as _module_settings
+from app.core.config import settings as _module_settings
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
 from app.models.enums import MessageRole, MessageStatus

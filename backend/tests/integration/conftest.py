@@ -33,7 +33,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.config import Settings
+from app.core.config import Settings
 
 INTEGRATION_DB_NAME = "littlebox_integration"
 INTEGRATION_REDIS_DB = 15

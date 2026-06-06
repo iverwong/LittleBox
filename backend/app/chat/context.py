@@ -31,7 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chat.prompts import ANCHOR_WINDOW_PREFIX, SUMMARY_PREFIX
-from app.config import settings
+from app.core.config import settings
 from app.models.audit import RollingSummary
 from app.models.chat import Message
 from app.models.enums import MessageRole

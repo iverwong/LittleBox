@@ -22,7 +22,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.auth.redis_client import get_redis
-from app.config import settings as _module_settings
+from app.core.config import settings as _module_settings
 from app.db import get_db
 from app.main import create_app
 from app.runtime import RuntimeResources

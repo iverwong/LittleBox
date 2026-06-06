@@ -14,7 +14,7 @@ from app.auth.deps import require_parent
 from app.auth.redis_client import get_redis
 from app.auth.redis_ops import commit_with_redis
 from app.auth.tokens import revoke_all_active_tokens
-from app.config import settings
+from app.core.config import settings
 from app.db import get_db
 from app.models.accounts import AuthToken, ChildProfile, Family, FamilyMember, User
 from app.models.enums import UserRole

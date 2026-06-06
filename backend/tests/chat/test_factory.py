@@ -344,7 +344,7 @@ class TestAuditLlmRetry:
         """主端首次 ConnectError → with_retry 重试 → 第二次成功。"""
         import httpx
         import respx
-        from app.config import settings
+        from app.core.config import settings
 
         url = f"{settings.deepseek_base_url}/chat/completions"
 
@@ -379,7 +379,7 @@ class TestAuditLlmRetry:
         """主端持续 ConnectError → with_retry 耗尽 → fallback 百炼返回成功。"""
         import httpx
         import respx
-        from app.config import settings
+        from app.core.config import settings
 
         primary_url = f"{settings.deepseek_base_url}/chat/completions"
         fallback_url = f"{settings.bailian_base_url}/chat/completions"

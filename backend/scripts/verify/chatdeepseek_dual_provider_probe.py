@@ -11,7 +11,7 @@ import json
 
 from langchain_deepseek import ChatDeepSeek
 
-from app.config import settings
+from app.core.config import settings
 
 PROBE_PROMPT = "3 + 5 等于多少？请仔细思考后回答。"
 
