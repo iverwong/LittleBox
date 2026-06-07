@@ -33,8 +33,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.password import generate_password, hash_password
-from app.core.redis import commit_with_redis
 from app.auth.tokens import revoke_all_active_tokens
+from app.core.redis import commit_with_redis
 from app.models.accounts import User
 from app.models.enums import UserRole
 from app.scripts._common import build_arg_parser, cli_runtime, run_main
@@ -43,6 +43,7 @@ from app.scripts._common import build_arg_parser, cli_runtime, run_main
 @dataclass(frozen=True)
 class ResetResult:
     """_reset_password 的返回值。CLI 与测试共用。"""
+
     phone: str
     plain_password: str
     user_id: uuid.UUID

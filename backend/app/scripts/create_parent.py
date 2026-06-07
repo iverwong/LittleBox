@@ -40,6 +40,7 @@ MAX_PHONE_RETRIES = 10
 @dataclass(frozen=True)
 class ParentInfo:
     """_create_parent 的返回值。CLI 与测试共用。"""
+
     phone: str
     plain_password: str
     user_id: uuid.UUID
