@@ -32,7 +32,7 @@ from app.chat.graph import (
 from app.chat.state import MainDialogueState
 from app.models.accounts import Family, User
 from app.models.chat import Message
-from app.models.enums import MessageRole, MessageStatus, UserRole
+from app.core.enums import MessageRole, MessageStatus, UserRole
 
 pytestmark = [
     pytest.mark.asyncio,

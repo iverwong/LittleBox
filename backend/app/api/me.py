@@ -18,6 +18,7 @@ from starlette.responses import StreamingResponse
 from app.auth.deps import get_current_account, require_child
 from app.chat.context_schema import ChatContextSchema
 from app.core.db import get_db
+from app.core.enums import MessageRole, MessageStatus, SessionStatus
 from app.core.locks import (
     acquire_session_lock,
     acquire_throttle_lock,
@@ -47,7 +48,6 @@ from app.domain.chat.turn_intake import intake_human_message
 from app.models.accounts import ChildProfile, User
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
-from app.models.enums import MessageRole, MessageStatus, SessionStatus
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/me", tags=["me"])

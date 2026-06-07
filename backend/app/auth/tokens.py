@@ -10,9 +10,9 @@ from redis.asyncio import Redis
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.enums import UserRole
 from app.core.redis import RedisOp, stage_redis_op
 from app.models.accounts import AuthToken, User
-from app.models.enums import UserRole
 
 
 class TokenPayload(BaseModel):

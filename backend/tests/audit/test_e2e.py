@@ -15,7 +15,7 @@ from app.domain.chat.usecase import enqueue_audit
 from app.audit.worker import run_audit
 from app.domain.audit.signals import AuditSignalsManager
 from app.models.accounts import Family, FamilyMember, User
-from app.models.enums import UserRole
+from app.core.enums import UserRole
 from app.models.chat import Session as SessionModel
 from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
 

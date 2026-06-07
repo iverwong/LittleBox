@@ -24,7 +24,7 @@ from app.chat.state import AuditState, MainDialogueState
 from app.core.config import settings
 from app.models.accounts import Family, FamilyMember, User
 from app.models.chat import Message, Session
-from app.models.enums import UserRole
+from app.core.enums import UserRole
 
 pytestmark = pytest.mark.asyncio(loop_scope="function")
 

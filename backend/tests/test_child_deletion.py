@@ -32,7 +32,7 @@ class TestHardDeleteChildService:
     ) -> None:
         """deleted_tables 包含所有 10 张被 CASCADE 清理的表（无业务过滤）。"""
         from app.auth.password import generate_password, hash_password
-        from app.models.enums import DailyStatus
+        from app.core.enums import DailyStatus
         from app.models.parent import DailyReport, Notification
         from datetime import date
 

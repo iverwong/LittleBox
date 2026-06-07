@@ -16,9 +16,9 @@ from app.auth.tokens import (
     token_hash,
 )
 from app.core.db import get_db  # type: ignore[attr-defined]
+from app.core.enums import UserRole
 from app.core.redis import commit_with_redis, get_redis
 from app.domain.accounts.schemas import CurrentAccount
-from app.models.enums import UserRole
 
 
 async def get_current_account(

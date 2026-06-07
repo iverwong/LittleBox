@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.accounts import Family, FamilyMember, User
-from app.models.enums import UserRole
+from app.core.enums import UserRole
 from app.domain.accounts.service import age_to_birth_date
 
 

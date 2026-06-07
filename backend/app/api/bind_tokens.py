@@ -22,6 +22,7 @@ from app.auth.bind import (
 from app.auth.deps import require_parent
 from app.auth.tokens import issue_token, revoke_all_active_tokens
 from app.core.db import get_db
+from app.core.enums import UserRole
 from app.core.redis import commit_with_redis, get_redis
 from app.domain.accounts.schemas import AccountOut, CurrentAccount
 from app.domain.auth.schemas import (
@@ -32,7 +33,6 @@ from app.domain.auth.schemas import (
     RedeemBindTokenRequest,
 )
 from app.models.accounts import User
-from app.models.enums import UserRole
 
 router = APIRouter(prefix="/api/v1/bind-tokens", tags=["bind_tokens"])
 

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.deps import require_parent
 from app.auth.tokens import revoke_all_active_tokens
 from app.core.db import get_db
+from app.core.enums import UserRole
 from app.core.redis import commit_with_redis, get_redis
 from app.domain.accounts.schemas import (
     ChildSummary,
@@ -27,7 +28,6 @@ from app.domain.accounts.service import (
     hard_delete_child,
 )
 from app.models.accounts import AuthToken, ChildProfile, User
-from app.models.enums import UserRole
 
 router = APIRouter(prefix="/api/v1/children", tags=["children"])
 

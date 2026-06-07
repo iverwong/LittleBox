@@ -8,7 +8,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from app.models.enums import Gender, UserRole
+from app.core.enums import Gender, UserRole
 
 
 class AccountOut(BaseModel):

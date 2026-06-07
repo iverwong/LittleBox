@@ -15,7 +15,7 @@ import pytest
 
 from app.audit.graph import _load_messages_from_pg
 from app.models.chat import Message
-from app.models.enums import MessageRole, MessageStatus
+from app.core.enums import MessageRole, MessageStatus
 
 
 @pytest.mark.asyncio
@@ -27,7 +27,7 @@ async def test_load_messages_from_pg_no_status_filter(db_session):
 
     from app.models.accounts import Family, User
     from app.models.chat import Session as SessionModel
-    from app.models.enums import UserRole
+    from app.core.enums import UserRole
 
     # 创建 FK 链：user → session → messages
     fam = Family()
@@ -96,7 +96,7 @@ async def test_load_messages_from_pg_limit_works(db_session):
 
     from app.models.accounts import Family, User
     from app.models.chat import Session as SessionModel
-    from app.models.enums import UserRole
+    from app.core.enums import UserRole
 
     fam = Family()
     db_session.add(fam)

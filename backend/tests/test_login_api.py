@@ -9,7 +9,7 @@ from app.auth.password import generate_phone
 from app.core.redis import commit_with_redis
 from app.auth.tokens import REDIS_KEY_PREFIX, issue_token, token_hash
 from app.models.accounts import Family, FamilyMember, User
-from app.models.enums import UserRole
+from app.core.enums import UserRole
 
 # ---- C3 · 响应屏蔽辅助函数 ----
 

@@ -1,3 +1,10 @@
+"""全栈 enum 集中处。
+
+来源:Phase 1-5 漏迁的 app/models/enums.py(9 个 enum)。
+去留:在 app/models/ 整体迁完前(6.C/6.D/6.4)逐步替换全栈 import;
+替换完后 app/models/enums.py 在 6.4 整体删除。
+"""
+
 import enum
 
 

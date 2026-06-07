@@ -18,6 +18,7 @@ from app.auth.tokens import (
     revoke_token,
 )
 from app.core.db import get_db
+from app.core.enums import UserRole
 from app.core.redis import RedisOp, commit_with_redis, get_redis, stage_redis_op
 from app.domain.accounts.rate_limit import (
     check_login_limit,
@@ -26,7 +27,6 @@ from app.domain.accounts.rate_limit import (
 from app.domain.accounts.schemas import AccountOut, CurrentAccount
 from app.domain.auth.schemas import LoginRequest, LoginResponse
 from app.models.accounts import User
-from app.models.enums import UserRole
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])

@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.chat.usecase import enqueue_audit, persist_ai_turn
 from app.models.chat import Message, Session
-from app.models.enums import InterventionType, MessageRole, MessageStatus
+from app.core.enums import InterventionType, MessageRole, MessageStatus
 
 
 def _msg_by_session(db_session, sid):
@@ -192,7 +192,7 @@ class TestConcurrentRowLock:
     ) -> None:
         import asyncio
         from app.models.accounts import Family, FamilyMember, User
-        from app.models.enums import UserRole
+        from app.core.enums import UserRole
 
         sessions = await concurrent_db_sessions(
             count=6,

@@ -36,7 +36,7 @@ class TestCreateParent:
 
         # DB 写入断言
         from app.models.accounts import Family, FamilyMember, User
-        from app.models.enums import UserRole
+        from app.core.enums import UserRole
 
         user = await db_session.get(User, info.user_id)
         assert user is not None

@@ -24,9 +24,9 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.enums import InterventionType, MessageRole, MessageStatus
 from app.domain.audit.signals import AuditSignalsManager
 from app.models.chat import Message, Session
-from app.models.enums import InterventionType, MessageRole, MessageStatus
 
 if TYPE_CHECKING:
     from arq.connections import ArqRedis

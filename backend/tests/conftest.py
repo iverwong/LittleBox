@@ -359,7 +359,7 @@ async def seeded_parent(db_session: AsyncSession) -> tuple:
     """种一个 active parent + family + family_members。返回 (user, plaintext_password)。"""
     from app.auth.password import generate_password, generate_phone, hash_password
     from app.models.accounts import Family, FamilyMember, User
-    from app.models.enums import UserRole
+    from app.core.enums import UserRole
 
     pw = generate_password()
     fam = Family()
@@ -386,7 +386,7 @@ async def inactive_parent(db_session: AsyncSession) -> tuple:
     """种一个 is_active=False 的 parent。返回 (user, plaintext_password)。"""
     from app.auth.password import generate_password, generate_phone, hash_password
     from app.models.accounts import Family, FamilyMember, User
-    from app.models.enums import UserRole
+    from app.core.enums import UserRole
 
     pw = generate_password()
     fam = Family()
@@ -419,7 +419,7 @@ async def make_child_user_with_profile(sess: AsyncSession):
     from datetime import date
 
     from app.models.accounts import ChildProfile, Family, FamilyMember, User
-    from app.models.enums import Gender, UserRole
+    from app.core.enums import Gender, UserRole
 
     fam = Family()
     sess.add(fam)
@@ -461,7 +461,7 @@ async def rate_limit_parent(db_session: AsyncSession) -> tuple:
     """种一个固定 phone='abcd' 的 active parent，用于 rate-limit 计数测试。"""
     from app.auth.password import generate_password, hash_password
     from app.models.accounts import Family, FamilyMember, User
-    from app.models.enums import UserRole
+    from app.core.enums import UserRole
 
     pw = generate_password()
     fam = Family()

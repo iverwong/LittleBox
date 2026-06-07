@@ -13,7 +13,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from app.models.enums import UserRole
+from app.core.enums import UserRole
 
 
 class AccountOut(BaseModel):

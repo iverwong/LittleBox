@@ -29,9 +29,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.password import generate_password, generate_phone, hash_password
+from app.core.enums import UserRole
 from app.core.redis import commit_with_redis
 from app.models.accounts import Family, FamilyMember, User
-from app.models.enums import UserRole
 from app.scripts._common import build_arg_parser, cli_runtime, run_main
 
 MAX_PHONE_RETRIES = 10

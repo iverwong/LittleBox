@@ -15,7 +15,7 @@ from app.models.accounts import (
     User,
 )
 from app.models.chat import Session
-from app.models.enums import UserRole
+from app.core.enums import UserRole
 from app.models.parent import DataDeletionRequest, DailyReport, Notification
 
 
@@ -48,7 +48,7 @@ class TestDeleteChildSuccess:
         seeded_parent,
     ) -> None:
         """DELETE child → 各关联表行数归零；families / parent / parent_family_members 保留。"""
-        from app.models.enums import DailyStatus
+        from app.core.enums import DailyStatus
 
         parent, pw = seeded_parent
         parent_token = await _login(api_client, parent, pw)

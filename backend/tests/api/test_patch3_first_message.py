@@ -18,7 +18,7 @@ main_graph = build_main_graph()
 from app.core.db import get_db
 from app.models.accounts import Family, FamilyMember, User
 from app.models.chat import Session as SessionModel
-from app.models.enums import UserRole
+from app.core.enums import UserRole
 
 
 # ---- fixtures (with eval patch for session lock) ----

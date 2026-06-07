@@ -33,7 +33,7 @@ from app.chat.context import (
 )
 from app.models.audit import RollingSummary
 from app.models.chat import Message, Session
-from app.models.enums import MessageRole, MessageStatus
+from app.core.enums import MessageRole, MessageStatus
 
 
 async def _seed_session(db_session, child_user_id: uuid.UUID) -> uuid.UUID:

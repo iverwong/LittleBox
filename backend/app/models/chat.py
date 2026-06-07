@@ -6,8 +6,8 @@ from sqlalchemy import ForeignKey, Index, String, Text, func, text
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.enums import InterventionType, MessageRole, MessageStatus, SessionStatus
 from app.models.base import Base, BaseMixin
-from app.models.enums import InterventionType, MessageRole, MessageStatus, SessionStatus
 
 
 class Session(BaseMixin, Base):

@@ -24,7 +24,7 @@ from app.auth.tokens import (
     token_hash,
 )
 from app.models.accounts import AuthToken, Family, FamilyMember, User
-from app.models.enums import UserRole
+from app.core.enums import UserRole
 
 # ---- 辅助 fixtures ----
 

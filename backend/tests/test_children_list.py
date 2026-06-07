@@ -10,7 +10,7 @@ from sqlalchemy import select, update
 
 from app.auth.password import hash_password
 from app.models.accounts import ChildProfile, Family, FamilyMember, User
-from app.models.enums import UserRole
+from app.core.enums import UserRole
 
 
 async def _login(api_client, user: User, pw: str, device_id: str = "test_device") -> str:

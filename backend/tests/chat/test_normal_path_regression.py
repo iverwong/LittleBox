@@ -39,7 +39,7 @@ async def auth_headers_child(db_session, redis_client):
     from app.core.redis import commit_with_redis
     from app.auth.tokens import issue_token
     from app.models.accounts import ChildProfile, Family, FamilyMember, User
-    from app.models.enums import Gender, UserRole
+    from app.core.enums import Gender, UserRole
 
     fam = Family()
     db_session.add(fam)

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.accounts import User
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
-from app.models.enums import MessageRole
+from app.core.enums import MessageRole
 
 
 async def _login(api_client, user: User, pw: str, device_id: str = "test_device") -> str:

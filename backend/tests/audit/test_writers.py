@@ -11,7 +11,7 @@ from sqlalchemy import select, text
 from app.domain.audit.usecase import write_audit_results
 from app.models.accounts import Family, User
 from app.models.audit import RollingSummary
-from app.models.enums import UserRole
+from app.core.enums import UserRole
 from app.domain.audit.schemas import (
     AuditDimensionScores,
     AuditOutputSchema,

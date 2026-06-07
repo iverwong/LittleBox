@@ -8,7 +8,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.accounts import ChildProfile, Family, User
-from app.models.enums import Gender, UserRole
+from app.core.enums import Gender, UserRole
 
 
 @pytest_asyncio.fixture

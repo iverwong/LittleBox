@@ -104,7 +104,7 @@ class TestInfrastructureSmoke:
         from app.core.llm import set_test_llm, clear_test_llm
         from app.models.accounts import Family, User
         from app.models.chat import Session as SessionModel
-        from app.models.enums import UserRole, SessionStatus
+        from app.core.enums import UserRole, SessionStatus
         from app.domain.audit.signals import AuditSignalsManager
 
         rr = integration_runtime

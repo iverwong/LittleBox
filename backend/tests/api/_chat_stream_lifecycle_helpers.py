@@ -27,7 +27,7 @@ from app.core.db import get_db
 from app.main import create_app
 from app.core.runtime import RuntimeResources
 from app.models.accounts import Family, FamilyMember, User
-from app.models.enums import UserRole
+from app.core.enums import UserRole
 
 TABLES = [
     "families", "users", "family_members", "child_profiles",
@@ -194,7 +194,7 @@ async def seed_compression_session(ctx, child) -> tuple:
 
     from app.models.chat import Message
     from app.models.chat import Session as SessionModel
-    from app.models.enums import MessageRole, MessageStatus
+    from app.core.enums import MessageRole, MessageStatus
 
     base_ts = _dt.now(UTC)
     sid = _uuid4()

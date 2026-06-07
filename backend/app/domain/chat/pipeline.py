@@ -20,6 +20,7 @@ from sqlalchemy import select
 from app.chat.compression import CONTEXT_COMPRESS_THRESHOLD_TOKENS
 from app.chat.context_schema import ChatContextSchema
 from app.chat.prompts import build_system_prompt
+from app.core.enums import InterventionType, MessageRole, MessageStatus
 from app.core.locks import release_session_lock
 from app.core.runtime import RuntimeResources
 from app.domain.chat.stream import (
@@ -31,7 +32,6 @@ from app.domain.chat.stream_signals import running_streams
 from app.domain.chat.usecase import enqueue_audit, persist_ai_turn
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
-from app.models.enums import InterventionType, MessageRole, MessageStatus
 
 logger = logging.getLogger(__name__)
 

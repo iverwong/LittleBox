@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.accounts import FamilyMember, User
-from app.models.enums import UserRole
+from app.core.enums import UserRole
 
 
 async def _login(api_client, user: User, pw: str, device_id: str = "test_device") -> str:

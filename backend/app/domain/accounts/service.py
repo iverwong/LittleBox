@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.tokens import revoke_all_active_tokens
 from app.core.config import settings
+from app.core.enums import UserRole
 from app.core.redis import commit_with_redis
 from app.domain.accounts.schemas import (
     ChildSummary,
@@ -37,7 +38,6 @@ from app.models.accounts import (
 )
 from app.models.audit import AuditRecord, RollingSummary
 from app.models.chat import Message, Session
-from app.models.enums import UserRole
 from app.models.parent import DailyReport, DataDeletionRequest, Notification
 
 # ---------------------------------------------------------------------------

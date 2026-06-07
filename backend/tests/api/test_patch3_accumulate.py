@@ -23,7 +23,7 @@ from app.core.db import get_db
 from app.models.accounts import ChildProfile, Family, FamilyMember, User
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
-from app.models.enums import Gender, MessageRole, MessageStatus, UserRole
+from app.core.enums import Gender, MessageRole, MessageStatus, UserRole
 from tests.api._chat_stream_lifecycle_helpers import lifecycle_ctx, lifecycle_setup
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
