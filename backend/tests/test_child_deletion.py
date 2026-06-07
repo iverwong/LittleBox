@@ -9,7 +9,7 @@ from fakeredis.aioredis import FakeRedis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.redis_ops import RedisOp, stage_redis_op
+from app.core.redis import RedisOp, stage_redis_op
 from app.auth.tokens import REDIS_KEY_PREFIX
 from app.models.accounts import (
     AuthToken,
@@ -100,7 +100,7 @@ class TestHardDeleteChildService:
         """SELECT COUNT auth_tokens 不带 revoked_at 过滤，与 CASCADE 实际删除行数一致。"""
         from datetime import datetime, timezone
         from app.auth.password import generate_password, hash_password
-        from app.auth.redis_ops import discard_pending_redis_ops
+        from app.core.redis import discard_pending_redis_ops
 
         fam = Family()
         db_session.add(fam)
@@ -203,7 +203,7 @@ class TestRedisZombieCache:
     ) -> None:
         """正例：commit_with_redis 成功清理 Redis 缓存。"""
         from app.auth.password import generate_password, hash_password
-        from app.auth.redis_ops import commit_with_redis
+        from app.core.redis import commit_with_redis
         from app.models.parent import DataDeletionRequest
 
         fam = Family()
@@ -263,7 +263,7 @@ class TestRedisZombieCache:
     ) -> None:
         """反例：hard_delete_child 后裸 commit → Redis 缓存残留（防退化）。"""
         from app.auth.password import generate_password, hash_password
-        from app.auth.redis_ops import discard_pending_redis_ops
+        from app.core.redis import discard_pending_redis_ops
 
         fam = Family()
         db_session.add(fam)

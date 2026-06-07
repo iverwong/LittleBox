@@ -10,7 +10,7 @@ from redis.asyncio import Redis
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.redis_ops import RedisOp, stage_redis_op
+from app.core.redis import RedisOp, stage_redis_op
 from app.models.accounts import AuthToken, User
 from app.models.enums import UserRole
 

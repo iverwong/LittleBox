@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
 from app.auth.deps import get_current_account, require_child
-from app.auth.redis_client import get_redis
+from app.core.redis import get_redis
 from app.chat.context_schema import ChatContextSchema
 from app.core.time import SHANGHAI
 from app.domain.chat.session_policy import (

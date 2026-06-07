@@ -84,7 +84,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.auth.redis_client import get_redis
+from app.core.redis import get_redis
 from app.core.config import settings
 from app.core.db import get_db
 from app.main import create_app

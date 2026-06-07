@@ -21,7 +21,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.auth.redis_client import get_redis
+from app.core.redis import get_redis
 from app.core.config import settings as _module_settings
 from app.core.db import get_db
 from app.main import create_app
@@ -153,7 +153,7 @@ async def seed_child_user(sess) -> User:
 
 async def make_auth_headers(sess, redis_client, user) -> dict:
     """Issue a child auth token and return auth headers dict."""
-    from app.auth.redis_ops import commit_with_redis
+    from app.core.redis import commit_with_redis
     from app.auth.tokens import issue_token
 
     device_id = "test-device-lifecycle"

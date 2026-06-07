@@ -11,7 +11,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.redis_ops import commit_with_redis, discard_pending_redis_ops
+from app.core.redis import commit_with_redis, discard_pending_redis_ops
 from app.auth.tokens import (
     REDIS_KEY_PREFIX,
     TokenPayload,

@@ -12,8 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import require_parent
 from app.auth.password import verify_password
-from app.auth.redis_client import get_redis
-from app.auth.redis_ops import RedisOp, commit_with_redis, stage_redis_op
+from app.core.redis import get_redis
+from app.core.redis import RedisOp, commit_with_redis, stage_redis_op
 from app.auth.tokens import (
     issue_token,
     revoke_all_active_tokens,

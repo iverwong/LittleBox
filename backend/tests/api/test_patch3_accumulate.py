@@ -14,7 +14,7 @@ pytestmark = pytest.mark.asyncio(loop_scope="function")  # 覆盖 pyproject.toml
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from app.auth.redis_ops import commit_with_redis
+from app.core.redis import commit_with_redis
 from app.auth.tokens import issue_token
 from app.chat.graph import build_main_graph
 
@@ -36,7 +36,7 @@ SHANGHAI = ZoneInfo("Asia/Shanghai")
 async def app(db_session, redis_client):
     from unittest.mock import patch
 
-    from app.auth.redis_client import get_redis
+    from app.core.redis import get_redis
     from app.main import create_app
     from tests.conftest import _inject_mock_resources
 

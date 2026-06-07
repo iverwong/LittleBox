@@ -190,7 +190,7 @@ async def seed_integration_child(integration_runtime: Any) -> tuple[Any, dict[st
     """
     import uuid
 
-    from app.auth.redis_ops import commit_with_redis
+    from app.core.redis import commit_with_redis
     from app.auth.tokens import issue_token
     from app.models.accounts import Family, FamilyMember, User
     from app.models.enums import UserRole

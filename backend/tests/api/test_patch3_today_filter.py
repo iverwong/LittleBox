@@ -11,7 +11,7 @@ pytestmark = pytest.mark.asyncio(loop_scope="function")  # 覆盖 pyproject.toml
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from app.auth.redis_ops import commit_with_redis
+from app.core.redis import commit_with_redis
 from app.auth.tokens import issue_token
 from app.core.db import get_db
 from app.models.accounts import Family, FamilyMember, User
@@ -26,7 +26,7 @@ from app.domain.chat.session_policy import logical_day
 
 @pytest.fixture
 async def app(db_session, redis_client):
-    from app.auth.redis_client import get_redis
+    from app.core.redis import get_redis
     from app.main import create_app
 
     application = create_app()

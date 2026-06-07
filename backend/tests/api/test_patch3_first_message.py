@@ -10,7 +10,7 @@ pytestmark = pytest.mark.asyncio(loop_scope="function")  # 覆盖 pyproject.toml
 from fakeredis.aioredis import FakeRedis
 from httpx import ASGITransport, AsyncClient
 
-from app.auth.redis_ops import commit_with_redis
+from app.core.redis import commit_with_redis
 from app.auth.tokens import issue_token
 from app.chat.graph import build_main_graph
 
@@ -45,7 +45,7 @@ def redis_client_with_eval(redis_client):
 async def app_with_eval(db_session, redis_client_with_eval):
     from unittest.mock import patch
 
-    from app.auth.redis_client import get_redis
+    from app.core.redis import get_redis
     from app.main import create_app
     from tests.conftest import _inject_mock_resources
 

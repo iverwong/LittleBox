@@ -6,7 +6,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.password import generate_phone
-from app.auth.redis_ops import commit_with_redis
+from app.core.redis import commit_with_redis
 from app.auth.tokens import REDIS_KEY_PREFIX, issue_token, token_hash
 from app.models.accounts import Family, FamilyMember, User
 from app.models.enums import UserRole

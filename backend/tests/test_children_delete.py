@@ -295,7 +295,7 @@ class TestDeleteChildTransactionRollback:
         from sqlalchemy.exc import SQLAlchemyError
 
         from app.auth.password import generate_password
-        from app.auth.redis_ops import discard_pending_redis_ops
+        from app.core.redis import discard_pending_redis_ops
         from app.auth.tokens import REDIS_KEY_PREFIX
         from app.domain.accounts.service import hard_delete_child
 

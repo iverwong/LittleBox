@@ -144,6 +144,6 @@ class TestBuildArqRedisUrl:
     """_build_arq_redis_url 纯函数测试。"""
 
     def test_arq_url_ends_with_db_1(self):
-        from app.auth.redis_client import _build_arq_redis_url
+        from app.core.redis import _build_arq_redis_url
         url = _build_arq_redis_url()
         assert url.endswith("/1"), f"Expected /1 suffix, got {url}"

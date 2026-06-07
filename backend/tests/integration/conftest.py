@@ -302,7 +302,7 @@ async def app(
     """
     from app.main import create_app
 
-    from app.auth.redis_client import get_redis
+    from app.core.redis import get_redis
     from app.core.db import get_db
 
     application = create_app()

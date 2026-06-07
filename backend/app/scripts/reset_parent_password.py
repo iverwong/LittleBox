@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.password import generate_password, hash_password
-from app.auth.redis_ops import commit_with_redis
+from app.core.redis import commit_with_redis
 from app.auth.tokens import revoke_all_active_tokens
 from app.models.accounts import User
 from app.models.enums import UserRole

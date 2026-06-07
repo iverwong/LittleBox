@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from app.auth.redis_client import _build_arq_redis_url
+from app.core.redis import _build_arq_redis_url
 
 logger = logging.getLogger(__name__)
 

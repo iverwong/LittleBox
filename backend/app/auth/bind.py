@@ -16,7 +16,7 @@ from typing import Optional
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.redis_ops import RedisOp, stage_redis_op
+from app.core.redis import RedisOp, stage_redis_op
 
 BIND_KEY_PREFIX = "bind:"
 BIND_TTL_SECONDS = 300

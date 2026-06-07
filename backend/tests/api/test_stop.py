@@ -15,7 +15,7 @@ import asyncio
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.auth.redis_ops import commit_with_redis
+from app.core.redis import commit_with_redis
 from app.auth.tokens import issue_token
 from app.domain.chat.stream_signals import running_streams
 from app.core.db import get_db
@@ -51,7 +51,7 @@ async def app_with_eval(db_session, redis_client_with_eval):
     """App fixture with overridden db + redis."""
     from unittest.mock import patch
 
-    from app.auth.redis_client import get_redis
+    from app.core.redis import get_redis
     from app.main import create_app
     from tests.conftest import _inject_mock_resources
 
