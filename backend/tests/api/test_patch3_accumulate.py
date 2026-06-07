@@ -12,9 +12,9 @@ from zoneinfo import ZoneInfo
 import pytest
 
 pytestmark = pytest.mark.asyncio(loop_scope="function")  # 覆盖 pyproject.toml 的 session 级 loop scope
-from app.auth.tokens import issue_token
 from app.chat.graph import build_main_graph
 from app.core.redis import commit_with_redis
+from app.domain.auth.tokens import issue_token
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
@@ -24,7 +24,10 @@ from app.core.enums import Gender, MessageRole, MessageStatus, UserRole
 from app.models.accounts import ChildProfile, Family, FamilyMember, User
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
-from tests.api._chat_stream_lifecycle_helpers import lifecycle_ctx, lifecycle_setup  # noqa: F401  # lifecycle_ctx 是 fixture param
+from tests.api._chat_stream_lifecycle_helpers import (  # noqa: F401  # lifecycle_ctx 是 fixture param
+    lifecycle_ctx,
+    lifecycle_setup,
+)
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 

@@ -247,7 +247,7 @@ class TestDeleteChildAuth:
         seeded_parent,
     ) -> None:
         """跨家族 child → 404（不暴露存在性）。"""
-        from app.auth.password import generate_phone
+        from app.domain.auth.password import generate_phone
 
         parent, pw = seeded_parent
         parent_token = await _login(api_client, parent, pw)
@@ -291,10 +291,10 @@ class TestDeleteChildTransactionRollback:
         conftest 的 teardown 会自动 rollback，异常后 session 不支持再次 await，
         所以不显式调用 rollback。
         """
-        from app.auth.password import generate_password
-        from app.auth.tokens import REDIS_KEY_PREFIX
         from app.core.redis import discard_pending_redis_ops
         from app.domain.accounts.service import hard_delete_child
+        from app.domain.auth.password import generate_password
+        from app.domain.auth.tokens import REDIS_KEY_PREFIX
         from sqlalchemy.exc import SQLAlchemyError
 
         parent, _pw = seeded_parent

@@ -6,8 +6,8 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-from app.auth.password import hash_password
 from app.core.enums import UserRole
+from app.domain.auth.password import hash_password
 from app.models.accounts import ChildProfile, Family, FamilyMember, User
 from sqlalchemy import select, update
 

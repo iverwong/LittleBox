@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import pytest
-from app.auth.tokens import REDIS_KEY_PREFIX
+from app.domain.auth.tokens import REDIS_KEY_PREFIX
 from app.models.accounts import (
     AuthToken,
     ChildProfile,
@@ -28,8 +28,8 @@ class TestHardDeleteChildService:
         """deleted_tables 包含所有 10 张被 CASCADE 清理的表（无业务过滤）。"""
         from datetime import date
 
-        from app.auth.password import generate_password, hash_password
         from app.core.enums import DailyStatus
+        from app.domain.auth.password import generate_password, hash_password
         from app.models.parent import DailyReport, Notification
 
         fam = Family()
@@ -96,8 +96,8 @@ class TestHardDeleteChildService:
         """SELECT COUNT auth_tokens 不带 revoked_at 过滤，与 CASCADE 实际删除行数一致。"""
         from datetime import datetime, timezone
 
-        from app.auth.password import generate_password, hash_password
         from app.core.redis import discard_pending_redis_ops
+        from app.domain.auth.password import generate_password, hash_password
 
         fam = Family()
         db_session.add(fam)
@@ -145,7 +145,7 @@ class TestHardDeleteChildService:
         db_session: AsyncSession,
     ) -> None:
         """审计记录：requested_by / child_id_snapshot / reason='parent_request' / deleted_tables。"""
-        from app.auth.password import generate_password, hash_password
+        from app.domain.auth.password import generate_password, hash_password
         from app.models.parent import DataDeletionRequest
 
         fam = Family()
@@ -199,8 +199,8 @@ class TestRedisZombieCache:
         redis_client: FakeRedis,
     ) -> None:
         """正例：commit_with_redis 成功清理 Redis 缓存。"""
-        from app.auth.password import generate_password, hash_password
         from app.core.redis import commit_with_redis
+        from app.domain.auth.password import generate_password, hash_password
         from app.models.parent import DataDeletionRequest
 
         fam = Family()
@@ -259,8 +259,8 @@ class TestRedisZombieCache:
         redis_client: FakeRedis,
     ) -> None:
         """反例：hard_delete_child 后裸 commit → Redis 缓存残留（防退化）。"""
-        from app.auth.password import generate_password, hash_password
         from app.core.redis import discard_pending_redis_ops
+        from app.domain.auth.password import generate_password, hash_password
 
         fam = Family()
         db_session.add(fam)

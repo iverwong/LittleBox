@@ -6,11 +6,11 @@ import uuid
 
 import pytest
 import pytest_asyncio
-from app.auth.bind import BIND_KEY_PREFIX, BIND_RESULT_KEY_PREFIX, issue_bind_token
-from app.auth.password import generate_phone
-from app.auth.tokens import REDIS_KEY_PREFIX, issue_token
 from app.core.enums import UserRole
 from app.core.redis import commit_with_redis
+from app.domain.auth.bind_tokens import BIND_KEY_PREFIX, BIND_RESULT_KEY_PREFIX, issue_bind_token
+from app.domain.auth.password import generate_phone
+from app.domain.auth.tokens import REDIS_KEY_PREFIX, issue_token
 from app.models.accounts import AuthToken, ChildProfile, Family, FamilyMember, User
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession

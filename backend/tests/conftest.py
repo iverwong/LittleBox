@@ -356,8 +356,8 @@ async def api_client(app: FastAPI) -> AsyncGenerator[AsyncClient, None]:
 @pytest_asyncio.fixture
 async def seeded_parent(db_session: AsyncSession) -> tuple:
     """种一个 active parent + family + family_members。返回 (user, plaintext_password)。"""
-    from app.auth.password import generate_password, generate_phone, hash_password
     from app.core.enums import UserRole
+    from app.domain.auth.password import generate_password, generate_phone, hash_password
     from app.models.accounts import Family, FamilyMember, User
 
     pw = generate_password()
@@ -383,8 +383,8 @@ async def seeded_parent(db_session: AsyncSession) -> tuple:
 @pytest_asyncio.fixture
 async def inactive_parent(db_session: AsyncSession) -> tuple:
     """种一个 is_active=False 的 parent。返回 (user, plaintext_password)。"""
-    from app.auth.password import generate_password, generate_phone, hash_password
     from app.core.enums import UserRole
+    from app.domain.auth.password import generate_password, generate_phone, hash_password
     from app.models.accounts import Family, FamilyMember, User
 
     pw = generate_password()
@@ -458,8 +458,8 @@ async def child_user(db_session: AsyncSession):
 @pytest_asyncio.fixture
 async def rate_limit_parent(db_session: AsyncSession) -> tuple:
     """种一个固定 phone='abcd' 的 active parent，用于 rate-limit 计数测试。"""
-    from app.auth.password import generate_password, hash_password
     from app.core.enums import UserRole
+    from app.domain.auth.password import generate_password, hash_password
     from app.models.accounts import Family, FamilyMember, User
 
     pw = generate_password()

@@ -10,8 +10,6 @@ from redis.asyncio import Redis
 from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.deps import require_parent
-from app.auth.tokens import revoke_all_active_tokens
 from app.core.db import get_db
 from app.core.enums import UserRole
 from app.core.redis import commit_with_redis, get_redis
@@ -27,6 +25,8 @@ from app.domain.accounts.service import (
 from app.domain.accounts.service import (
     hard_delete_child,
 )
+from app.domain.auth.deps import require_parent
+from app.domain.auth.tokens import revoke_all_active_tokens
 from app.models.accounts import AuthToken, ChildProfile, User
 
 router = APIRouter(prefix="/api/v1/children", tags=["children"])

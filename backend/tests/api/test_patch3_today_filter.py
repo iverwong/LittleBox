@@ -8,11 +8,11 @@ from datetime import datetime, timedelta
 import pytest
 
 pytestmark = pytest.mark.asyncio(loop_scope="function")  # 覆盖 pyproject.toml 的 session 级 loop scope
-from app.auth.tokens import issue_token
 from app.core.db import get_db
 from app.core.enums import UserRole
 from app.core.redis import commit_with_redis
 from app.core.time import SHANGHAI
+from app.domain.auth.tokens import issue_token
 from app.domain.chat.session_policy import logical_day
 from app.models.chat import Session as SessionModel
 from httpx import ASGITransport, AsyncClient

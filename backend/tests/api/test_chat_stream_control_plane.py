@@ -38,9 +38,9 @@ def _mock_enqueue_audit():
         yield
 
 
-from app.auth.tokens import issue_token
 from app.chat.graph import build_main_graph
 from app.core.redis import commit_with_redis
+from app.domain.auth.tokens import issue_token
 from app.domain.chat.stream import frame_sse_event
 from fakeredis.aioredis import FakeRedis
 from httpx import AsyncClient
@@ -52,7 +52,10 @@ from app.core.enums import InterventionType, MessageRole, MessageStatus, UserRol
 from app.core.locks import acquire_session_lock
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
-from tests.api._chat_stream_lifecycle_helpers import lifecycle_ctx, lifecycle_setup  # noqa: F401  # lifecycle_ctx 是 fixture param
+from tests.api._chat_stream_lifecycle_helpers import (  # noqa: F401  # lifecycle_ctx 是 fixture param
+    lifecycle_ctx,
+    lifecycle_setup,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures

@@ -26,9 +26,9 @@ def _mock_enqueue_audit():
         yield
 
 
-from app.auth.tokens import issue_token
 from app.chat.graph import build_main_graph
 from app.core.redis import commit_with_redis
+from app.domain.auth.tokens import issue_token
 from fakeredis.aioredis import FakeRedis
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select

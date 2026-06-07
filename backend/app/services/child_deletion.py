@@ -7,7 +7,7 @@ import uuid
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.tokens import revoke_all_active_tokens
+from app.domain.auth.tokens import revoke_all_active_tokens
 from app.models.accounts import (
     AuthToken,
     ChildProfile,

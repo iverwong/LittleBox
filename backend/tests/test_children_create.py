@@ -268,7 +268,7 @@ class TestCreateChildLimit:
         db_session: AsyncSession,
     ) -> None:
         """family A 满 3 个，不影响 family B parent 仍能创建。"""
-        from app.auth.password import hash_password
+        from app.domain.auth.password import hash_password
 
         # family A parent: create 3 children
         parent_a, pw_a = seeded_parent

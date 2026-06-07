@@ -10,13 +10,6 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.deps import require_parent
-from app.auth.password import verify_password
-from app.auth.tokens import (
-    issue_token,
-    revoke_all_active_tokens,
-    revoke_token,
-)
 from app.core.db import get_db
 from app.core.enums import UserRole
 from app.core.redis import RedisOp, commit_with_redis, get_redis, stage_redis_op
@@ -25,7 +18,14 @@ from app.domain.accounts.rate_limit import (
     incr_login_fail,
 )
 from app.domain.accounts.schemas import AccountOut, CurrentAccount
+from app.domain.auth.deps import require_parent
+from app.domain.auth.password import verify_password
 from app.domain.auth.schemas import LoginRequest, LoginResponse
+from app.domain.auth.tokens import (
+    issue_token,
+    revoke_all_active_tokens,
+    revoke_token,
+)
 from app.models.accounts import User
 
 logger = logging.getLogger(__name__)

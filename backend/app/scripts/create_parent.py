@@ -28,9 +28,9 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.password import generate_password, generate_phone, hash_password
 from app.core.enums import UserRole
 from app.core.redis import commit_with_redis
+from app.domain.auth.password import generate_password, generate_phone, hash_password
 from app.models.accounts import Family, FamilyMember, User
 from app.scripts._common import build_arg_parser, cli_runtime, run_main
 

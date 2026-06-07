@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import pytest
-from app.auth.tokens import REDIS_KEY_PREFIX, issue_token, token_hash
 from app.core.redis import commit_with_redis
+from app.domain.auth.tokens import REDIS_KEY_PREFIX, issue_token, token_hash
 from app.models.accounts import User
 from sqlalchemy.ext.asyncio import AsyncSession
 

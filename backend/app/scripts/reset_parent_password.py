@@ -32,10 +32,10 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.password import generate_password, hash_password
-from app.auth.tokens import revoke_all_active_tokens
 from app.core.enums import UserRole
 from app.core.redis import commit_with_redis
+from app.domain.auth.password import generate_password, hash_password
+from app.domain.auth.tokens import revoke_all_active_tokens
 from app.models.accounts import User
 from app.scripts._common import build_arg_parser, cli_runtime, run_main
 

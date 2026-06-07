@@ -13,10 +13,10 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from app.auth.tokens import issue_token
 from app.core.db import get_db
 from app.core.enums import SessionStatus, UserRole
 from app.core.redis import commit_with_redis
+from app.domain.auth.tokens import issue_token
 from app.domain.chat.stream_signals import running_streams
 from app.models.accounts import Family, FamilyMember, User
 from app.models.chat import Session as SessionModel

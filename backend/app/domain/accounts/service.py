@@ -19,7 +19,6 @@ from redis.asyncio import Redis
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.tokens import revoke_all_active_tokens
 from app.core.config import settings
 from app.core.enums import UserRole
 from app.core.redis import commit_with_redis
@@ -28,6 +27,7 @@ from app.domain.accounts.schemas import (
     CreateChildRequest,
     CurrentAccount,
 )
+from app.domain.auth.tokens import revoke_all_active_tokens
 from app.models.accounts import (
     AuthToken,
     ChildProfile,

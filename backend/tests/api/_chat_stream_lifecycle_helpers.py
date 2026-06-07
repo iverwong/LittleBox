@@ -152,8 +152,8 @@ async def seed_child_user(sess) -> User:
 
 async def make_auth_headers(sess, redis_client, user) -> dict:
     """Issue a child auth token and return auth headers dict."""
-    from app.auth.tokens import issue_token
     from app.core.redis import commit_with_redis
+    from app.domain.auth.tokens import issue_token
 
     device_id = "test-device-lifecycle"
     token = await issue_token(

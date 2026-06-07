@@ -35,9 +35,9 @@ def _parse_sse_frames(raw: str) -> list[dict]:
 @pytest.fixture
 async def auth_headers_child(db_session, redis_client):
     """创建 child 用户 + token，返回 headers。"""
-    from app.auth.tokens import issue_token
     from app.core.enums import Gender, UserRole
     from app.core.redis import commit_with_redis
+    from app.domain.auth.tokens import issue_token
     from app.models.accounts import ChildProfile, Family, FamilyMember, User
 
     fam = Family()

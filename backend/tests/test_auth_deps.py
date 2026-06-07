@@ -10,13 +10,13 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
-from app.auth.tokens import (
+from app.core.enums import UserRole
+from app.core.redis import commit_with_redis
+from app.domain.auth.tokens import (
     REDIS_KEY_PREFIX,
     issue_token,
     token_hash,
 )
-from app.core.enums import UserRole
-from app.core.redis import commit_with_redis
 from app.models.accounts import AuthToken, Family, FamilyMember, User
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -246,8 +246,8 @@ class TestRequireParent:
         # 用一个 parent-only 端点来验证...
         # 等等，Step 5 才有 parent-only 端点...
         # 临时方案：直接 import require_parent 测
-        from app.auth.deps import require_parent
         from app.domain.accounts.schemas import CurrentAccount
+        from app.domain.auth.deps import require_parent
 
         child_account = CurrentAccount(
             id=child_user.id,
@@ -266,8 +266,8 @@ class TestRequireChild:
     async def test_parent_token_returns_403(self) -> None:
         import uuid
 
-        from app.auth.deps import require_child
         from app.domain.accounts.schemas import CurrentAccount
+        from app.domain.auth.deps import require_child
 
         parent_account = CurrentAccount(
             id=uuid.uuid4(),
@@ -309,7 +309,7 @@ class TestDailyRenewal:
         yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
 
         # patch _today_cst so needs_roll thinks today is yesterday (different from last_rolled_date)
-        import app.auth.tokens as tokens_module
+        import app.domain.auth.tokens as tokens_module
         original_today = tokens_module._today_cst
 
         def fake_today_yesterday():
@@ -353,15 +353,15 @@ class TestDailyRenewal:
 
         验证方式：monkeypatch counter 记录 roll_token_expiry 调用次数。
 
-        patch 目标：app.auth.deps.roll_token_expiry（使用点），
-        不是 app.auth.tokens.roll_token_expiry（定义点）。
+        patch 目标：app.domain.auth.deps.roll_token_expiry（使用点），
+        不是 app.domain.auth.tokens.roll_token_expiry（定义点）。
 
         前置条件：issue_token 把 last_rolled_date 初始化为当天，
         导致 needs_roll=False。需先将 Redis 中的 last_rolled_date 拨到昨天，
         确保首次请求触发 roll_token_expiry。
         """
-        import app.auth.deps as auth_deps
-        import app.auth.tokens as tokens_mod
+        import app.domain.auth.deps as auth_deps
+        import app.domain.auth.tokens as tokens_mod
 
         token = await issue_token(
             db_session,
@@ -391,7 +391,7 @@ class TestDailyRenewal:
             calls.append((args, kwargs))
             return await original(*args, **kwargs)
 
-        monkeypatch.setattr("app.auth.deps.roll_token_expiry", _counting)
+        monkeypatch.setattr("app.domain.auth.deps.roll_token_expiry", _counting)
 
         try:
             headers = {"Authorization": f"Bearer {token}", "X-Device-Id": "dev_same_day"}
@@ -416,7 +416,7 @@ class TestDailyRenewal:
             assert len(calls) == 1, f"expected 1 call, got {len(calls)}"
 
         finally:
-            monkeypatch.setattr("app.auth.deps.roll_token_expiry", original)
+            monkeypatch.setattr("app.domain.auth.deps.roll_token_expiry", original)
 
     @pytest.mark.asyncio
     async def test_child_token_never_renews(
@@ -442,7 +442,7 @@ class TestDailyRenewal:
 
         # mock yesterday
         yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
-        import app.auth.tokens as tokens_module
+        import app.domain.auth.tokens as tokens_module
         original_today = tokens_module._today_cst
 
         def fake_today_yesterday():

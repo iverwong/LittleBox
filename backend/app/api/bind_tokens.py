@@ -12,19 +12,18 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.bind import (
+from app.core.db import get_db
+from app.core.enums import UserRole
+from app.core.redis import commit_with_redis, get_redis
+from app.domain.accounts.schemas import AccountOut, CurrentAccount
+from app.domain.auth.bind_tokens import (
     BIND_KEY_PREFIX,
     BIND_RESULT_KEY_PREFIX,
     consume_bind_token,
     issue_bind_token,
     stage_record_bind_result,
 )
-from app.auth.deps import require_parent
-from app.auth.tokens import issue_token, revoke_all_active_tokens
-from app.core.db import get_db
-from app.core.enums import UserRole
-from app.core.redis import commit_with_redis, get_redis
-from app.domain.accounts.schemas import AccountOut, CurrentAccount
+from app.domain.auth.deps import require_parent
 from app.domain.auth.schemas import (
     BindTokenResponse,
     BindTokenStatusOut,
@@ -32,6 +31,7 @@ from app.domain.auth.schemas import (
     LoginResponse,
     RedeemBindTokenRequest,
 )
+from app.domain.auth.tokens import issue_token, revoke_all_active_tokens
 from app.models.accounts import User
 
 router = APIRouter(prefix="/api/v1/bind-tokens", tags=["bind_tokens"])

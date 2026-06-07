@@ -15,7 +15,6 @@ from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
-from app.auth.deps import get_current_account, require_child
 from app.chat.context_schema import ChatContextSchema
 from app.core.db import get_db
 from app.core.enums import MessageRole, MessageStatus, SessionStatus
@@ -28,6 +27,7 @@ from app.core.redis import get_redis
 from app.core.runtime import RuntimeResources
 from app.core.time import SHANGHAI
 from app.domain.accounts.schemas import AccountOut, ChildProfileOut, CurrentAccount
+from app.domain.auth.deps import get_current_account, require_child
 from app.domain.chat.pagination import decode_cursor, encode_cursor
 from app.domain.chat.pipeline import run_llm_pipeline
 from app.domain.chat.schemas import (

@@ -12,9 +12,9 @@ from zoneinfo import ZoneInfo
 import pytest
 
 pytestmark = pytest.mark.asyncio(loop_scope="function")  # 覆盖 pyproject.toml 的 session 级 loop scope
-from app.auth.tokens import issue_token
 from app.chat.graph import build_main_graph
 from app.core.redis import commit_with_redis
+from app.domain.auth.tokens import issue_token
 from fakeredis.aioredis import FakeRedis
 from httpx import ASGITransport, AsyncClient
 

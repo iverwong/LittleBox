@@ -97,7 +97,7 @@ class TestResetPassword:
         assert new_user.password_hash != old_hash
 
         # 旧密码不应再通过验证
-        from app.auth.password import verify_password
+        from app.domain.auth.password import verify_password
 
         assert not verify_password(new_user.password_hash, info.plain_password)
         assert verify_password(new_user.password_hash, result.plain_password)

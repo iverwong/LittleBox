@@ -28,9 +28,9 @@ def _mock_enqueue_audit():
         yield
 
 
-from app.auth.tokens import issue_token
 from app.chat.graph import build_main_graph
 from app.core.redis import commit_with_redis
+from app.domain.auth.tokens import issue_token
 from fakeredis.aioredis import FakeRedis
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
@@ -40,7 +40,10 @@ from app.core.db import get_db
 from app.core.enums import MessageRole, MessageStatus, UserRole
 from app.domain.chat.stream_signals import running_streams
 from app.models.chat import Message
-from tests.api._chat_stream_lifecycle_helpers import lifecycle_ctx, lifecycle_setup  # noqa: F401  # lifecycle_ctx 是 fixture param
+from tests.api._chat_stream_lifecycle_helpers import (  # noqa: F401  # lifecycle_ctx 是 fixture param
+    lifecycle_ctx,
+    lifecycle_setup,
+)
 
 # ---------------------------------------------------------------------------
 # _BrokenOnCall: 通过 athrow 将异常注入生成器的 yield 暂停点，
