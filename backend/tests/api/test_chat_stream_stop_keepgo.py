@@ -23,7 +23,7 @@ pytestmark = pytest.mark.asyncio(loop_scope="function")
 @pytest.fixture(autouse=True)
 def _mock_enqueue_audit():
     """mock enqueue_audit 避免 Redis lifespan 依赖。"""
-    with patch("app.api.me.enqueue_audit", AsyncMock()):
+    with patch("app.domain.chat.pipeline.enqueue_audit", AsyncMock()):
         yield
 
 
@@ -396,7 +396,7 @@ async def test_keepgo_connection_error(lifecycle_ctx):
             yield _make_delta_frame(p.get("delta", ""))
 
     lifecycle_ctx.rr.main_graph.astream = fake_astream
-    with patch("app.api.me.stream_graph_to_sse", mock_stream_to_sse):
+    with patch("app.domain.chat.pipeline.stream_graph_to_sse", mock_stream_to_sse):
         body = make_payload(content="Hi")
         resp = await client.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,

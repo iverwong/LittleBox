@@ -67,7 +67,7 @@ async def auth_headers_child(db_session, redis_client):
 @pytest.fixture(autouse=True)
 def _mock_enqueue_audit():
     """mock enqueue_audit 避免 audit Redis 依赖。"""
-    with patch("app.api.me.enqueue_audit", AsyncMock()):
+    with patch("app.domain.chat.pipeline.enqueue_audit", AsyncMock()):
         yield
 
 

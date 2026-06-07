@@ -21,7 +21,7 @@ pytestmark = pytest.mark.asyncio(loop_scope="function")
 @pytest.fixture(autouse=True)
 def _mock_enqueue_audit():
     """mock enqueue_audit 避免 Redis lifespan 依赖。"""
-    with patch("app.api.me.enqueue_audit", AsyncMock()):
+    with patch("app.domain.chat.pipeline.enqueue_audit", AsyncMock()):
         yield
 
 
@@ -1220,7 +1220,7 @@ async def test_enqueue_audit_target_message_id_equals_aid(
     app_with_eval.state.resources.main_graph.astream = fake_astream
 
     enqueue_spy = AsyncMock()
-    with _patch("app.api.me.enqueue_audit", enqueue_spy):
+    with _patch("app.domain.chat.pipeline.enqueue_audit", enqueue_spy):
         body = make_payload(content="你好")
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,

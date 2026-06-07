@@ -33,7 +33,7 @@ pytestmark = pytest.mark.asyncio(loop_scope="function")
 @pytest.fixture(autouse=True)
 def _mock_enqueue_audit():
     """所有控制平面测试共用：enqueue_audit mock 避免 Redis lifespan 依赖。"""
-    with patch("app.api.me.enqueue_audit", AsyncMock()):
+    with patch("app.domain.chat.pipeline.enqueue_audit", AsyncMock()):
         yield
 
 
@@ -498,7 +498,7 @@ async def test_decision_row6_orphan_reuse_feeds_user_input(lifecycle_ctx):
 
     body = make_payload(content="", session_id=str(sid), regenerate_for=str(orphan_id))
 
-    with patch("app.api.me._run_llm_pipeline", new=fake_run_llm_pipeline):
+    with patch("app.api.me.run_llm_pipeline", new=fake_run_llm_pipeline):
         resp = await client.post("/api/v1/me/chat/stream", json=body, headers=headers)
 
     assert resp.status_code == 200

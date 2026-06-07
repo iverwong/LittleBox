@@ -6,7 +6,7 @@ shutdown wait / shutdown cancel / stop signal / commit①~create_task lock relea
 三种策略：
 - HTTP 全栈（#1 #4 #7 #8）：走 lifecycle_ctx.client POST；
 - 纯 async 单元（#5 #6）：直操 asyncio.wait 逻辑，不需 HTTP；
-- 协程级直测（#2 #3）：直接驱动 stream_generator / _run_llm_pipeline。
+- 协程级直测（#2 #3）：直接驱动 stream_generator / run_llm_pipeline。
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ pytestmark = pytest.mark.asyncio(loop_scope="function")
 
 from sqlalchemy import select
 
-from app.api.me import _run_llm_pipeline
+from app.domain.chat.pipeline import run_llm_pipeline
 from app.chat.locks import release_session_lock, running_streams
 from app.core.config import settings as _module_settings
 from app.domain.chat.stream import ChatStreamState, stream_generator
@@ -122,10 +122,10 @@ async def test_client_disconnect_keeps_bg_task_running(lifecycle_ctx):
     """Given an in-progress stream_generator,
     When we aclose() it mid-stream (模拟客户端断连),
     Then it should return silently without raising,
-         and a separately driven _run_llm_pipeline should still
+         and a separately driven run_llm_pipeline should still
          commit the ai row + release the lock.
     """
-    # 直接用 _run_llm_pipeline 和 stream_generator 的单元级驱动
+    # 直接用 run_llm_pipeline 和 stream_generator 的单元级驱动
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
     sid = uuid4()
 
@@ -165,7 +165,7 @@ async def test_client_disconnect_keeps_bg_task_running(lifecycle_ctx):
 
     # 同时启动段一 segment task
     task = asyncio.create_task(
-        _run_llm_pipeline(
+        run_llm_pipeline(
             rr=rr, redis=lifecycle_ctx.redis_client, sid=sid, hid=hid, nonce=nonce,
             child_user_id=child.id, turn_number=1,
             initial_state={"messages": []}, ctx=ctx,
@@ -246,7 +246,7 @@ async def test_queue_full_triggers_flow_pause_and_headless_continuation(lifecycl
     running_streams[str(sid)] = stop_event
 
     task = asyncio.create_task(
-        _run_llm_pipeline(
+        run_llm_pipeline(
             rr=rr, redis=lifecycle_ctx.redis_client, sid=sid, hid=hid, nonce=nonce,
             child_user_id=child.id, turn_number=1,
             initial_state={"messages": []}, ctx=ctx,
