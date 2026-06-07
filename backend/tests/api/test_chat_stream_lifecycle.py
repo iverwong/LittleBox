@@ -21,8 +21,9 @@ pytestmark = pytest.mark.asyncio(loop_scope="function")
 
 from sqlalchemy import select
 
+from app.core.locks import release_session_lock
 from app.domain.chat.pipeline import run_llm_pipeline
-from app.chat.locks import release_session_lock, running_streams
+from app.domain.chat.stream_signals import running_streams
 from app.core.config import settings as _module_settings
 from app.domain.chat.stream import ChatStreamState, stream_generator
 from app.models.chat import Message

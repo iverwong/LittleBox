@@ -47,7 +47,7 @@ from app.chat.graph import build_main_graph
 from app.domain.chat.stream import frame_sse_event
 
 main_graph = build_main_graph()
-from app.chat.locks import acquire_session_lock
+from app.core.locks import acquire_session_lock
 from app.core.db import get_db
 from app.models.accounts import Family, FamilyMember, User
 from app.models.chat import Message
@@ -796,7 +796,7 @@ async def test_session_lock_rejects_concurrent(
     assert "SessionBusy" in resp.text
 
     # Clean up lock
-    from app.chat.locks import release_session_lock
+    from app.core.locks import release_session_lock
 
     await release_session_lock(redis_client, str(sid), nonce)
 
@@ -940,7 +940,7 @@ async def test_lock_released_in_generator_finally(
     await resp.aclose()  # ensure response fully consumed
 
     # After response closes, lock should be gone
-    from app.chat.locks import acquire_session_lock
+    from app.core.locks import acquire_session_lock
 
     nonce = await acquire_session_lock(
         redis_client, _parse_sse_stream(resp.text)[0]["data"]["session_id"]
@@ -1053,7 +1053,7 @@ async def test_multi_turn_stop_with_ai(lifecycle_ctx):
 
     import asyncio
 
-    from app.chat.locks import running_streams
+    from app.domain.chat.stream_signals import running_streams
 
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
@@ -1125,7 +1125,7 @@ async def test_multi_turn_stop_no_ai(lifecycle_ctx):
 
     import asyncio
 
-    from app.chat.locks import running_streams
+    from app.domain.chat.stream_signals import running_streams
 
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
@@ -1351,7 +1351,7 @@ async def test_intervention_type_stop_with_ai_crisis(lifecycle_ctx):
 
     import asyncio
 
-    from app.chat.locks import running_streams
+    from app.domain.chat.stream_signals import running_streams
 
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
     sid = uuid4()

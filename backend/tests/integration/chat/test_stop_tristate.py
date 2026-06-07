@@ -21,7 +21,7 @@ from typing import Any
 import pytest
 
 from app.chat.factory import clear_test_llm
-from app.chat.locks import running_streams
+from app.domain.chat.stream_signals import running_streams
 
 from ._helpers import seed_integration_child
 

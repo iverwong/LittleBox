@@ -20,14 +20,15 @@ from sqlalchemy import select
 from app.chat.compression import CONTEXT_COMPRESS_THRESHOLD_TOKENS
 from app.chat.context_schema import ChatContextSchema
 from app.chat.graph import enqueue_audit, persist_ai_turn
-from app.chat.locks import release_session_lock, running_streams
 from app.chat.prompts import build_system_prompt
+from app.core.locks import release_session_lock
 from app.core.runtime import RuntimeResources
 from app.domain.chat.stream import (
     ChatStreamState,
     frame_sse_event,
     stream_graph_to_sse,
 )
+from app.domain.chat.stream_signals import running_streams
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
 from app.models.enums import InterventionType, MessageRole, MessageStatus

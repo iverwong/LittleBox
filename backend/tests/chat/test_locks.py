@@ -1,10 +1,10 @@
-"""Tests for app.chat.locks — throttle lock, session lock, Lua release."""
+"""Tests for app.core.locks — throttle lock, session lock, Lua release."""
 import asyncio
 from unittest.mock import patch
 
 import pytest
 
-from app.chat.locks import (
+from app.core.locks import (
     acquire_session_lock,
     acquire_throttle_lock,
     release_session_lock,
@@ -132,31 +132,31 @@ async def test_release_lock_correct_nonce_deletes_key(fake_redis):
 @pytest.mark.asyncio
 async def test_running_streams_register_and_lookup():
     """running_streams dict accepts registration and lookup by session_id."""
-    from app.chat import locks
+    from app.domain.chat import stream_signals as signals
 
     sid = "test_stream_sid"
     event = asyncio.Event()
-    locks.running_streams[sid] = event
+    signals.running_streams[sid] = event
 
-    assert sid in locks.running_streams
-    assert locks.running_streams[sid] is event
+    assert sid in signals.running_streams
+    assert signals.running_streams[sid] is event
 
     # clean up
-    locks.running_streams.pop(sid, None)
+    signals.running_streams.pop(sid, None)
 
 
 @pytest.mark.asyncio
 async def test_running_streams_pop_after_use():
     """pop(sid, None) removes entry; subsequent lookup returns None."""
-    from app.chat import locks
+    from app.domain.chat import stream_signals as signals
 
     sid = "test_stream_sid_pop"
     event = asyncio.Event()
-    locks.running_streams[sid] = event
+    signals.running_streams[sid] = event
 
-    popped = locks.running_streams.pop(sid, None)
+    popped = signals.running_streams.pop(sid, None)
     assert popped is event
-    assert sid not in locks.running_streams
+    assert sid not in signals.running_streams
 
 
 @pytest.mark.asyncio

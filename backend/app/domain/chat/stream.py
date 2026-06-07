@@ -19,7 +19,6 @@ import json
 import logging
 from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass
-from typing import Any
 from uuid import UUID
 
 import anyio

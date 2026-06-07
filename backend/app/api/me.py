@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -18,12 +18,6 @@ from starlette.responses import StreamingResponse
 from app.auth.deps import get_current_account, require_child
 from app.auth.redis_client import get_redis
 from app.chat.context_schema import ChatContextSchema
-from app.chat.locks import (
-    acquire_session_lock,
-    acquire_throttle_lock,
-    release_session_lock,
-    running_streams,
-)
 from app.chat.session_policy import (
     SHANGHAI,
     logical_day,
@@ -31,6 +25,11 @@ from app.chat.session_policy import (
     today_session_title,
 )
 from app.core.db import get_db
+from app.core.locks import (
+    acquire_session_lock,
+    acquire_throttle_lock,
+    release_session_lock,
+)
 from app.core.runtime import RuntimeResources
 from app.domain.accounts.schemas import AccountOut, ChildProfileOut, CurrentAccount
 from app.domain.chat.pagination import decode_cursor, encode_cursor
@@ -43,6 +42,7 @@ from app.domain.chat.schemas import (
     SessionListResponse,
 )
 from app.domain.chat.stream import ChatStreamState, stream_generator
+from app.domain.chat.stream_signals import running_streams
 from app.domain.chat.turn_intake import intake_human_message
 from app.models.accounts import ChildProfile, User
 from app.models.chat import Message

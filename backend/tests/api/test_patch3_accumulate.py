@@ -108,7 +108,7 @@ def _mock_enqueue_audit():
 @pytest.fixture
 def _patch_locks(monkeypatch: pytest.MonkeyPatch):
     """绕过 throttle + session lock（避免依赖 FakeRedis eval patch 跨测试泄漏）。"""
-    from app.chat.locks import acquire_session_lock, acquire_throttle_lock
+    from app.core.locks import acquire_session_lock, acquire_throttle_lock
     monkeypatch.setattr("app.api.me.acquire_throttle_lock", AsyncMock(return_value=True))
     monkeypatch.setattr("app.api.me.acquire_session_lock", AsyncMock(return_value="mock-nonce"))
     monkeypatch.setattr("app.api.me.release_session_lock", AsyncMock(return_value=None))
