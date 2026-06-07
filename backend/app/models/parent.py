@@ -6,8 +6,8 @@ from sqlalchemy import Date, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.db import Base, BaseMixin
 from app.core.enums import DailyStatus, NotificationType
-from app.models.base import Base, BaseMixin
 
 
 class DailyReport(BaseMixin, Base):

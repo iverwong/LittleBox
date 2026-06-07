@@ -6,7 +6,7 @@ from sqlalchemy import Boolean, ForeignKey, Index, Integer, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, BaseMixin
+from app.core.db import Base, BaseMixin
 
 
 class AuditRecord(BaseMixin, Base):

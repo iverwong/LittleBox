@@ -6,8 +6,8 @@ from sqlalchemy import Boolean, Date, ForeignKey, Index, String, Text, func, tex
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.db import Base, BaseMixin
 from app.core.enums import DevicePlatform, Gender, SubTier, UserRole
-from app.models.base import Base, BaseMixin
 
 
 class Family(BaseMixin, Base):
