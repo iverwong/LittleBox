@@ -28,7 +28,12 @@ from app.core.llm import (
 
 
 class _FakeSettings:
-    """Minimal settings stub matching fields consumed by factory builders."""
+    """Minimal settings stub matching fields consumed by factory builders.
+
+    D-4B.1 加固:bailian_model / audit_model 默认值与 deepseek_model 故意不同,
+    防止 model 字段相关断言在两者同值时退化为空断言(openai 应取 bailian_model,
+    不是 deepseek_model;audit_* 应取 audit_model)。
+    """
 
     def __init__(self, **kwargs: Any) -> None:
         from pydantic import SecretStr
@@ -45,10 +50,12 @@ class _FakeSettings:
         self.bailian_base_url = kwargs.get(
             "bailian_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
-        self.bailian_model = kwargs.get("bailian_model", "deepseek-v4-flash")
+        # D-4B.1:故意与 deepseek_model 不同(防止 model 字段空断言)
+        self.bailian_model = kwargs.get("bailian_model", "qwen3-max")
         self.llm_request_timeout_seconds = 60.0
         # M8 audit pipeline settings
-        self.audit_model = kwargs.get("audit_model", "deepseek-v4-flash")
+        # D-4B.1:故意与 deepseek_model 不同(audit_* provider 应取 audit_model)
+        self.audit_model = kwargs.get("audit_model", "audit-v2")
         self.audit_reasoning_effort = kwargs.get("audit_reasoning_effort", "max")
         self.audit_thinking_enabled = kwargs.get("audit_thinking_enabled", True)
         # M8 compression pipeline settings
@@ -113,6 +120,32 @@ class TestBuildProviderLlm:
         settings = _FakeSettings()
         with pytest.raises(ProviderNotRegisteredError, match="unknown"):
             build_provider_llm("unknown", settings)
+
+    def test_openai_uses_bailian_model_not_deepseek(self) -> None:
+        """D-4B.1 防回归:openai provider 的 model 字段取 bailian_model,不是 deepseek_model。
+
+        原 4.1 实现把 model 字段折叠到 _ROLE_SETTINGS["main"],统一取
+        deepseek_model,导致 openai provider 在 bailian 端点发错误 model 名。
+        修复后 _MODEL_FIELD[(main, openai)] = "bailian_model"。
+        """
+        settings = _FakeSettings()
+        assert settings.bailian_model != settings.deepseek_model  # fixture 防护
+        llm = build_provider_llm("openai", settings)
+        assert llm.model == settings.bailian_model
+        assert llm.model != settings.deepseek_model
+
+    def test_audit_providers_use_audit_model(self) -> None:
+        """D-4B.1 防回归:audit_deepseek / audit_bailian 都取 audit_model,不是 deepseek_model。"""
+        settings = _FakeSettings()
+        assert settings.audit_model != settings.deepseek_model  # fixture 防护
+
+        llm_ds = build_provider_llm("audit_deepseek", settings)
+        assert llm_ds.model == settings.audit_model
+        assert llm_ds.model != settings.deepseek_model
+
+        llm_bl = build_provider_llm("audit_bailian", settings)
+        assert llm_bl.model == settings.audit_model
+        assert llm_bl.model != settings.deepseek_model
 
 
 # ---- T2: build_main_llm default (with fallback) ----
@@ -198,15 +231,29 @@ class TestChatDeepSeekConstruction:
         }
 
     def test_openai_construction_params(self) -> None:
-        """Construct ChatOpenAI via registry and verify params on instance."""
+        """Construct ChatOpenAI via registry and verify params on instance.
+
+        D-4B.1 加固:openai provider 的 model 字段必须取 settings.bailian_model,
+        不是 deepseek_model(陷阱 ① 同 provider 不同 model)。bailian_model 与
+        deepseek_model 在 _FakeSettings 默认值故意不同,断言强绑定字段。
+        """
         settings = _FakeSettings()
+        assert settings.bailian_model != settings.deepseek_model, (
+            "fixture 同值会让本测试退化为空断言"
+        )
         llm = _PROVIDER_REGISTRY["openai"](settings)
         # ChatOpenAI maps base_url → openai_api_base via Pydantic alias
         assert llm.openai_api_base.startswith("https://dashscope.aliyuncs.com")
-        assert llm.model == "deepseek-v4-flash"
+        assert llm.model == settings.bailian_model
+        assert llm.model != settings.deepseek_model
 
     def test_audit_deepseek_construction_params(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Mock ChatDeepSeek.__init__ to verify audit_deepseek uses audit_* settings."""
+        """Mock ChatDeepSeek.__init__ to verify audit_deepseek uses audit_* settings.
+
+        D-4B.1 加固:audit_* provider 的 model 字段必须取 settings.audit_model,
+        不是 deepseek_model。audit_model 与 deepseek_model 在 _FakeSettings
+        默认值故意不同,断言强绑定字段。
+        """
         captured: dict[str, Any] = {}
 
         def mock_init(self, **kwargs: Any) -> None:
@@ -215,9 +262,13 @@ class TestChatDeepSeekConstruction:
         monkeypatch.setattr(ChatDeepSeek, "__init__", mock_init)
 
         settings = _FakeSettings()
+        assert settings.audit_model != settings.deepseek_model, (
+            "fixture 同值会让本测试退化为空断言"
+        )
         _PROVIDER_REGISTRY["audit_deepseek"](settings)
 
-        assert captured.get("model") == "deepseek-v4-flash"
+        assert captured.get("model") == settings.audit_model
+        assert captured.get("model") != settings.deepseek_model
         assert captured.get("extra_body") == {
             "thinking": {"type": "enabled"},
             "reasoning_effort": "max",

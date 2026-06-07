@@ -151,12 +151,26 @@ def _build_compression_deepseek(settings: Any) -> ChatDeepSeek:
     )
 
 
-# role 维度配置:(model_field, thinking_field, reasoning_effort_field)
+# role 维度配置:(thinking_field, reasoning_effort_field)
 # reasoning_effort_field=None 表示该 role 不传 reasoning_effort(走独立 builder)
-_ROLE_SETTINGS: dict[str, tuple[str, str, str | None]] = {
-    "main": ("deepseek_model", "main_thinking_enabled", "main_reasoning_effort"),
-    "audit": ("audit_model", "audit_thinking_enabled", "audit_reasoning_effort"),
-    "compression": ("compression_model", "compression_thinking_enabled", None),
+# D-4B.1 修复:model 字段从 _ROLE_SETTINGS 拆出到下方 _MODEL_FIELD 二元表,
+# 因为 main role 的 model 依 provider 而异(deepseek→deepseek_model, openai→bailian_model)。
+_ROLE_SETTINGS: dict[str, tuple[str, str | None]] = {
+    "main": ("main_thinking_enabled", "main_reasoning_effort"),
+    "audit": ("audit_thinking_enabled", "audit_reasoning_effort"),
+    "compression": ("compression_thinking_enabled", None),
+}
+
+# (role, provider) → model 字段(D-4B.1 修复)
+# main role 下 deepseek/openai 走不同 model 字段(虽然 openai 实际用 bailian 端点,
+# 但 model 名来自 bailian_model 字段,不是 deepseek_model)。
+# audit role 下 deepseek/bailian 都用 audit_model(同 model 字段)。
+# compression 走独立 builder 不在此表。
+_MODEL_FIELD: dict[tuple[str, str], str] = {
+    ("main", "deepseek"): "deepseek_model",
+    ("main", "openai"): "bailian_model",  # D-4B.1 关键:不是 deepseek_model
+    ("audit", "deepseek"): "audit_model",
+    ("audit", "bailian"): "audit_model",
 }
 
 # (role, provider) → client builder(陷阱 ①:同 provider 不同 role 可走不同 client)
@@ -242,8 +256,11 @@ def build_provider_llm(provider: str, settings: Any) -> Runnable:
     if builder is _build_compression_deepseek:
         return builder(settings)
 
-    # main / audit:role 决定 model / thinking / reasoning 字段;provider 决定 creds
-    model_field, thinking_field, reasoning_field = _ROLE_SETTINGS[role]
+    # main / audit:(role, provider) 决定 model + creds(role 决定 thinking / reasoning)
+    # D-4B.1 修复:model 字段从 _MODEL_FIELD[(role, prov)] 取(原实现从 _ROLE_SETTINGS
+    # 取导致 openai 错误地用 deepseek_model,触发回归)
+    model_field = _MODEL_FIELD[(role, prov)]
+    thinking_field, reasoning_field = _ROLE_SETTINGS[role]
     if prov == "deepseek":
         api_key = settings.deepseek_api_key.get_secret_value()  # type: ignore[arg-type]
         base_url = settings.deepseek_base_url
