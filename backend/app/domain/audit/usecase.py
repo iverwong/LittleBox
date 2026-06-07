@@ -108,12 +108,10 @@ async def write_audit_results(
         rs.session_notes = session_notes_final
 
     # F.4 notifications stub(M10+ 替换为真实推送)
-    # D-5 决议(D-4A.3 落地):Step 4.5 把通知桩抽到 domain/notifications/notify_stub.py,
-    # 届时改为 notify_stub.send(notify_type, sid, turn, target)。日志格式
-    # "notify.stub.<type> sid=<sid> turn=<turn> target=<target>" 必须与原一致。
+    # D-5 决议(D-4A.3 落地):通知桩抽到 domain/notifications/notify_stub.py。
+    # 日志格式 "notify.stub.<type> sid=<sid> turn=<turn> target=<target>"
+    # 必须与原 logger.info 字面 byte 级一致,关注点 6 硬约束。
     if structured_output.crisis_detected or structured_output.redline_triggered:
         notify_type = "crisis" if structured_output.crisis_detected else "redline"
-        logger.info(
-            "notify.stub.%s sid=%s turn=%d target=%s",
-            notify_type, sid, turn_number, target_message_id,
-        )
+        from app.domain.notifications.notify_stub import send as notify_send
+        notify_send(notify_type, sid, turn_number, target_message_id)
