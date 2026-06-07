@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import select, tuple_, update
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
@@ -43,6 +43,7 @@ from app.domain.chat.schemas import (
     SessionListResponse,
 )
 from app.domain.chat.stream import ChatStreamState, stream_generator
+from app.domain.chat.turn_intake import intake_human_message
 from app.models.accounts import ChildProfile, User
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
@@ -378,105 +379,14 @@ async def chat_stream(
         _gender = child_profile.gender.value if child_profile.gender else None
 
         # ---- decision matrix O + first-turn / subsequent-turn transaction ----
-        last_msg = (
-            await db.execute(
-                select(Message)
-                .where(Message.session_id == sid, Message.status == MessageStatus.active)
-                .order_by(Message.created_at.desc(), Message.id.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-
-        # M9: turn_number = 下一轮号（commit① human + commit② ai 共享同号）
-        _turn_number = (session.ai_turn_counter or 0) + 1
-
-        hid: UUID  # human 消息 ID，用于 session_meta 事件
-        user_msg: Message | None = None  # 追踪本轮新增的 human message，供 commit① 用
-        # Row 6 复用孤儿行时，从 last_msg.content 取值给 ctx.user_input：
-        #   孤儿 turn_number == _turn_number（AI 没落库 → ai_turn_counter 未自增），
-        #   load_active_history_for_assembly(until_turn=_turn_number) 会按 < _turn_number
-        #   过滤把孤儿排掉；W1 末位 HumanMessage 用 ctx.user_input 拼装，若不喂原始
-        #   问题文本则 LLM 收到空 user 轮（仅在 regenerate 路径出现，Row 1/3/5 无影响）。
-        _regen_user_input: str | None = None
-
-        if last_msg is None:
-            # Row 1 或 Row 2
-            if req.regenerate_for is not None:
-                raise HTTPException(status.HTTP_400_BAD_REQUEST, "RegenerateForInvalid")
-            # Row 1：首轮（INSERT human active；session 已在策略解析中建好）
-            human = Message(
-                session_id=sid,
-                role=MessageRole.human,
-                status=MessageStatus.active,
-                content=req.content,
-                turn_number=_turn_number,
-            )
-            db.add(human)
-            await db.flush()
-            hid = human.id
-            user_msg = human
-        # Row 3：末条为 AI，regen=null → INSERT human
-        elif last_msg.role == MessageRole.ai:
-            if req.regenerate_for is not None:
-                raise HTTPException(status.HTTP_400_BAD_REQUEST, "RegenerateForInvalid")
-            human = Message(
-                session_id=sid,
-                role=MessageRole.human,
-                status=MessageStatus.active,
-                content=req.content,
-                turn_number=_turn_number,
-            )
-            db.add(human)
-            await db.flush()
-            hid = human.id
-            user_msg = human
-        else:
-            # last_msg.role == MessageRole.human
-            # Gate A 闭合论证：last_msg 是按 ORDER BY created_at DESC, id DESC LIMIT 1
-            # 查询得到的"最新 active 行"。"非孤儿 human"意味着有一条 active AI 行
-            # 严格排在它之后——但该 AI 行本身会成为"最新 active 行"，与 ORDER BY 结果矛盾。
-            # 因此"末条 active 行是 human" ⟺ "孤儿 human"（穷举，无需二次查询）。
-            is_orphan = last_msg.role == MessageRole.human
-
-            if is_orphan:
-                # Row 5、6、7
-                if req.regenerate_for is None:
-                    # Row 5：孤儿 + null → UPDATE 旧行 discarded + INSERT 新行
-                    await db.execute(
-                        update(Message)
-                        .where(Message.id == last_msg.id)
-                        .values(status=MessageStatus.discarded),
-                    )
-                    new_human = Message(
-                        session_id=sid,
-                        role=MessageRole.human,
-                        status=MessageStatus.active,
-                        content=req.content,
-                        turn_number=_turn_number,
-                    )
-                    db.add(new_human)
-                    await db.flush()
-                    hid = new_human.id
-                    user_msg = new_human
-                elif req.regenerate_for == str(last_msg.id):
-                    # Row 6：孤儿 + =hid → 复用孤儿行（不新增行，不更新内容）
-                    if req.content != "":
-                        raise HTTPException(status.HTTP_400_BAD_REQUEST, "RegenerateForInvalid")
-                    hid = last_msg.id
-                    # user_msg 保持 None — 复用已有消息，不新增
-                    _regen_user_input = last_msg.content  # 喂入 ctx.user_input（见上方注释）
-                else:
-                    # Row 7：孤儿 + ≠hid → 400
-                    raise HTTPException(status.HTTP_400_BAD_REQUEST, "RegenerateForInvalid")
-            else:
-                # 非孤儿 human 不可能成为末条 active 行（Gate A 闭合论证）。
-                # 此分支不可达——raise 以捕获未来状态空间错误。
-                raise AssertionError("unreachable: non-orphan human cannot be last active row")
+        # 决策矩阵 7 row 等价重写(Phase 2.4 抽到 domain/chat/turn_intake.py),
+        # 行为不变,见 tests/api/test_chat_stream_control_plane.py (1419 行回归锚)。
+        result = await intake_human_message(db, sid, session, req)
 
         # build_context / build_system_prompt 已由 build_messages_main 节点在图内执行
-        # commit① — user 消息落库（同事务内同步 last_active_at）
-        if user_msg is not None:
-            session.last_active_at = user_msg.created_at
+        # commit① — user 消息落库(同事务内同步 last_active_at)
+        if result.user_msg is not None:
+            session.last_active_at = result.user_msg.created_at
         await db.commit()
 
         # ---- 流式响应（M9-patch1 解耦） ----
@@ -491,7 +401,11 @@ async def chat_stream(
             child_profile={},
             age=_age,
             gender=_gender,
-            user_input=(_regen_user_input if _regen_user_input is not None else req.content),
+            user_input=(
+                result.regen_user_input
+                if result.regen_user_input is not None
+                else req.content
+            ),
             settings=rr.settings,
             db_session_factory=rr.db_session_factory,
             audit_redis=rr.audit_redis,
@@ -509,14 +423,8 @@ async def chat_stream(
             "generated_token_count": 0,
             "client_alive": True,
             "user_stop_requested": False,
-            "turn_number": _turn_number,
+            "turn_number": result.turn_number,
         }
-
-        # 计算 compression protected_id（段一用独立 db session，无法访问 handler 的 ORM 对象）
-        # Row 1（last_msg is None）无旧消息可压缩，protected_id 置 None
-        _protected_id: UUID | None = None
-        if last_msg is not None:
-            _protected_id = user_msg.id if user_msg is not None else last_msg.id
 
         # ★ stop event 注册必须在 create_task 之前（避免 race）
         stop_event = asyncio.Event()
@@ -533,16 +441,16 @@ async def chat_stream(
                 rr=rr,
                 redis=redis,
                 sid=sid,
-                hid=hid,
+                hid=result.hid,
                 nonce=nonce,
                 child_user_id=current.id,
-                turn_number=_turn_number,
+                turn_number=result.turn_number,
                 initial_state=initial_state,
                 ctx=ctx,
                 queue=queue,
                 state=state,
                 stop_event=stop_event,
-                protected_id=_protected_id,
+                protected_id=result.protected_id,
                 age=_age,
                 gender=_gender,
             ),
