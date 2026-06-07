@@ -18,8 +18,8 @@ from starlette.responses import StreamingResponse
 from app.auth.deps import get_current_account, require_child
 from app.auth.redis_client import get_redis
 from app.chat.context_schema import ChatContextSchema
-from app.chat.session_policy import (
-    SHANGHAI,
+from app.core.time import SHANGHAI
+from app.domain.chat.session_policy import (
     logical_day,
     should_switch_session,
     today_session_title,

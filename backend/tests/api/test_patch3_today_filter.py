@@ -17,7 +17,8 @@ from app.core.db import get_db
 from app.models.accounts import Family, FamilyMember, User
 from app.models.chat import Session as SessionModel
 from app.models.enums import UserRole
-from app.chat.session_policy import SHANGHAI, logical_day
+from app.core.time import SHANGHAI
+from app.domain.chat.session_policy import logical_day
 
 
 # ---- fixtures ----
