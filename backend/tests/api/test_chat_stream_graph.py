@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
 pytestmark = pytest.mark.asyncio(loop_scope="function")
 
 
@@ -25,21 +26,23 @@ def _mock_enqueue_audit():
         yield
 
 
+from app.auth.tokens import issue_token
+from app.chat.graph import build_main_graph
+from app.core.redis import commit_with_redis
 from fakeredis.aioredis import FakeRedis
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from app.core.redis import commit_with_redis
-from app.auth.tokens import issue_token
-from app.chat.graph import build_main_graph
-
 main_graph = build_main_graph()
 from app.core.db import get_db
-from app.models.accounts import Family, FamilyMember, User
+from app.core.enums import MessageRole, MessageStatus, UserRole
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
-from app.core.enums import MessageRole, MessageStatus, UserRole
-from tests.api._chat_stream_lifecycle_helpers import lifecycle_ctx, lifecycle_setup, seed_compression_session
+from tests.api._chat_stream_lifecycle_helpers import (
+    lifecycle_ctx,  # noqa: F401  # fixture param
+    lifecycle_setup,
+    seed_compression_session,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures (reused from test_chat_stream_control_plane.py)
@@ -67,7 +70,6 @@ async def redis_client_with_eval(redis_client: FakeRedis) -> FakeRedis:
 @pytest.fixture
 async def app_with_eval(db_session, redis_client_with_eval):
     """App fixture with patched redis for Lua DEL simulation."""
-    from unittest.mock import patch
 
     from app.core.redis import get_redis
     from app.main import create_app
@@ -707,7 +709,8 @@ async def test_thinking_only_no_content_no_emit_end(
 @pytest.fixture
 async def compression_session(db_session, child_user):
     """Create a session with 2 active messages + needs_compression=True."""
-    from datetime import UTC, datetime as _dt
+    from datetime import UTC
+    from datetime import datetime as _dt
     from uuid import uuid4 as _uuid4
 
     base_ts = _dt.now(UTC)
@@ -960,7 +963,6 @@ async def test_compression_row84_regression(lifecycle_ctx):
 @pytest.mark.asyncio
 async def test_compression_noop_empty_filter(lifecycle_ctx):
     """Only one active human message + needs_compression=True → actives empty after filter → noop (no summary, no compression markers)."""
-    from unittest.mock import AsyncMock
     from uuid import uuid4 as _uuid4
 
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
@@ -1033,7 +1035,8 @@ async def test_compression_noop_empty_filter(lifecycle_ctx):
 @pytest.mark.asyncio
 async def test_compression_messages_order_assertion(lifecycle_ctx):
     """方案 a 核心契约：压缩后 initial_state["messages"] 顺序为 [system_prompt, summary, protected_human]."""
-    from unittest.mock import AsyncMock, patch as _patch
+    from unittest.mock import AsyncMock
+    from unittest.mock import patch as _patch
 
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
     sid, _, msg1_id, msg2_id = await seed_compression_session(lifecycle_ctx, child)
@@ -1087,9 +1090,11 @@ async def test_compression_messages_order_assertion(lifecycle_ctx):
 @pytest.mark.asyncio
 async def test_compression_with_existing_summary(lifecycle_ctx):
     """二次压缩：已有旧 summary 行的 session 中，旧 summary 被纳入压缩集并标 compressed。"""
-    from datetime import UTC, datetime as _dt
+    from datetime import UTC
+    from datetime import datetime as _dt
+    from unittest.mock import AsyncMock
+    from unittest.mock import patch as _patch
     from uuid import uuid4 as _uuid4
-    from unittest.mock import AsyncMock, patch as _patch
 
     from app.chat.prompts import SUMMARY_PREFIX
 
@@ -1204,7 +1209,8 @@ async def test_enqueue_audit_target_message_id_equals_aid(
     target_message_id 通过 spy 捕获 enqueue_audit 第 5 位位置参数。
     两者来源不同，assert 为"独立获取一致"，非"自己塞给自己"。
     """
-    from unittest.mock import AsyncMock, patch as _patch
+    from unittest.mock import AsyncMock
+    from unittest.mock import patch as _patch
 
     headers, child = auth_headers_child
 

@@ -8,19 +8,17 @@ M8-hotfix: adds audit_bailian registry key and audit LLM retry/fallback tests.
 from typing import Any
 
 import pytest
-from langchain_core.runnables import RunnableBinding, RunnableWithFallbacks
-from langchain_deepseek import ChatDeepSeek
-from langchain_openai import ChatOpenAI
-
 from app.core.llm import (
-    ProviderNotRegisteredError,
     _PROVIDER_REGISTRY,
+    ProviderNotRegisteredError,
     build_crisis_llm,
     build_main_llm,
     build_provider_llm,
     build_redline_llm,
 )
-
+from langchain_core.runnables import RunnableBinding, RunnableWithFallbacks
+from langchain_deepseek import ChatDeepSeek
+from langchain_openai import ChatOpenAI
 
 # ---------------------------------------------------------------------------
 # Fixtures: minimal settings object
@@ -510,7 +508,6 @@ class TestInjectionSeam:
     def test_override_only_affects_specified_provider(self) -> None:
         """只 override "deepseek" 时，"openai" 仍走 registry。"""
         from app.core.llm import (
-            _PROVIDER_REGISTRY,
             build_provider_llm,
             set_test_llm,
         )

@@ -3,14 +3,12 @@
 M6 patch 2 (Step 11.2): covers every provider × field location combination.
 """
 
-from langchain_core.messages import AIMessageChunk
-
 from app.core.llm_extractors import (
     ALLOWED_FINISH_REASONS,
     extract_finish_reason,
     extract_reasoning_content,
 )
-
+from langchain_core.messages import AIMessageChunk
 
 # ---------------------------------------------------------------------------
 # Helpers

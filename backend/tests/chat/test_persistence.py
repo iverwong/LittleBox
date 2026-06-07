@@ -10,17 +10,15 @@ Coverage:
 - enqueue_audit: M6 stub no-op + logger.warning
 """
 
-import logging
 import uuid
 from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
-
+from app.core.enums import InterventionType, MessageRole, MessageStatus
 from app.domain.chat.usecase import enqueue_audit, persist_ai_turn
 from app.models.chat import Message, Session
-from app.core.enums import InterventionType, MessageRole, MessageStatus
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _msg_by_session(db_session, sid):
@@ -167,6 +165,7 @@ class TestSqlExpressionGuard:
     def test_persist_ai_turn_uses_sql_expression(self) -> None:
         import inspect
         import re
+
         from app.domain.chat import usecase
 
         source = inspect.getsource(usecase.persist_ai_turn)
@@ -191,8 +190,9 @@ class TestConcurrentRowLock:
         self, concurrent_db_sessions, engine,
     ) -> None:
         import asyncio
-        from app.models.accounts import Family, FamilyMember, User
+
         from app.core.enums import UserRole
+        from app.models.accounts import Family, FamilyMember, User
 
         sessions = await concurrent_db_sessions(
             count=6,
@@ -251,7 +251,6 @@ async def test_enqueue_audit_sets_pending_and_enqueues(db_session, child_user):
     """enqueue_audit 完成 Redis SET pending + ARQ enqueue_job。"""
     from unittest.mock import AsyncMock, patch
 
-    from app.audit.worker import run_audit
 
     sid = uuid.uuid4()
     session = Session(id=sid, child_user_id=child_user.id, title="test")
@@ -267,6 +266,7 @@ async def test_enqueue_audit_sets_pending_and_enqueues(db_session, child_user):
     mock_manager.set_pending = AsyncMock()
 
     from unittest.mock import MagicMock
+
     from redis.asyncio import Redis as _Redis
 
     mock_redis = AsyncMock(spec=_Redis)

@@ -19,7 +19,6 @@ import json
 from typing import Any
 
 import pytest
-
 from app.core.llm import clear_test_llm
 from app.domain.chat.stream_signals import running_streams
 
@@ -99,7 +98,9 @@ class TestStopTristateRed:
         )
 
         from uuid import UUID
-        from app.models.chat import Message, MessageRole
+
+        from app.core.enums import MessageRole
+        from app.models.chat import Message
         from sqlalchemy import select
 
         async with integration_runtime.db_session_factory() as db:
@@ -168,7 +169,9 @@ class TestStopTristateRed:
         )
 
         from uuid import UUID
-        from app.models.chat import Message, MessageRole
+
+        from app.core.enums import MessageRole
+        from app.models.chat import Message
         from sqlalchemy import select
 
         async with integration_runtime.db_session_factory() as db:

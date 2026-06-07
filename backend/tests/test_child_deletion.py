@@ -1,15 +1,7 @@
 """M4.8 B6 TDD：hard_delete_child 服务层 + Redis 缓存防退化测试。"""
 from __future__ import annotations
 
-import uuid
-
 import pytest
-import pytest_asyncio
-from fakeredis.aioredis import FakeRedis
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.core.redis import RedisOp, stage_redis_op
 from app.auth.tokens import REDIS_KEY_PREFIX
 from app.models.accounts import (
     AuthToken,
@@ -20,6 +12,9 @@ from app.models.accounts import (
     User,
 )
 from app.models.chat import Session
+from fakeredis.aioredis import FakeRedis
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class TestHardDeleteChildService:
@@ -31,10 +26,11 @@ class TestHardDeleteChildService:
         db_session: AsyncSession,
     ) -> None:
         """deleted_tables 包含所有 10 张被 CASCADE 清理的表（无业务过滤）。"""
+        from datetime import date
+
         from app.auth.password import generate_password, hash_password
         from app.core.enums import DailyStatus
         from app.models.parent import DailyReport, Notification
-        from datetime import date
 
         fam = Family()
         db_session.add(fam)
@@ -99,6 +95,7 @@ class TestHardDeleteChildService:
     ) -> None:
         """SELECT COUNT auth_tokens 不带 revoked_at 过滤，与 CASCADE 实际删除行数一致。"""
         from datetime import datetime, timezone
+
         from app.auth.password import generate_password, hash_password
         from app.core.redis import discard_pending_redis_ops
 

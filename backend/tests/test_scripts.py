@@ -13,7 +13,6 @@ import uuid
 from contextlib import asynccontextmanager
 
 import pytest
-
 from app.scripts.create_parent import _create_parent
 from app.scripts.create_parent import _main as create_parent_main
 from app.scripts.reset_parent_password import _reset_password
@@ -35,8 +34,8 @@ class TestCreateParent:
         assert isinstance(info.family_id, uuid.UUID)
 
         # DB 写入断言
-        from app.models.accounts import Family, FamilyMember, User
         from app.core.enums import UserRole
+        from app.models.accounts import Family, FamilyMember, User
 
         user = await db_session.get(User, info.user_id)
         assert user is not None

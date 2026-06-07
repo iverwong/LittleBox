@@ -21,7 +21,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
 from app.core.llm import clear_test_llm, set_test_llm
 
 from ._helpers import FakeMainLLM, parse_sse_events, seed_integration_child
@@ -61,9 +60,8 @@ class TestSseFrameOrderGreen:
         同时用 FakeMainLLM 覆盖 audit_deepseek provider，
         防止 call_redline_llm 调用真实 API。
         """
-        from datetime import datetime, timezone
-        from app.domain.audit.signals import AuditSignalsManager
         from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
+        from app.domain.audit.signals import AuditSignalsManager
 
         child, headers = await seed_integration_child(integration_runtime)
         set_test_llm("deepseek", FakeMainLLM())

@@ -13,7 +13,7 @@ import respx
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_deepseek import ChatDeepSeek
 
-from .conftest import ArtifactBuilder, SYSTEM_MESSAGE, USER_MESSAGE
+from .conftest import SYSTEM_MESSAGE, USER_MESSAGE, ArtifactBuilder
 
 pytestmark = [pytest.mark.live, pytest.mark.asyncio]
 
@@ -75,7 +75,7 @@ async def test_factory_check_max_retries_code(ds_config: dict) -> None:
     """检查 factory.py 是否显式传了 max_retries。"""
     src = open("/app/app/core/llm.py").read()
     has_max_retries = "max_retries" in src
-    print(f"\n=== factory.py max_retries 检查 ===")
+    print("\n=== factory.py max_retries 检查 ===")
     print(f"max_retries 出现: {has_max_retries}")
     for i, line in enumerate(src.split("\n"), 1):
         if "max_retries" in line or "ChatDeepSeek(" in line or "ChatOpenAI(" in line:

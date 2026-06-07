@@ -13,31 +13,25 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
-from uuid import UUID, uuid4
+from uuid import uuid4
 
-import anyio
 import pytest
+
 pytestmark = pytest.mark.asyncio(loop_scope="function")
 
-from sqlalchemy import select
-
-from app.core.locks import release_session_lock
-from app.domain.chat.pipeline import run_llm_pipeline
-from app.domain.chat.stream_signals import running_streams
 from app.core.config import settings as _module_settings
-from app.domain.chat.stream import ChatStreamState, stream_generator
-from app.models.chat import Message
-from app.models.chat import Session as SessionModel
 from app.core.enums import MessageRole, MessageStatus
 from app.core.runtime import RuntimeResources
+from app.domain.chat.pipeline import run_llm_pipeline
+from app.domain.chat.stream import ChatStreamState, stream_generator
+from app.domain.chat.stream_signals import running_streams
+from app.models.chat import Message
+from app.models.chat import Session as SessionModel
+from sqlalchemy import select
 from tests.api._chat_stream_lifecycle_helpers import (
-    TABLES,
-    lifecycle_ctx,
+    lifecycle_ctx,  # noqa: F401  # fixture param,ruff 认不出
     lifecycle_setup,
-    make_auth_headers,
-    seed_child_user,
 )
-
 
 # ---- Helpers shared across tests ----
 
@@ -83,7 +77,6 @@ async def test_normal_stream_emits_deltas_and_end(lifecycle_ctx):
         if line.startswith("event:"):
             current_type = line[len("event:"):].strip()
         elif line.startswith("data:") and current_type is not None:
-            import json
             frames.append(current_type)
     assert frames == ["session_meta", "delta", "delta", "delta", "end"]
 
@@ -342,7 +335,6 @@ async def test_shutdown_waits_for_in_flight_bg_task(engine, redis_client):
     Then asyncio.wait should return with done containing the task
          before the 30s timeout, and the task should not be cancelled.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
 
     rr = _make_real_rr_for_shutdown(engine, redis_client)
 
@@ -374,7 +366,6 @@ async def test_shutdown_cancels_stuck_bg_task_after_timeout(engine, redis_client
     When lifespan shutdown with patched short timeout runs,
     Then the pending task should be cancelled and gather without raising.
     """
-    from unittest.mock import patch
 
     rr = _make_real_rr_for_shutdown(engine, redis_client)
 
@@ -408,7 +399,7 @@ def _make_real_rr_for_shutdown(engine=None, redis_client=None) -> RuntimeResourc
     Uses real engine/redis when provided (from conftest fixtures);
     falls back to MagicMock for standalone use.
     """
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import MagicMock
 
     kwargs = dict(
         settings=_module_settings,
@@ -523,7 +514,6 @@ async def test_lock_released_on_non_http_exception_between_commit1_and_create_ta
     Then the except Exception block should call release_session_lock,
          and Redis chat:lock:<sid> should not be left dangling (HTTP 5xx).
     """
-    from unittest.mock import patch
 
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
 

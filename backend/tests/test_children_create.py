@@ -4,11 +4,10 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models.accounts import Family, FamilyMember, User
 from app.core.enums import UserRole
 from app.domain.accounts.service import age_to_birth_date
+from app.models.accounts import Family, FamilyMember, User
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def _login(api_client, user: User, pw: str, device_id: str = "test_device") -> str:

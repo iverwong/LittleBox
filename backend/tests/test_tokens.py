@@ -9,9 +9,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.core.redis import commit_with_redis, discard_pending_redis_ops
 from app.auth.tokens import (
     REDIS_KEY_PREFIX,
     TokenPayload,
@@ -23,8 +20,10 @@ from app.auth.tokens import (
     roll_token_expiry,
     token_hash,
 )
-from app.models.accounts import AuthToken, Family, FamilyMember, User
 from app.core.enums import UserRole
+from app.core.redis import commit_with_redis, discard_pending_redis_ops
+from app.models.accounts import AuthToken, Family, FamilyMember, User
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # ---- 辅助 fixtures ----
 

@@ -5,10 +5,9 @@ from datetime import date
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models.accounts import ChildProfile, Family, User
 from app.core.enums import Gender, UserRole
+from app.models.accounts import ChildProfile, Family, User
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @pytest_asyncio.fixture

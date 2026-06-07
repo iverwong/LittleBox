@@ -23,7 +23,6 @@ async def test_multiround_request_contains_reasoning_content() -> None:
     断言 assistant message 含 reasoning_content。
     """
     import app.core.llm  # noqa: F401 — 确保 monkeypatch 已生效
-
     import langchain_openai.chat_models.base as lcoai
 
     # hook _convert_message_to_dict 收集每次序列化的完整 messages 列表

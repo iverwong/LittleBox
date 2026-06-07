@@ -13,15 +13,14 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
-from app.core.redis import commit_with_redis
 from app.auth.tokens import issue_token
-from app.domain.chat.stream_signals import running_streams
 from app.core.db import get_db
+from app.core.enums import SessionStatus, UserRole
+from app.core.redis import commit_with_redis
+from app.domain.chat.stream_signals import running_streams
 from app.models.accounts import Family, FamilyMember, User
 from app.models.chat import Session as SessionModel
-from app.core.enums import SessionStatus, UserRole
+from httpx import ASGITransport, AsyncClient
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -49,7 +48,6 @@ async def redis_client_with_eval(redis_client):
 @pytest.fixture
 async def app_with_eval(db_session, redis_client_with_eval):
     """App fixture with overridden db + redis."""
-    from unittest.mock import patch
 
     from app.core.redis import get_redis
     from app.main import create_app

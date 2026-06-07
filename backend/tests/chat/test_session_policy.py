@@ -8,7 +8,6 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
-
 from app.core.time import SHANGHAI
 from app.domain.chat.session_policy import (
     SESSION_HARD_BOUNDARY_HOUR,

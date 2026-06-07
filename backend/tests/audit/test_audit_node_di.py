@@ -9,8 +9,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-from app.audit.graph import AuditGraphState, load_context, audit_llm_call
+from app.audit.graph import AuditGraphState, audit_llm_call, load_context
 
 pytestmark = [pytest.mark.audit, pytest.mark.asyncio]
 

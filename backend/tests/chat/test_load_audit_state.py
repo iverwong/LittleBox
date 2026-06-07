@@ -14,7 +14,6 @@ import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from app.chat.graph import load_audit_state
 from app.chat.state import MainDialogueState
 from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema

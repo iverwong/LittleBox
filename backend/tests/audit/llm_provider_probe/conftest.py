@@ -15,7 +15,6 @@ from typing import Any
 
 import httpx
 import pytest
-
 from app.core.config import Settings
 
 # ── 路径 ──────────────────────────────────────────────

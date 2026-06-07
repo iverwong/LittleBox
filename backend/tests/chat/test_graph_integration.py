@@ -17,10 +17,6 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-import pytest_asyncio
-from langchain_core.messages import HumanMessage, SystemMessage
-from sqlalchemy import text
-
 from app.chat.context_schema import ChatContextSchema
 from app.chat.graph import (
     build_messages_crisis,
@@ -30,9 +26,11 @@ from app.chat.graph import (
     route_by_risk,
 )
 from app.chat.state import MainDialogueState
+from app.core.enums import MessageRole, MessageStatus, UserRole
 from app.models.accounts import Family, User
 from app.models.chat import Message
-from app.core.enums import MessageRole, MessageStatus, UserRole
+from langchain_core.messages import HumanMessage, SystemMessage
+from sqlalchemy import text
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -475,7 +473,6 @@ class TestAuditStateCascade:
         """共享逻辑：mock poll_wait ready → load_audit_state"""
         from unittest.mock import AsyncMock, patch
 
-        from app.chat.graph import _pg_crisis_fallback
         from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
         from app.domain.audit.signals import AuditWaitResult
 

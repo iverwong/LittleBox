@@ -8,17 +8,8 @@ M6 Step 6 coverage:
 - M8 always routes to "main" (all signals False)
 """
 
-import logging
 
 import pytest
-from langchain_core.messages import (
-    AIMessage,
-    AIMessageChunk,
-    BaseMessage,
-    HumanMessage,
-    SystemMessage,
-)
-
 from app.chat.graph import (
     build_main_graph,
     call_crisis_llm,
@@ -28,6 +19,13 @@ from app.chat.graph import (
     route_by_risk,
 )
 from app.chat.state import MainDialogueState
+from langchain_core.messages import (
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+)
+
 from tests.chat.test_load_audit_state import _make_fake_runtime as _mk_runtime
 
 main_graph = build_main_graph()

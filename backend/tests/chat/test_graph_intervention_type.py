@@ -15,16 +15,15 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
-from langchain_core.messages import AIMessageChunk, HumanMessage
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
 from app.chat.context_schema import ChatContextSchema
 from app.chat.graph import build_main_graph
 from app.chat.state import AuditState, MainDialogueState
 from app.core.config import settings
+from app.core.enums import UserRole
 from app.models.accounts import Family, FamilyMember, User
 from app.models.chat import Message, Session
-from app.core.enums import UserRole
+from langchain_core.messages import AIMessageChunk, HumanMessage
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 pytestmark = pytest.mark.asyncio(loop_scope="function")
 

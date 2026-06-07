@@ -18,11 +18,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-
-from app.chat.prompts import ANCHOR_WINDOW_PREFIX
-
 from app.chat.context import (
     _to_lc_message,
     build_context,
@@ -31,9 +26,11 @@ from app.chat.context import (
     load_active_history_for_assembly,
     load_recent_active_pairs,
 )
+from app.chat.prompts import ANCHOR_WINDOW_PREFIX
+from app.core.enums import MessageRole, MessageStatus
 from app.models.audit import RollingSummary
 from app.models.chat import Message, Session
-from app.core.enums import MessageRole, MessageStatus
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 
 async def _seed_session(db_session, child_user_id: uuid.UUID) -> uuid.UUID:

@@ -12,9 +12,6 @@ from datetime import date
 from unittest.mock import patch
 
 import pytest
-
-from langchain_core.messages import SystemMessage
-
 from app.chat.prompts import (
     STUB_CRISIS_SYSTEM_PROMPT,
     STUB_GENDER_FEMALE,
@@ -33,6 +30,7 @@ from app.chat.prompts import (
     format_reentry_wrapper_crisis,
     format_reentry_wrapper_redline,
 )
+from langchain_core.messages import SystemMessage
 
 
 class TestComputeAge:

@@ -27,6 +27,7 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
+
 pytestmark = pytest.mark.asyncio(loop_scope="function")
 
 
@@ -37,23 +38,21 @@ def _mock_enqueue_audit():
         yield
 
 
+from app.auth.tokens import issue_token
+from app.chat.graph import build_main_graph
+from app.core.redis import commit_with_redis
+from app.domain.chat.stream import frame_sse_event
 from fakeredis.aioredis import FakeRedis
 from httpx import AsyncClient
 from sqlalchemy import select
 
-from app.core.redis import commit_with_redis
-from app.auth.tokens import issue_token
-from app.chat.graph import build_main_graph
-from app.domain.chat.stream import frame_sse_event
-
 main_graph = build_main_graph()
-from app.core.locks import acquire_session_lock
 from app.core.db import get_db
-from app.models.accounts import Family, FamilyMember, User
+from app.core.enums import InterventionType, MessageRole, MessageStatus, UserRole
+from app.core.locks import acquire_session_lock
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
-from app.core.enums import InterventionType, MessageRole, MessageStatus, UserRole
-from tests.api._chat_stream_lifecycle_helpers import lifecycle_ctx, lifecycle_setup
+from tests.api._chat_stream_lifecycle_helpers import lifecycle_ctx, lifecycle_setup  # noqa: F401  # lifecycle_ctx 是 fixture param
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -81,7 +80,6 @@ async def redis_client_with_eval(redis_client: FakeRedis) -> FakeRedis:
 @pytest.fixture
 async def app_with_eval(db_session, redis_client_with_eval):
     """App fixture using redis_client_with_eval (needed for Lua DEL via release_session_lock)."""
-    from unittest.mock import patch
 
     from app.core.redis import get_redis
     from app.main import create_app
@@ -960,7 +958,6 @@ async def test_multi_turn_natural_end(lifecycle_ctx):
     - Turn1：ai 行 turn_number==1 且 session.ai_turn_counter==1
     - Turn2：ai 行 turn_number==2 且 session.ai_turn_counter==2
     """
-    import asyncio
 
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
@@ -1049,9 +1046,8 @@ async def test_multi_turn_natural_end(lifecycle_ctx):
 @pytest.mark.asyncio
 async def test_multi_turn_stop_with_ai(lifecycle_ctx):
     """(b) StopWithAi：有内容时 stop → ai 行 + turn_number + counter 自增。"""
-    from uuid import uuid4
-
     import asyncio
+    from uuid import uuid4
 
     from app.domain.chat.stream_signals import running_streams
 
@@ -1121,9 +1117,8 @@ async def test_multi_turn_stop_with_ai(lifecycle_ctx):
 @pytest.mark.asyncio
 async def test_multi_turn_stop_no_ai(lifecycle_ctx):
     """(c) StopNoAi：无内容时 stop → 不写 ai 行、counter 不变。"""
-    from uuid import uuid4
-
     import asyncio
+    from uuid import uuid4
 
     from app.domain.chat.stream_signals import running_streams
 
@@ -1347,9 +1342,8 @@ async def test_intervention_type_normal(lifecycle_ctx):
 @pytest.mark.asyncio
 async def test_intervention_type_stop_with_ai_crisis(lifecycle_ctx):
     """StopWithAi + crisis：有内容时 stop → ai 行 intervention_type=crisis。"""
-    from uuid import uuid4
-
     import asyncio
+    from uuid import uuid4
 
     from app.domain.chat.stream_signals import running_streams
 

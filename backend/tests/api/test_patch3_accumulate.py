@@ -10,21 +10,21 @@ from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
+
 pytestmark = pytest.mark.asyncio(loop_scope="function")  # 覆盖 pyproject.toml 的 session 级 loop scope
+from app.auth.tokens import issue_token
+from app.chat.graph import build_main_graph
+from app.core.redis import commit_with_redis
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from app.core.redis import commit_with_redis
-from app.auth.tokens import issue_token
-from app.chat.graph import build_main_graph
-
 main_graph = build_main_graph()
 from app.core.db import get_db
+from app.core.enums import Gender, MessageRole, MessageStatus, UserRole
 from app.models.accounts import ChildProfile, Family, FamilyMember, User
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
-from app.core.enums import Gender, MessageRole, MessageStatus, UserRole
-from tests.api._chat_stream_lifecycle_helpers import lifecycle_ctx, lifecycle_setup
+from tests.api._chat_stream_lifecycle_helpers import lifecycle_ctx, lifecycle_setup  # noqa: F401  # lifecycle_ctx 是 fixture param
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 
@@ -34,7 +34,6 @@ SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 @pytest.fixture
 async def app(db_session, redis_client):
-    from unittest.mock import patch
 
     from app.core.redis import get_redis
     from app.main import create_app
@@ -108,7 +107,6 @@ def _mock_enqueue_audit():
 @pytest.fixture
 def _patch_locks(monkeypatch: pytest.MonkeyPatch):
     """绕过 throttle + session lock（避免依赖 FakeRedis eval patch 跨测试泄漏）。"""
-    from app.core.locks import acquire_session_lock, acquire_throttle_lock
     monkeypatch.setattr("app.api.me.acquire_throttle_lock", AsyncMock(return_value=True))
     monkeypatch.setattr("app.api.me.acquire_session_lock", AsyncMock(return_value="mock-nonce"))
     monkeypatch.setattr("app.api.me.release_session_lock", AsyncMock(return_value=None))

@@ -7,11 +7,9 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-from langchain_core.messages import HumanMessage, SystemMessage
-
 from app.chat.graph import build_messages_crisis, build_messages_redline
 from app.chat.state import MainDialogueState
+from langchain_core.messages import HumanMessage, SystemMessage
 
 pytestmark = pytest.mark.asyncio
 

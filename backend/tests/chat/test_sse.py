@@ -7,9 +7,7 @@ M3 dev 路径（_sse_pack / stream_chat）已于 M6-patch3 移除。
 import json
 
 import pytest
-
 from app.domain.chat import stream as sse
-
 
 # ---- S2: frame_sse_event 格式（M6 多行协议）----
 

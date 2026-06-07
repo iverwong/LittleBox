@@ -190,10 +190,10 @@ async def seed_integration_child(integration_runtime: Any) -> tuple[Any, dict[st
     """
     import uuid
 
-    from app.core.redis import commit_with_redis
     from app.auth.tokens import issue_token
-    from app.models.accounts import Family, FamilyMember, User
     from app.core.enums import UserRole
+    from app.core.redis import commit_with_redis
+    from app.models.accounts import Family, FamilyMember, User
 
     device_id = f"test-dev-{uuid.uuid4().hex[:8]}"
 

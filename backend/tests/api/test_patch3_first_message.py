@@ -3,23 +3,19 @@
 from __future__ import annotations
 
 import re
-from unittest.mock import AsyncMock, patch
 
 import pytest
-pytestmark = pytest.mark.asyncio(loop_scope="function")  # 覆盖 pyproject.toml 的 session 级 loop scope
-from fakeredis.aioredis import FakeRedis
-from httpx import ASGITransport, AsyncClient
 
-from app.core.redis import commit_with_redis
+pytestmark = pytest.mark.asyncio(loop_scope="function")  # 覆盖 pyproject.toml 的 session 级 loop scope
 from app.auth.tokens import issue_token
 from app.chat.graph import build_main_graph
+from app.core.redis import commit_with_redis
+from httpx import ASGITransport, AsyncClient
 
 main_graph = build_main_graph()
 from app.core.db import get_db
-from app.models.accounts import Family, FamilyMember, User
-from app.models.chat import Session as SessionModel
 from app.core.enums import UserRole
-
+from app.models.chat import Session as SessionModel
 
 # ---- fixtures (with eval patch for session lock) ----
 
@@ -43,7 +39,6 @@ def redis_client_with_eval(redis_client):
 
 @pytest.fixture
 async def app_with_eval(db_session, redis_client_with_eval):
-    from unittest.mock import patch
 
     from app.core.redis import get_redis
     from app.main import create_app

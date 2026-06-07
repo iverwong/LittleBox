@@ -3,7 +3,6 @@ import asyncio
 from unittest.mock import patch
 
 import pytest
-
 from app.core.locks import (
     acquire_session_lock,
     acquire_throttle_lock,

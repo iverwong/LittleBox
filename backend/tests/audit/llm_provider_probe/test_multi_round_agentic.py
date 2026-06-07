@@ -11,9 +11,7 @@
 from __future__ import annotations
 
 import json
-import uuid
 
-import httpx
 import pytest
 
 from .conftest import ArtifactBuilder
@@ -305,7 +303,7 @@ async def test_f8c_l3_multiround(ds_config: dict) -> None:
     builder.save()
 
     assert len(builder.req_entries) >= 2, "未发出第二轮请求（可能第一轮就结束了）"
-    print(f"\n=== L3 多轮验证 ===")
+    print("\n=== L3 多轮验证 ===")
     print(f"reasoning_content 在第二轮 HTTP body 中: {reasoning_in_http}")
     if reasoning_in_http:
         print("✅ LangChain ChatDeepSeek 正确回传了 reasoning_content")

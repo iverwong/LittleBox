@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import json
-import uuid
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
@@ -36,10 +35,10 @@ def _parse_sse_frames(raw: str) -> list[dict]:
 @pytest.fixture
 async def auth_headers_child(db_session, redis_client):
     """创建 child 用户 + token，返回 headers。"""
-    from app.core.redis import commit_with_redis
     from app.auth.tokens import issue_token
-    from app.models.accounts import ChildProfile, Family, FamilyMember, User
     from app.core.enums import Gender, UserRole
+    from app.core.redis import commit_with_redis
+    from app.models.accounts import ChildProfile, Family, FamilyMember, User
 
     fam = Family()
     db_session.add(fam)
@@ -74,7 +73,6 @@ def _mock_enqueue_audit():
 @pytest.fixture(autouse=True)
 def _patch_locks(monkeypatch: pytest.MonkeyPatch):
     """绕过 throttle + session lock。"""
-    from app.core.locks import acquire_session_lock, acquire_throttle_lock
     monkeypatch.setattr("app.api.me.acquire_throttle_lock", AsyncMock(return_value=True))
     monkeypatch.setattr("app.api.me.acquire_session_lock", AsyncMock(return_value="mock-nonce"))
     monkeypatch.setattr("app.api.me.release_session_lock", AsyncMock(return_value=None))

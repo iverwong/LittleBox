@@ -4,7 +4,6 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
-
 from app.domain.accounts.service import age_to_birth_date, birth_date_to_age
 
 

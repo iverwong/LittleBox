@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, patch
 
 import anyio
 import pytest
+
 pytestmark = pytest.mark.asyncio(loop_scope="function")
 
 
@@ -27,21 +28,19 @@ def _mock_enqueue_audit():
         yield
 
 
+from app.auth.tokens import issue_token
+from app.chat.graph import build_main_graph
+from app.core.redis import commit_with_redis
 from fakeredis.aioredis import FakeRedis
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from app.core.redis import commit_with_redis
-from app.auth.tokens import issue_token
-from app.chat.graph import build_main_graph
-
 main_graph = build_main_graph()
-from app.domain.chat.stream_signals import running_streams
 from app.core.db import get_db
-from app.models.accounts import Family, FamilyMember, User
-from app.models.chat import Message
 from app.core.enums import MessageRole, MessageStatus, UserRole
-from tests.api._chat_stream_lifecycle_helpers import lifecycle_ctx, lifecycle_setup
+from app.domain.chat.stream_signals import running_streams
+from app.models.chat import Message
+from tests.api._chat_stream_lifecycle_helpers import lifecycle_ctx, lifecycle_setup  # noqa: F401  # lifecycle_ctx 是 fixture param
 
 # ---------------------------------------------------------------------------
 # _BrokenOnCall: 通过 athrow 将异常注入生成器的 yield 暂停点，
@@ -124,7 +123,6 @@ async def redis_client_with_eval(redis_client: FakeRedis) -> FakeRedis:
 @pytest.fixture
 async def app_with_eval(db_session, redis_client_with_eval):
     """App fixture with patched redis for Lua DEL simulation."""
-    from unittest.mock import patch
 
     from app.core.redis import get_redis
     from app.main import create_app

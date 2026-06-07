@@ -13,7 +13,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from app.audit.worker import MAX_TRIES, run_audit
 from app.core.runtime import RuntimeResources
 from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema

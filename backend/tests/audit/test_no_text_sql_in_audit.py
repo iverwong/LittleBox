@@ -19,6 +19,6 @@ def test_no_text_sql_in_audit_graph():
         if re.search(r"\btext\s*\(", line)
     ]
     assert matches == [], (
-        f"app/audit/graph.py 存在 text() 残留（T12 应已清理）:\n"
+        "app/audit/graph.py 存在 text() 残留（T12 应已清理）:\n"
         + "\n".join(f"  L{no}: {line}" for no, line in matches)
     )

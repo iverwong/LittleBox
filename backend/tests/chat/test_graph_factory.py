@@ -5,9 +5,8 @@
 """
 from __future__ import annotations
 
-import pytest
-
 from app.chat.graph import build_main_graph, route_by_risk
+
 
 def test_build_main_graph_returns_compiled():
     """build_main_graph() 返回 CompiledStateGraph 实例。"""

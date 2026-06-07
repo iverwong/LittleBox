@@ -27,13 +27,12 @@ from urllib.parse import urlparse, urlunparse
 
 import pytest
 import pytest_asyncio
+from app.core.config import Settings
 from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
-
-from app.core.config import Settings
 
 INTEGRATION_DB_NAME = "littlebox_integration"
 INTEGRATION_REDIS_DB = 15
@@ -139,6 +138,7 @@ def _integration_row_count_guard():
     yield
 
     import asyncio
+
     from sqlalchemy import text as _text
     from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -300,10 +300,9 @@ async def app(
     httpx ASGITransport 自动触发 lifespan。本 fixture 不覆写
     application.router.lifespan_context，让真 lifespan 运行。
     """
-    from app.main import create_app
-
-    from app.core.redis import get_redis
     from app.core.db import get_db
+    from app.core.redis import get_redis
+    from app.main import create_app
 
     application = create_app()
 
@@ -360,10 +359,9 @@ async def arq_worker(integration_runtime: Any) -> AsyncGenerator[Callable[[], in
       functions=WORKER_SETTINGS["functions"] 使用字符串路径
       ["app.audit.worker.run_audit"]，禁止写成 [run_audit]。
     """
-    from arq import Worker
-
     from app.audit.worker import WORKER_SETTINGS
     from app.domain.audit.signals import AuditSignalsManager
+    from arq import Worker
 
     rr = integration_runtime
 

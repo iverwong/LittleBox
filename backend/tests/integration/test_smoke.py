@@ -9,7 +9,6 @@ import uuid
 import pytest
 from langchain_core.messages import AIMessage
 
-
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.asyncio,
@@ -97,15 +96,14 @@ class TestInfrastructureSmoke:
           3. redis_pool 与 enqueue 端同源（同一 integration_runtime.arq_pool）
           4. 审计图 write_results 正常落库（需 DB 中有 family + user + session）
         """
-        from arq import Worker
-
         from app.audit.worker import WORKER_SETTINGS
+        from app.core.enums import SessionStatus, UserRole
+        from app.core.llm import clear_test_llm, set_test_llm
+        from app.domain.audit.signals import AuditSignalsManager
         from app.domain.chat.usecase import enqueue_audit
-        from app.core.llm import set_test_llm, clear_test_llm
         from app.models.accounts import Family, User
         from app.models.chat import Session as SessionModel
-        from app.core.enums import UserRole, SessionStatus
-        from app.domain.audit.signals import AuditSignalsManager
+        from arq import Worker
 
         rr = integration_runtime
 

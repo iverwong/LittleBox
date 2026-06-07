@@ -19,9 +19,9 @@ import uuid
 from typing import Any
 
 import pytest
-
+from app.core.enums import MessageRole
 from app.core.llm import clear_test_llm, set_test_llm
-from app.models.chat import Message, MessageRole
+from app.models.chat import Message
 from sqlalchemy import select
 
 from ._helpers import FakeMainLLM, seed_integration_child

@@ -6,15 +6,14 @@ import uuid
 
 import pytest
 import pytest_asyncio
+from app.auth.bind import BIND_KEY_PREFIX, BIND_RESULT_KEY_PREFIX, issue_bind_token
+from app.auth.password import generate_phone
+from app.auth.tokens import REDIS_KEY_PREFIX, issue_token
+from app.core.enums import UserRole
+from app.core.redis import commit_with_redis
+from app.models.accounts import AuthToken, ChildProfile, Family, FamilyMember, User
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.auth.bind import BIND_KEY_PREFIX, BIND_RESULT_KEY_PREFIX, issue_bind_token
-from app.auth.password import generate_password, generate_phone, hash_password
-from app.core.redis import commit_with_redis
-from app.auth.tokens import REDIS_KEY_PREFIX, issue_token
-from app.models.accounts import AuthToken, ChildProfile, Family, FamilyMember, User
-from app.core.enums import UserRole
 
 # ---- C3 · 响应屏蔽辅助函数 ----
 
@@ -440,7 +439,6 @@ class TestRedeemBindToken:
         result_b = await redis_client.get(f"{BIND_RESULT_KEY_PREFIX}{token_b}")
         assert result_a is not None
         assert result_b is not None
-        import json
 
         bound_a = json.loads(result_a)
         bound_b = json.loads(result_b)
@@ -535,9 +533,8 @@ class TestRedeemBindToken:
         """get_bind_token_status 签名中不含 AsyncSession（注解级展开检查）。"""
         import typing
 
-        from sqlalchemy.ext.asyncio import AsyncSession
-
         from app.api.bind_tokens import get_bind_token_status
+        from sqlalchemy.ext.asyncio import AsyncSession
 
         def _annotation_contains_type(annotation: object, target: object) -> bool:
             """递归检查某个类型是否出现在注解树的任意深度。"""

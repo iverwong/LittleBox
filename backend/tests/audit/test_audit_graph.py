@@ -8,15 +8,14 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage
-
 from app.audit.graph import (
-    AuditGraphState,
     TOOL_NAME_APPEND,
     TOOL_NAME_OUTPUT,
     TOOL_NAME_REPLACE,
+    AuditGraphState,
     build_audit_graph,
 )
+from langchain_core.messages import AIMessage
 
 pytestmark = [
     pytest.mark.audit,
@@ -111,9 +110,9 @@ def _make_fake_runtime(max_iter: int = 5) -> object:
     测试中直接调节点函数 (state, runtime)，runtime 仅提供 .context 属性。
     """
     from types import SimpleNamespace
+    from unittest.mock import MagicMock
 
     from app.audit.context_schema import AuditContextSchema
-    from unittest.mock import MagicMock
 
     ctx = AuditContextSchema(
         session_id=SID,

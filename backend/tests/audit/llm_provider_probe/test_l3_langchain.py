@@ -17,10 +17,10 @@ from langchain_openai import ChatOpenAI
 from openai import APIConnectionError, APITimeoutError, RateLimitError
 
 from .conftest import (
-    ArtifactBuilder,
     SHARED_TOOLS,
     SYSTEM_MESSAGE,
     USER_MESSAGE,
+    ArtifactBuilder,
 )
 
 pytestmark = [

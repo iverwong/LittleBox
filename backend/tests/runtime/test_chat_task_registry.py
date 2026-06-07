@@ -12,6 +12,7 @@ import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
 pytestmark = pytest.mark.asyncio(loop_scope="function")
 
 from app.core.runtime import RuntimeResources

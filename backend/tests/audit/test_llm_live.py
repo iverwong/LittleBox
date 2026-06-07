@@ -15,12 +15,11 @@ from __future__ import annotations
 import json
 
 import pytest
-from langchain_core.messages import HumanMessage, SystemMessage
-
 from app.audit.llm import build_audit_llm
 from app.audit.prompts import build_audit_system_prompt
 from app.core.config import Settings
 from app.domain.audit.schemas import AppendNote, AuditOutputSchema, ReplaceInNotes
+from langchain_core.messages import HumanMessage, SystemMessage
 
 pytestmark = [
     pytest.mark.live,

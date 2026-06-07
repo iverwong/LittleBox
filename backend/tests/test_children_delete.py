@@ -5,8 +5,7 @@ import uuid
 from datetime import date
 
 import pytest
-from sqlalchemy import func, select
-
+from app.core.enums import UserRole
 from app.models.accounts import (
     AuthToken,
     ChildProfile,
@@ -15,8 +14,8 @@ from app.models.accounts import (
     User,
 )
 from app.models.chat import Session
-from app.core.enums import UserRole
-from app.models.parent import DataDeletionRequest, DailyReport, Notification
+from app.models.parent import DailyReport, DataDeletionRequest, Notification
+from sqlalchemy import func, select
 
 
 async def _login(api_client, user: User, pw: str, device_id: str = "test_device") -> str:
@@ -248,7 +247,7 @@ class TestDeleteChildAuth:
         seeded_parent,
     ) -> None:
         """跨家族 child → 404（不暴露存在性）。"""
-        from app.auth.password import generate_password, generate_phone
+        from app.auth.password import generate_phone
 
         parent, pw = seeded_parent
         parent_token = await _login(api_client, parent, pw)
@@ -292,12 +291,11 @@ class TestDeleteChildTransactionRollback:
         conftest 的 teardown 会自动 rollback，异常后 session 不支持再次 await，
         所以不显式调用 rollback。
         """
-        from sqlalchemy.exc import SQLAlchemyError
-
         from app.auth.password import generate_password
-        from app.core.redis import discard_pending_redis_ops
         from app.auth.tokens import REDIS_KEY_PREFIX
+        from app.core.redis import discard_pending_redis_ops
         from app.domain.accounts.service import hard_delete_child
+        from sqlalchemy.exc import SQLAlchemyError
 
         parent, _pw = seeded_parent
 

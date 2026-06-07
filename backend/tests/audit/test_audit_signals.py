@@ -4,10 +4,9 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from fakeredis.aioredis import FakeRedis
-
 from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
 from app.domain.audit.signals import AuditSignalsManager
+from fakeredis.aioredis import FakeRedis
 
 pytestmark = pytest.mark.audit
 

@@ -7,24 +7,18 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from unittest.mock import AsyncMock
-from zoneinfo import ZoneInfo
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.core.redis import commit_with_redis, discard_pending_redis_ops
 from app.auth.tokens import (
     REDIS_KEY_PREFIX,
     issue_token,
-    resolve_token,
-    revoke_token,
     token_hash,
 )
-from app.models.accounts import AuthToken, Family, FamilyMember, User
 from app.core.enums import UserRole
-
+from app.core.redis import commit_with_redis
+from app.models.accounts import AuthToken, Family, FamilyMember, User
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # ---- 辅助 fixtures ----
 
@@ -270,9 +264,10 @@ class TestRequireParent:
 class TestRequireChild:
     @pytest.mark.asyncio
     async def test_parent_token_returns_403(self) -> None:
+        import uuid
+
         from app.auth.deps import require_child
         from app.domain.accounts.schemas import CurrentAccount
-        import uuid
 
         parent_account = CurrentAccount(
             id=uuid.uuid4(),
