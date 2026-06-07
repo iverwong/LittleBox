@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fakeredis.aioredis import FakeRedis
 
-from app.chat.graph import enqueue_audit
+from app.domain.chat.usecase import enqueue_audit
 from app.audit.worker import run_audit
 from app.domain.audit.signals import AuditSignalsManager
 from app.models.accounts import Family, FamilyMember, User

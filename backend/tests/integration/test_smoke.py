@@ -100,7 +100,7 @@ class TestInfrastructureSmoke:
         from arq import Worker
 
         from app.audit.worker import WORKER_SETTINGS
-        from app.chat.graph import enqueue_audit
+        from app.domain.chat.usecase import enqueue_audit
         from app.chat.factory import set_test_llm, clear_test_llm
         from app.models.accounts import Family, User
         from app.models.chat import Session as SessionModel

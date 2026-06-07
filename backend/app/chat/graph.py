@@ -15,8 +15,6 @@
 from __future__ import annotations
 
 import logging
-import uuid
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from langchain_core.messages import (
@@ -28,7 +26,6 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chat.context import (
     build_crisis_context,
@@ -47,51 +44,13 @@ from app.chat.prompts import (
     format_reentry_wrapper_redline,
 )
 from app.chat.state import AuditState, MainDialogueState
-from app.core.config import settings
 from app.domain.audit.signals import AuditSignalsManager
 from app.models.audit import RollingSummary
 
 if TYPE_CHECKING:
-    from arq.connections import ArqRedis
     from langgraph.runtime import Runtime
-    from redis.asyncio import Redis
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Helper: persistence + audit (called from me.py generator, NOT from graph)
-# ---------------------------------------------------------------------------
-
-
-async def enqueue_audit(
-    arq_pool: ArqRedis,
-    audit_redis: Redis,
-    sid: uuid.UUID,
-    db: AsyncSession,
-    turn_number: int,
-    child_user_id: uuid.UUID,
-    target_message_id: uuid.UUID,
-) -> None:
-    """SET Redis pending + ARQ enqueue 触发异步审查。
-
-    §H.2 单例迁移：arq_pool / audit_redis 由 RuntimeResources 注入，
-    生命周期由 teardown_runtime 独占关闭，helper 内只用不关。
-    """
-    manager = AuditSignalsManager(audit_redis, ttl=settings.audit_redis_ttl_seconds)
-    await manager.set_pending(str(sid), turn_number, started_at=datetime.now(UTC).isoformat())
-
-    # ⚠️ 此字面量必须与 worker.py WORKER_SETTINGS["functions"] 字符串路径逐字一致。
-    # arq 0.28 的 func() 对字符串路径使用 name=name or coroutine（全路径做函数名 key）；
-    # 若两侧不匹配，worker 日志 "function '<name>' not found"，job 永不消费。
-    # 移动或重命名 worker 模块时必须同步更新此字面量。
-    await arq_pool.enqueue_job(
-        "app.audit.worker.run_audit",
-        str(sid), turn_number, str(child_user_id), str(target_message_id),
-        _job_id=f"audit:{sid}:{turn_number}",
-    )
-
-    logger.info("audit.enqueued sid=%s turn=%s", sid, turn_number)
 
 
 # ---------------------------------------------------------------------------

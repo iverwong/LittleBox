@@ -16,14 +16,42 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
+from app.domain.audit.signals import AuditSignalsManager
 from app.models.chat import Message, Session
 from app.models.enums import InterventionType, MessageRole, MessageStatus
 
+if TYPE_CHECKING:
+    from arq.connections import ArqRedis
+    from redis.asyncio import Redis
+
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# 跨域契约常量(G3-6 收口)
+# ---------------------------------------------------------------------------
+
+# ⚠️ 此字面量必须与 worker.py WORKER_SETTINGS["functions"] 字符串路径逐字一致。
+# arq 0.28 的 func() 对字符串路径使用 name=name or coroutine(全路径做函数名 key);
+# 若两侧不匹配,worker 日志 "function '<name>' not found",job 永不消费。
+# 移动或重命名 worker 模块时必须同步更新此字面量。
+#
+# 跨域常量化:worker.py 属 audit 域,遵 D-1 不 import chat usecase,因此两侧
+# 字面量在各自模块独立维护。`tests/integration/chat/test_contract_audit_job_name`
+# 实质断言两侧相等(从 usecase.py 与 worker.py 各取一次字面量)。
+AUDIT_JOB_NAME = "app.audit.worker.run_audit"
+
+
+# ---------------------------------------------------------------------------
+# 跨表事务:persist_ai_turn
+# ---------------------------------------------------------------------------
 
 
 async def persist_ai_turn(
@@ -70,3 +98,34 @@ async def persist_ai_turn(
         .values(ai_turn_counter=Session.ai_turn_counter + 1)
     )
     return msg.id
+
+
+# ---------------------------------------------------------------------------
+# 跨外部服务:enqueue_audit
+# ---------------------------------------------------------------------------
+
+
+async def enqueue_audit(
+    arq_pool: "ArqRedis",
+    audit_redis: "Redis",
+    sid: uuid.UUID,
+    db: AsyncSession,
+    turn_number: int,
+    child_user_id: uuid.UUID,
+    target_message_id: uuid.UUID,
+) -> None:
+    """SET Redis pending + ARQ enqueue 触发异步审查。
+
+    §H.2 单例迁移：arq_pool / audit_redis 由 RuntimeResources 注入，
+    生命周期由 teardown_runtime 独占关闭，helper 内只用不关。
+    """
+    manager = AuditSignalsManager(audit_redis, ttl=settings.audit_redis_ttl_seconds)
+    await manager.set_pending(str(sid), turn_number, started_at=datetime.now(UTC).isoformat())
+
+    await arq_pool.enqueue_job(
+        AUDIT_JOB_NAME,
+        str(sid), turn_number, str(child_user_id), str(target_message_id),
+        _job_id=f"audit:{sid}:{turn_number}",
+    )
+
+    logger.info("audit.enqueued sid=%s turn=%s", sid, turn_number)

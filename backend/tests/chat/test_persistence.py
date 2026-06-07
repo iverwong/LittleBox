@@ -18,8 +18,7 @@ import pytest
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.chat.graph import enqueue_audit
-from app.domain.chat.usecase import persist_ai_turn
+from app.domain.chat.usecase import enqueue_audit, persist_ai_turn
 from app.models.chat import Message, Session
 from app.models.enums import InterventionType, MessageRole, MessageStatus
 
@@ -278,7 +277,7 @@ async def test_enqueue_audit_sets_pending_and_enqueues(db_session, child_user):
 
     with (
         patch(
-            "app.chat.graph.AuditSignalsManager",
+            "app.domain.chat.usecase.AuditSignalsManager",
             return_value=mock_manager,
         ),
     ):
