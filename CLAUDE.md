@@ -160,7 +160,7 @@ mobile/
 后端用 **ruff**(lint + format)和 **basedpyright**(类型检查),配置都在 `backend/pyproject.toml`。提交前在容器内跑一下:
 
 ```
-docker compose exec api ruff check app
-docker compose exec api ruff format app
-docker compose exec api basedpyright app
+docker compose exec api ruff format
+docker compose exec api ruff check
+docker compose exec api basedpyright
 ```

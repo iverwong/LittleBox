@@ -43,8 +43,8 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-include = ["app"]
-exclude = ["alembic"]
+src = ["app"]
+exclude = ["alembic",".venv","tests","scripts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
