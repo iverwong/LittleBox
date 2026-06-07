@@ -27,7 +27,7 @@ from langchain_core.messages import (
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chat.context import (
@@ -50,8 +50,6 @@ from app.chat.state import AuditState, MainDialogueState
 from app.core.config import settings
 from app.domain.audit.signals import AuditSignalsManager
 from app.models.audit import RollingSummary
-from app.models.chat import Message, Session
-from app.models.enums import InterventionType, MessageRole, MessageStatus
 
 if TYPE_CHECKING:
     from arq.connections import ArqRedis
@@ -64,52 +62,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Helper: persistence + audit (called from me.py generator, NOT from graph)
 # ---------------------------------------------------------------------------
-
-
-async def persist_ai_turn(
-    db: AsyncSession,
-    sid: uuid.UUID,
-    finish_reason: str,
-    content: str,
-    turn_number: int,
-    intervention_type: InterventionType | None = None,
-) -> uuid.UUID:
-    """持久化一条 AI 消息行 + 同事务自增 ai_turn_counter（M9-patch1 单写点收敛）。
-
-    收敛后：me.py 的两个写行分支（StopWithAi / 自然结束）统一调此函数，
-    不再内联手搓 Message。调用方负责 usage_meta 记账和 enqueue_audit。
-
-    last_active_at 由 commit① 独占，本函数不覆写（F 决策 / M6-patch3）。
-
-    Args:
-        db: async DB session
-        sid: session UUID
-        finish_reason: LLM stop reason (stop / length / content_filter / user_stopped)
-        content: accumulated text content
-        turn_number: 当前轮号（commit① human + commit② ai 共享同号）
-        intervention_type: None=normal, crisis/redline/guided/override
-
-    Returns:
-        The id of the newly inserted AI message row (uuid.UUID).
-    """
-    msg = Message(
-        session_id=sid,
-        role=MessageRole.ai,
-        content=content,
-        status=MessageStatus.active,
-        finish_reason=finish_reason,
-        turn_number=turn_number,
-        intervention_type=intervention_type,
-    )
-    db.add(msg)
-    await db.flush()  # populate msg.id
-    # M8: ai_turn_counter 同事务 +1（SQL 列表达式，PG 行锁安全）
-    await db.execute(
-        update(Session)
-        .where(Session.id == sid)
-        .values(ai_turn_counter=Session.ai_turn_counter + 1)
-    )
-    return msg.id
 
 
 async def enqueue_audit(

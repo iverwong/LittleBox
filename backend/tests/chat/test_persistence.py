@@ -18,7 +18,8 @@ import pytest
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.chat.graph import enqueue_audit, persist_ai_turn
+from app.chat.graph import enqueue_audit
+from app.domain.chat.usecase import persist_ai_turn
 from app.models.chat import Message, Session
 from app.models.enums import InterventionType, MessageRole, MessageStatus
 
@@ -167,9 +168,9 @@ class TestSqlExpressionGuard:
     def test_persist_ai_turn_uses_sql_expression(self) -> None:
         import inspect
         import re
-        from app.chat import graph
+        from app.domain.chat import usecase
 
-        source = inspect.getsource(graph.persist_ai_turn)
+        source = inspect.getsource(usecase.persist_ai_turn)
 
         assert re.search(r"Session\.ai_turn_counter\s*\+\s*1", source), (
             "persist_ai_turn 必须用 SQL 列表达式自增 ai_turn_counter"
@@ -177,9 +178,9 @@ class TestSqlExpressionGuard:
         assert not re.search(r"\.ai_turn_counter\s*[+\-]=", source), (
             "禁止 Python 复合赋值修改 ai_turn_counter（会引入 read-modify-write 竞态）"
         )
-        graph_source = inspect.getsource(graph)
-        assert re.search(r"from sqlalchemy import .*\bupdate\b", graph_source), (
-            "graph.py 必须 import sqlalchemy.update"
+        usecase_source = inspect.getsource(usecase)
+        assert re.search(r"from sqlalchemy import .*\bupdate\b", usecase_source), (
+            "usecase.py 必须 import sqlalchemy.update"
         )
 
 
