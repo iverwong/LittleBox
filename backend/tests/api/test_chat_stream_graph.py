@@ -762,7 +762,7 @@ async def test_compression_normal_path(
 
     lifecycle_ctx.rr.main_graph.astream = fake_astream
 
-    with patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
+    with patch("app.core.llm.build_provider_llm", return_value=fake_c_llm):
         body = make_payload(content="继续聊聊", session_id=str(sid))
         resp = await client.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
@@ -822,7 +822,7 @@ async def test_compression_with_reasoning_path(lifecycle_ctx):
 
     lifecycle_ctx.rr.main_graph.astream = fake_astream
 
-    with patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
+    with patch("app.core.llm.build_provider_llm", return_value=fake_c_llm):
         body = make_payload(content="继续", session_id=str(sid))
         resp = await client.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
@@ -860,7 +860,7 @@ async def test_compression_failure_path(
 
     app_with_eval.state.resources.main_graph.astream = _fake_astream_fail
 
-    with patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
+    with patch("app.core.llm.build_provider_llm", return_value=fake_c_llm):
         body = make_payload(content="继续", session_id=str(sid))
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
@@ -929,7 +929,7 @@ async def test_compression_row84_regression(lifecycle_ctx):
 
     lifecycle_ctx.rr.main_graph.astream = _fake_astream_84
 
-    with patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
+    with patch("app.core.llm.build_provider_llm", return_value=fake_c_llm):
         body = make_payload(content="继续聊聊", session_id=str(sid))
         resp = await client.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
@@ -1051,7 +1051,7 @@ async def test_compression_messages_order_assertion(lifecycle_ctx):
 
     lifecycle_ctx.rr.main_graph.astream = spy_astream
 
-    with _patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
+    with _patch("app.core.llm.build_provider_llm", return_value=fake_c_llm):
         body = make_payload(content="继续聊聊", session_id=str(sid))
         resp = await client.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
@@ -1136,7 +1136,7 @@ async def test_compression_with_existing_summary(lifecycle_ctx):
 
     lifecycle_ctx.rr.main_graph.astream = spy_astream
 
-    with _patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
+    with _patch("app.core.llm.build_provider_llm", return_value=fake_c_llm):
         body = make_payload(content="第三轮", session_id=str(sid))
         resp = await client.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,

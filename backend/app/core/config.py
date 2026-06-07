@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     llm_request_timeout_seconds: float = 60.0
     # M5 hotfix: family child count limit
     max_children_per_family: int = 3
-    # M8 审查 LLM 供应商标识，与 _PROVIDER_REGISTRY 注册名对齐
+    # M8 审查 LLM 供应商标识，与 core/llm.py 公开 key 对齐
     audit_provider: str = "deepseek"
     # M8 审查 LLM 模型名
     audit_model: str = "deepseek-v4-flash"
@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     arq_redis_db: int = 1
     # M8 session_notes tool agentic loop 硬上限
     max_audit_tool_iterations: int = 5
-    # M8 压缩 LLM 供应商标识，与 _PROVIDER_REGISTRY 注册名对齐
+    # M8 压缩 LLM 供应商标识，与 core/llm.py 公开 key 对齐
     compression_provider: str = "deepseek"
     # M8 压缩 LLM 模型名
     compression_model: str = "deepseek-v4-flash"

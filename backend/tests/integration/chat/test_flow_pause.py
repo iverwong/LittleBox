@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from app.chat.factory import clear_test_llm, set_test_llm
+from app.core.llm import clear_test_llm, set_test_llm
 from app.models.chat import Message, MessageRole
 from sqlalchemy import select
 
@@ -49,7 +49,7 @@ class TestFlowPauseRed:
         chat_queue_maxsize 在集成测试中默认为 settings 值（可能较大），
         因此本测试通过设置小 queue maxsize（通过 settings 调整）。
         """
-        from app.chat.factory import clear_test_llm, set_test_llm
+        from app.core.llm import clear_test_llm, set_test_llm
 
         child, headers = await seed_integration_child(integration_runtime)
 

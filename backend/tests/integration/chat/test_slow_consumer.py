@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from app.chat.factory import clear_test_llm, set_test_llm
+from app.core.llm import clear_test_llm, set_test_llm
 from app.models.chat import Message, MessageRole
 from sqlalchemy import select
 

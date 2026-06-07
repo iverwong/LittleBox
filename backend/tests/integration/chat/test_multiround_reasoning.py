@@ -22,7 +22,7 @@ async def test_multiround_request_contains_reasoning_content() -> None:
     策略：hook 住 LangChain 的 _convert_message_to_dict，收集第二轮序列化结果，
     断言 assistant message 含 reasoning_content。
     """
-    import app.chat.factory  # noqa: F401 — 确保 monkeypatch 已生效
+    import app.core.llm  # noqa: F401 — 确保 monkeypatch 已生效
 
     import langchain_openai.chat_models.base as lcoai
 
@@ -86,7 +86,7 @@ async def test_multiround_without_monkeypatch_missing_reasoning() -> None:
 
     # 临时恢复原函数
     original_convert = lcoai._convert_message_to_dict
-    from app.chat.factory import _orig_convert
+    from app.core.llm import _orig_convert
 
     lcoai._convert_message_to_dict = _orig_convert
 

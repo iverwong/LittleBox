@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 from langchain_core.runnables import Runnable
 
-from app.chat.factory import build_provider_llm
+from app.core.llm import build_provider_llm
 from app.domain.audit.schemas import AppendNote, AuditOutputSchema, ReplaceInNotes
 
 if TYPE_CHECKING:

@@ -35,7 +35,7 @@ from app.chat.context import (
 )
 from app.chat.context_schema import ChatContextSchema
 from app.chat.extractors import extract_finish_reason, extract_reasoning_content, extract_usage
-from app.chat.factory import build_crisis_llm, build_main_llm, build_redline_llm
+from app.core.llm import build_crisis_llm, build_main_llm, build_redline_llm
 from app.chat.prompts import (
     build_crisis_system_prompt,
     build_redline_system_prompt,

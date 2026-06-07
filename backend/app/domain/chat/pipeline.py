@@ -109,7 +109,7 @@ async def run_llm_pipeline(
                             extract_compression_summary,
                         )
                         from app.chat.context import _to_lc_message
-                        from app.chat.factory import build_provider_llm
+                        from app.core.llm import build_provider_llm
 
                         if protected_id is None:
                             raise RuntimeError(

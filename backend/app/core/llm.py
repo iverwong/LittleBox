@@ -1,19 +1,30 @@
-"""LLM provider factory: provider registry + ChatDeepSeek primary + fallback chain.
+"""LLM provider 装配:role × provider 二维工厂(D-7, Phase 4.1)。
 
-M6 patch 2 (Step 11.1): replaces the ChatOpenAI-only factory with a
-_PROVIDER_REGISTRY dispatching by settings.main_provider. ChatDeepSeek
-is the primary provider (preserving reasoning_content); ChatOpenAI is
-registered for future M11+ experiments but not used in M6.
+5 条 _PROVIDER_REGISTRY key (deepseek / openai / audit_deepseek / audit_bailian /
+compression_deepseek) 合并为二维表:
+  - role 决定 model 字段 / thinking 字段 / reasoning_effort 字段 / temperature
+  - (role, provider) 决定 client builder(陷阱 ①:同 provider 不同 role 可走不同 client)
+
+陷阱 ①(实证):provider 决定的不只是 creds,还有 client 类。
+  - main/openai(走 bailian 端点)→ ChatOpenAI,无 thinking
+  - audit/bailian(走 bailian 端点)→ ChatDeepSeek,带 thinking + reasoning
+  二者同样打 bailian 端点,但 client 类不同,所以 (role, provider) 二元映射必须显式。
+
+陷阱 ②(实证):compression 角色走独立 _build_compression_deepseek,
+  temperature=0.3,extra_body 只有 thinking、无 reasoning_effort。
+  折叠为统一表时,compression 走 self-contained 分支,不混入 reasoning_effort。
+
+monkeypatch 段(M8-hotfix):langchain-openai _convert_message_to_dict 序列化
+AIMessage 时保留 reasoning_content,DeepSeek 思考模式下 tool_calls 后续请求
+不会因 400 报错。详见 LLM Provider 探针 补4。
 """
 
 from __future__ import annotations
 
 import importlib.metadata as _metadata
-from collections.abc import Callable
-from typing import Any
+from typing import Any, Callable
 
-from langchain_core.language_models import LanguageModelInput
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage
 from langchain_core.runnables import Runnable
 from langchain_deepseek import ChatDeepSeek
 from langchain_openai import ChatOpenAI
@@ -68,7 +79,7 @@ _lcoai._convert_message_to_dict = _patched_convert
 
 
 class ProviderNotRegisteredError(LookupError):
-    """Provider 名未在 _PROVIDER_REGISTRY 中注册时抛出。"""
+    """Provider 名未注册时抛出。"""
 
 
 def _build_chat_deepseek(
@@ -120,7 +131,11 @@ def _build_chat_openai(
 
 
 def _build_compression_deepseek(settings: Any) -> ChatDeepSeek:
-    """压缩调用专用 DeepSeek 实例。thinking 默认关闭（compression_thinking_enabled=False）。"""
+    """压缩调用专用 DeepSeek 实例。thinking 默认关闭（compression_thinking_enabled=False）。
+
+    独立 builder:extra_body 只有 thinking,无 reasoning_effort;temperature=0.3
+    (陷阱 ② — 不能折叠进统一 _build_chat_deepseek,否则会多塞 reasoning_effort)。
+    """
     return ChatDeepSeek(
         model=settings.compression_model,
         api_key=settings.deepseek_api_key.get_secret_value(),  # type: ignore[arg-type]
@@ -136,39 +151,46 @@ def _build_compression_deepseek(settings: Any) -> ChatDeepSeek:
     )
 
 
-_PROVIDER_REGISTRY: dict[str, Callable[..., Runnable]] = {
-    "deepseek": lambda settings: _build_chat_deepseek(
-        api_key=settings.deepseek_api_key.get_secret_value(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_model,
-        timeout=settings.llm_request_timeout_seconds,
-        thinking_enabled=settings.main_thinking_enabled,
-        reasoning_effort=settings.main_reasoning_effort,
-    ),
-    "openai": lambda settings: _build_chat_openai(
-        api_key=settings.bailian_api_key.get_secret_value(),
-        base_url=settings.bailian_base_url,
-        model=settings.bailian_model,
-        timeout=settings.llm_request_timeout_seconds,
-    ),
-    "audit_deepseek": lambda settings: _build_chat_deepseek(
-        api_key=settings.deepseek_api_key.get_secret_value(),
-        base_url=settings.deepseek_base_url,
-        model=settings.audit_model,
-        timeout=settings.llm_request_timeout_seconds,
-        reasoning_effort=settings.audit_reasoning_effort,
-        thinking_enabled=settings.audit_thinking_enabled,
-    ),
-    "audit_bailian": lambda settings: _build_chat_deepseek(
-        api_key=settings.bailian_api_key.get_secret_value(),
-        base_url=settings.bailian_base_url,
-        model=settings.audit_model,
-        timeout=settings.llm_request_timeout_seconds,
-        reasoning_effort=settings.audit_reasoning_effort,
-        thinking_enabled=settings.audit_thinking_enabled,
-    ),
-    "compression_deepseek": lambda settings: _build_compression_deepseek(settings),
+# role 维度配置:(model_field, thinking_field, reasoning_effort_field)
+# reasoning_effort_field=None 表示该 role 不传 reasoning_effort(走独立 builder)
+_ROLE_SETTINGS: dict[str, tuple[str, str, str | None]] = {
+    "main": ("deepseek_model", "main_thinking_enabled", "main_reasoning_effort"),
+    "audit": ("audit_model", "audit_thinking_enabled", "audit_reasoning_effort"),
+    "compression": ("compression_model", "compression_thinking_enabled", None),
 }
+
+# (role, provider) → client builder(陷阱 ①:同 provider 不同 role 可走不同 client)
+_CLIENT_BUILDER: dict[tuple[str, str], Callable[..., Runnable]] = {
+    ("main", "deepseek"): _build_chat_deepseek,
+    ("main", "openai"): _build_chat_openai,
+    ("audit", "deepseek"): _build_chat_deepseek,
+    ("audit", "bailian"): _build_chat_deepseek,  # bailian 端点 + ChatDeepSeek client(陷阱 ①)
+    ("compression", "deepseek"): _build_compression_deepseek,  # 独立 builder(陷阱 ②)
+}
+
+# 公开 key 列表(保持字符串名不变,调用方 (audit/llm.py / chat/graph.py / set_test_llm inject) 不改 key)
+_PUBLIC_KEYS: tuple[str, ...] = (
+    "deepseek",
+    "openai",
+    "audit_deepseek",
+    "audit_bailian",
+    "compression_deepseek",
+)
+
+
+def _parse_key(provider: str) -> tuple[str, str]:
+    """从公开 key 拆出 (role, provider_base)。
+
+    audit_*     → role='audit',  provider_base=*（如 audit_bailian → ('audit', 'bailian')）
+    compression_* → role='compression', provider_base=*
+    其他        → role='main',   provider_base=provider
+    """
+    if provider.startswith("audit_"):
+        return ("audit", provider[len("audit_"):])
+    if provider.startswith("compression_"):
+        return ("compression", provider[len("compression_"):])
+    return ("main", provider)
+
 
 # ---- 集成测试注入缝（M9.5） ----
 # 允许测试按 provider 名 override LLM 实例。
@@ -182,7 +204,7 @@ _test_llm_overrides: dict[str, Runnable] = {}
 def set_test_llm(provider: str, llm: Runnable) -> None:
     """设置指定 provider 的测试用 LLM 实例。
 
-    provider 名与 _PROVIDER_REGISTRY key 一致。
+    provider 名与 _PUBLIC_KEYS 成员一致（deepseek / openai / audit_deepseek / ...）。
     设入后所有调用 build_provider_llm(provider, ...) 均返回此实例。
     调用 clear_test_llm() 恢复生产行为。
     """
@@ -204,20 +226,52 @@ def build_provider_llm(provider: str, settings: Any) -> Runnable:
     """Build a single LLM instance for the given provider name.
 
     Raises:
-        ProviderNotRegisteredError: if provider is not in the registry.
+        ProviderNotRegisteredError: if provider is not in _PUBLIC_KEYS.
     """
     # 集成测试注入缝：优先返回 override
     if provider in _test_llm_overrides:
         return _test_llm_overrides[provider]
 
-    builder = _PROVIDER_REGISTRY.get(provider)
+    role, prov = _parse_key(provider)
+    builder = _CLIENT_BUILDER.get((role, prov))
     if builder is None:
-        msg = f"Unknown provider '{provider}'. Registered: {list(_PROVIDER_REGISTRY)}"
+        msg = f"Unknown provider '{provider}'. Registered: {list(_PUBLIC_KEYS)}"
         raise ProviderNotRegisteredError(msg)
-    return builder(settings)
+
+    # compression 角色走 self-contained 独立 builder（陷阱 ②:不传 reasoning_effort / 自己取 settings）
+    if builder is _build_compression_deepseek:
+        return builder(settings)
+
+    # main / audit:role 决定 model / thinking / reasoning 字段;provider 决定 creds
+    model_field, thinking_field, reasoning_field = _ROLE_SETTINGS[role]
+    if prov == "deepseek":
+        api_key = settings.deepseek_api_key.get_secret_value()  # type: ignore[arg-type]
+        base_url = settings.deepseek_base_url
+    else:  # bailian / openai(走 bailian creds)
+        api_key = settings.bailian_api_key.get_secret_value()  # type: ignore[arg-type]
+        base_url = settings.bailian_base_url
+
+    # _build_chat_openai 签名只有 (api_key, base_url, model, timeout),不开 thinking
+    if builder is _build_chat_openai:
+        return builder(
+            api_key=api_key,
+            base_url=base_url,
+            model=getattr(settings, model_field),
+            timeout=settings.llm_request_timeout_seconds,
+        )
+
+    # _build_chat_deepseek 需要 (api_key, base_url, model, timeout, thinking_enabled, reasoning_effort)
+    return builder(
+        api_key=api_key,
+        base_url=base_url,
+        model=getattr(settings, model_field),
+        timeout=settings.llm_request_timeout_seconds,
+        thinking_enabled=getattr(settings, thinking_field),
+        reasoning_effort=getattr(settings, reasoning_field),  # type: ignore[arg-type]
+    )
 
 
-def build_main_llm(settings: Any) -> Runnable[LanguageModelInput, BaseMessage]:
+def build_main_llm(settings: Any) -> Runnable:
     """Build the main-chat LLM with optional fallback chain.
 
     When enable_fallback is True (default), returns a RunnableWithFallbacks:
@@ -258,3 +312,13 @@ def build_redline_llm(settings: Any) -> Runnable:
     D2 决议：redline 推理深度与 audit 一致（thinking=enabled + effort=max）。
     """
     return build_provider_llm(f"audit_{settings.main_provider}", settings)
+
+
+# ---- 向后兼容别名(测试 fixture)----
+# 旧 _PROVIDER_REGISTRY 是 dict[str, Callable[[Settings], Runnable]],key 调 (settings) 返回 LLM。
+# 新接口是 build_provider_llm(key, settings),为不破坏 test_factory.py 大量断言
+# (T0/T1/T5/T5c 等,共 16+ 处),保留 _PROVIDER_REGISTRY 作为 5 个公开 key 的 lambda 桥接表。
+# 这不是死代码:它被测试主动验证存在性 + callable 行为。
+_PROVIDER_REGISTRY: dict[str, Callable[[Any], Runnable]] = {
+    key: (lambda k: lambda s: build_provider_llm(k, s))(key) for key in _PUBLIC_KEYS
+}

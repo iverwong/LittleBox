@@ -73,7 +73,7 @@ async def _run_fallback_test(
 
 async def test_factory_check_max_retries_code(ds_config: dict) -> None:
     """检查 factory.py 是否显式传了 max_retries。"""
-    src = open("/app/app/chat/factory.py").read()
+    src = open("/app/app/core/llm.py").read()
     has_max_retries = "max_retries" in src
     print(f"\n=== factory.py max_retries 检查 ===")
     print(f"max_retries 出现: {has_max_retries}")
