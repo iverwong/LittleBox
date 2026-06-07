@@ -361,7 +361,7 @@ async def test_stop_with_ai(lifecycle_ctx):
 # ---------------------------------------------------------------------------
 #
 # Key design: mock stream_graph_to_sse to raise ConnectionError after the
-# first successful delta.  The generator's inner try/except catches it,
+# first successful delta.  The stream_generator's inner try/except catches it,
 # sets client_alive=False, and continues consuming the graph stream.
 # ---------------------------------------------------------------------------
 

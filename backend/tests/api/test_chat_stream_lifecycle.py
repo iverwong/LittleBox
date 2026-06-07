@@ -6,7 +6,7 @@ shutdown wait / shutdown cancel / stop signal / commit①~create_task lock relea
 三种策略：
 - HTTP 全栈（#1 #4 #7 #8）：走 lifecycle_ctx.client POST；
 - 纯 async 单元（#5 #6）：直操 asyncio.wait 逻辑，不需 HTTP；
-- 协程级直测（#2 #3）：直接驱动 _stream_generator / _run_llm_pipeline。
+- 协程级直测（#2 #3）：直接驱动 stream_generator / _run_llm_pipeline。
 """
 from __future__ import annotations
 
@@ -21,10 +21,10 @@ pytestmark = pytest.mark.asyncio(loop_scope="function")
 
 from sqlalchemy import select
 
-from app.api.me import _ChatStreamState, _run_llm_pipeline, _stream_generator
+from app.api.me import _run_llm_pipeline
 from app.chat.locks import release_session_lock, running_streams
-from app.chat.sse import build_flow_pause_frame
 from app.core.config import settings as _module_settings
+from app.domain.chat.stream import ChatStreamState, stream_generator
 from app.models.chat import Message
 from app.models.chat import Session as SessionModel
 from app.models.enums import MessageRole, MessageStatus
@@ -119,13 +119,13 @@ async def test_normal_stream_emits_deltas_and_end(lifecycle_ctx):
 
 @pytest.mark.asyncio
 async def test_client_disconnect_keeps_bg_task_running(lifecycle_ctx):
-    """Given an in-progress _stream_generator,
+    """Given an in-progress stream_generator,
     When we aclose() it mid-stream (模拟客户端断连),
     Then it should return silently without raising,
          and a separately driven _run_llm_pipeline should still
          commit the ai row + release the lock.
     """
-    # 直接用 _run_llm_pipeline 和 _stream_generator 的单元级驱动
+    # 直接用 _run_llm_pipeline 和 stream_generator 的单元级驱动
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
     sid = uuid4()
 
@@ -136,7 +136,7 @@ async def test_client_disconnect_keeps_bg_task_running(lifecycle_ctx):
     await lifecycle_ctx.seed_sess.commit()
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=128)
-    state = _ChatStreamState()
+    state = ChatStreamState()
     stop_event = asyncio.Event()
 
     async def fake_astream(initial_state, stream_mode="custom", **kwargs):
@@ -176,7 +176,7 @@ async def test_client_disconnect_keeps_bg_task_running(lifecycle_ctx):
     )
 
     # 驱动段二，消费几帧后 aclose
-    gen = _stream_generator(queue, state, sid)
+    gen = stream_generator(queue, state, sid)
     frames = []
     try:
         async for frame in gen:
@@ -209,7 +209,7 @@ async def test_queue_full_triggers_flow_pause_and_headless_continuation(lifecycl
     """Given chat_queue_maxsize=2 and enough graph payloads,
     When the producer fills the queue,
     Then state.overflow flips True,
-         the _stream_generator yields flow_pause + returns,
+         the stream_generator yields flow_pause + returns,
          and the bg task still commits the ai row + releases the lock.
     """
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
@@ -221,7 +221,7 @@ async def test_queue_full_triggers_flow_pause_and_headless_continuation(lifecycl
     await lifecycle_ctx.seed_sess.commit()
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=2)
-    state = _ChatStreamState()
+    state = ChatStreamState()
     stop_event = asyncio.Event()
 
     async def fake_astream(initial_state, stream_mode="custom", **kwargs):
@@ -259,7 +259,7 @@ async def test_queue_full_triggers_flow_pause_and_headless_continuation(lifecycl
     # 延迟启动段二，使 queue 填满
     await asyncio.sleep(0.05)
 
-    gen = _stream_generator(queue, state, sid)
+    gen = stream_generator(queue, state, sid)
     frames = []
     async for frame in gen:
         frames.append(frame)

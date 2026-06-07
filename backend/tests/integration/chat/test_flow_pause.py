@@ -5,7 +5,7 @@
 
 关注点（来自 me.py 代码核实）：
   - _put: queue.put_nowait → QueueFull → state.overflow=True → 跳过后续入队
-  - _stream_generator: 检测 state.overflow → yield flow_pause → return
+  - stream_generator: 检测 state.overflow → yield flow_pause → return
   - 段一继续跑完后 commit②，finally 中 running_streams.pop + release_lock
 
 RED 可能点：

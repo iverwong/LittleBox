@@ -3,7 +3,7 @@
 修复后：
   stream_graph_to_sse 仍然只映射 delta 帧，
   但 me.py _run_llm_pipeline 在解析到 payload.intervention_type 时
-  直接 _put(_frame_sse_event("intervention_type", {"type": it_raw})),
+  直接 _put(frame_sse_event("intervention_type", {"type": it_raw})),
   该 SSE 事件在首个 delta 帧之前被写入队列 → 帧序正确。
 
 两轮协议：

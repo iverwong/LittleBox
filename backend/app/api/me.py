@@ -3,15 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-from collections.abc import AsyncGenerator
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
-import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
@@ -37,7 +33,6 @@ from app.chat.session_policy import (
     should_switch_session,
     today_session_title,
 )
-from app.chat.sse import build_flow_pause_frame, stream_graph_to_sse
 from app.core.db import get_db
 from app.core.runtime import RuntimeResources
 from app.domain.accounts.schemas import AccountOut, ChildProfileOut, CurrentAccount
@@ -48,6 +43,13 @@ from app.domain.chat.schemas import (
     MessageListResponse,
     SessionListItem,
     SessionListResponse,
+)
+from app.domain.chat.stream import (
+    ChatStreamState,
+    build_flow_pause_frame,
+    frame_sse_event,
+    stream_generator,
+    stream_graph_to_sse,
 )
 from app.models.accounts import ChildProfile, User
 from app.models.chat import Message
@@ -61,32 +63,6 @@ router = APIRouter(prefix="/api/v1/me", tags=["me"])
 # ---------------------------------------------------------------------------
 # 辅助函数 (helpers)
 # ---------------------------------------------------------------------------
-
-# --- SSE framing ---
-
-
-def _frame_sse_event(event_type: str, data: dict) -> bytes:
-    """SSE 多行协议帧（M6）：event: <type>\ndata: <json>\n\n。"""
-    return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
-
-
-async def _stub_stream() -> list[bytes]:
-    """LLM 桩流：产生一个 delta 帧和一个 end 帧。"""
-    return [
-        _frame_sse_event("delta", {"content": "[stub]"}),
-        _frame_sse_event("end", {"finish_reason": "stop", "aid": None}),
-    ]
-
-
-# --- chat stream state ---
-
-
-@dataclass
-class _ChatStreamState:
-    """段一段二共享的轻量 mutable container。"""
-
-    overflow: bool = False
-
 
 # --- 段一: LLM pipeline ---
 
@@ -102,7 +78,7 @@ async def _run_llm_pipeline(
     initial_state: Any,
     ctx: ChatContextSchema,
     queue: asyncio.Queue,
-    state: _ChatStreamState,
+    state: ChatStreamState,
     stop_event: asyncio.Event,
     protected_id: UUID | None = None,
     age: int = 8,
@@ -147,7 +123,7 @@ async def _run_llm_pipeline(
         async with rr.db_session_factory() as db:
             try:
                 # 第一帧：session_meta
-                _put(_frame_sse_event("session_meta", {"session_id": str(sid), "hid": str(hid)}))
+                _put(frame_sse_event("session_meta", {"session_id": str(sid), "hid": str(hid)}))
 
                 # 重新加载 session（段一有自己独立的 db session）
                 session = await db.get(SessionModel, sid)
@@ -157,7 +133,7 @@ async def _run_llm_pipeline(
                 # ---- 阻塞压缩检查 ----
                 if session.needs_compression:
                     try:
-                        _put(_frame_sse_event("compression_start", {}))
+                        _put(frame_sse_event("compression_start", {}))
 
                         from app.chat.compression import (
                             build_compression_prompt,
@@ -245,11 +221,11 @@ async def _run_llm_pipeline(
 
                         initial_state["messages"] = [_sp, *_new_hist]
 
-                        _put(_frame_sse_event("compression_end", {}))
+                        _put(frame_sse_event("compression_end", {}))
                     except Exception:
                         logger.exception("compression failed for session %s", sid)
                         _put(
-                            _frame_sse_event(
+                            frame_sse_event(
                                 "error",
                                 {"message": "压缩失败，请重试", "code": "CompressionError"},
                             )
@@ -285,7 +261,7 @@ async def _run_llm_pipeline(
                     if payload.get("reasoning"):
                         if not thinking_started:
                             thinking_started = True
-                            _put(_frame_sse_event("thinking_start", {}))
+                            _put(frame_sse_event("thinking_start", {}))
                         continue
 
                     d = payload.get("delta", "")
@@ -296,7 +272,7 @@ async def _run_llm_pipeline(
                     # 首个非空 delta → 收 thinking
                     if d and thinking_started:
                         thinking_started = False
-                        _put(_frame_sse_event("thinking_end", {}))
+                        _put(frame_sse_event("thinking_end", {}))
 
                     # intervention_type 信号（graph 终端节点在首 delta 前发射）。
                     # 此处 payload 是 graph 终端节点在 LLM .astream() 之前写入的单次路由帧，
@@ -306,7 +282,7 @@ async def _run_llm_pipeline(
                     if it_raw:
                         try:
                             last_intervention_type = InterventionType(it_raw)
-                            _put(_frame_sse_event("intervention_type", {"type": it_raw}))
+                            _put(frame_sse_event("intervention_type", {"type": it_raw}))
                         except ValueError:
                             logger.warning(
                                 "unknown intervention_type %r, falling back to None",
@@ -359,14 +335,14 @@ async def _run_llm_pipeline(
                             aid,
                         )
                         _put(
-                            _frame_sse_event(
+                            frame_sse_event(
                                 "stopped",
                                 {"finish_reason": "user_stopped", "aid": str(aid)},
                             )
                         )
                     else:
                         # StopNoAi：不写 ai 行、不发 audit、不带 aid 的 stopped 帧
-                        _put(_frame_sse_event("stopped", {"finish_reason": "user_stopped"}))
+                        _put(frame_sse_event("stopped", {"finish_reason": "user_stopped"}))
                 else:
                     # 自然结束：persist_ai_turn 写 ai 行 + 自增 → usage 记账 → commit → audit
                     aid = await persist_ai_turn(
@@ -393,7 +369,7 @@ async def _run_llm_pipeline(
                         aid,
                     )
                     _put(
-                        _frame_sse_event(
+                        frame_sse_event(
                             "end",
                             {"finish_reason": last_finish_reason, "aid": str(aid)},
                         )
@@ -402,7 +378,7 @@ async def _run_llm_pipeline(
             except Exception as e:
                 logger.exception("llm pipeline error", extra={"sid": str(sid)})
                 await db.rollback()
-                _put(_frame_sse_event("error", {"message": str(e), "code": "InternalError"}))
+                _put(frame_sse_event("error", {"message": str(e), "code": "InternalError"}))
 
     finally:
         running_streams.pop(str(sid), None)
@@ -419,60 +395,6 @@ async def _run_llm_pipeline(
                 exc_info=True,
                 extra={"sid": str(sid)},
             )
-
-
-# --- 段二: SSE frame forwarder ---
-
-
-async def _stream_generator(
-    queue: asyncio.Queue,
-    state: _ChatStreamState,
-    sid: UUID,
-) -> AsyncGenerator[bytes, None]:
-    """段二：StreamingResponse generator。仅做帧转发 + overflow check + 客户端断检测。
-
-    overflow check（关注点 #3）在 await queue.get() 之前，避免以下时序陷阱：
-    段一 put_nowait → QueueFull → 翻 overflow → 段二从 queue.get() 取出后
-    queue.full() 永远返回 False（size 已减 1），造成 overflow 漏检。
-
-    首次帧超时保护：仅覆盖 session_meta 入队前的静默崩溃（如 db_session_factory
-    初始化失败或段一 startup 异常）。session_meta 在进入 async-with 后第一句
-    入队，生产毫秒级；10s 阈值不覆盖首 token 交付延迟。
-    超时即静默退出（不做错误帧 — 段一已负责日志），避免请求级永久挂死。
-    """
-    try:
-        first_frame = True
-        while True:
-            if state.overflow:
-                yield build_flow_pause_frame("backpressure")
-                logger.info("sse backpressure cutoff", extra={"sid": str(sid)})
-                return
-
-            try:
-                if first_frame:
-                    frame = await asyncio.wait_for(queue.get(), timeout=10.0)
-                    first_frame = False
-                else:
-                    frame = await queue.get()
-            except asyncio.TimeoutError:
-                # 段一未能在 10s 内产生首帧（含 session_meta），
-                # 大概率是 bg task startup 静默崩溃；静默退出不做错误帧（段一已负责日志）
-                logger.error(
-                    "first frame timeout, bg task may have crashed silently",
-                    extra={"sid": str(sid)},
-                )
-                return
-
-            if frame is None:
-                break
-
-            try:
-                yield frame
-            except ConnectionError, anyio.BrokenResourceError:
-                logger.info("client disconnected", extra={"sid": str(sid)})
-                return
-    except asyncio.CancelledError:
-        raise
 
 
 # ---------------------------------------------------------------------------
@@ -728,7 +650,7 @@ async def chat_stream(
     - 同步前置（限流 / sesssion 策略 / 决策矩阵 / commit①）保持原位
     - LLM consumption 迁至独立 _run_llm_pipeline（段一），
       通过 asyncio.Queue 单向中转 SSE 字节帧给段二
-    - StreamingResponse 由 _stream_generator（段二）承担，仅做帧转发 +
+    - StreamingResponse 由 stream_generator（段二）承担，仅做帧转发 +
       overflow check + 客户端断检测
 
     Decision matrix O (baseline §5.4, 7 rows) 参见 _run_llm_pipeline docstring。
@@ -946,7 +868,7 @@ async def chat_stream(
         if not isinstance(_maxsize, int):
             _maxsize = 128
         queue: asyncio.Queue = asyncio.Queue(maxsize=_maxsize)
-        state = _ChatStreamState()
+        state = ChatStreamState()
 
         bg = asyncio.create_task(
             _run_llm_pipeline(
@@ -971,7 +893,7 @@ async def chat_stream(
         rr.register_chat_task(str(sid), bg)
 
         return StreamingResponse(
-            _stream_generator(queue, state, sid),
+            stream_generator(queue, state, sid),
             media_type="text/event-stream",
         )
 

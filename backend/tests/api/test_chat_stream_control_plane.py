@@ -41,10 +41,10 @@ from fakeredis.aioredis import FakeRedis
 from httpx import AsyncClient
 from sqlalchemy import select
 
-from app.api.me import _frame_sse_event
 from app.auth.redis_ops import commit_with_redis
 from app.auth.tokens import issue_token
 from app.chat.graph import build_main_graph
+from app.domain.chat.stream import frame_sse_event
 
 main_graph = build_main_graph()
 from app.chat.locks import acquire_session_lock
@@ -490,9 +490,9 @@ async def test_decision_row6_orphan_reuse_feeds_user_input(lifecycle_ctx):
         # 抓 me.py 装配出的 ctx，验证 user_input 不为空
         captured["user_input"] = kwargs["ctx"].user_input
         captured["session_id"] = kwargs["ctx"].session_id
-        # 推 end + None 让 _stream_generator 正常终止
+        # 推 end + None 让 stream_generator 正常终止
         kwargs["queue"].put_nowait(
-            _frame_sse_event("end", {"finish_reason": "stop", "aid": str(uuid4())})
+            frame_sse_event("end", {"finish_reason": "stop", "aid": str(uuid4())})
         )
         kwargs["queue"].put_nowait(None)
 

@@ -2,7 +2,7 @@
 
 场景：httpx 客户端在消费部分 delta 帧后主动 aclose() 中断连接。
 后端预期行为：
-  段二（_stream_generator）：收到 ConnectionError → 退出
+  段二（stream_generator）：收到 ConnectionError → 退出
   段一（_run_llm_pipeline）：作为独立 bg task 不受影响，照常跑完 commit②
     → accumulated 完整落库（ai 行）
     → enqueue_audit 入队
