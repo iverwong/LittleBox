@@ -22,6 +22,7 @@ from langchain_core.messages import (
     AIMessageChunk,
     HumanMessage,
 )
+from langchain_core.runnables import Runnable
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -264,39 +265,34 @@ async def build_messages_redline(
 # ---------------------------------------------------------------------------
 
 
-async def call_main_llm(
+async def _stream_llm_chunks(
     state: MainDialogueState,
-    runtime: Runtime[ChatContextSchema],
+    ctx: ChatContextSchema,
+    llm: Runnable,
+    provider: str,
+    intervention_type: str | None,
 ) -> dict:
-    """调主对话 LLM，通过 get_stream_writer() 流式输出 chunk。
+    """3 个 call_*_llm 公共 LLM 流式消费 + chunk 信号派发(G3-1 落点)。
 
-    消息已由 build_messages_* 节点装配到 state["messages"] 中，
-    本节点直接消费（不再调历史装配模式）。
+    本节点实现内部私有协程(下划线前缀模块内私有),非 Runnable /
+    非 @traceable,不产新 LangGraph span(节点名仍为 call_main/crisis/
+    redline_llm,LangGraph 节点名取自函数名,G3-5 trace 零变化)。
 
-    LLM 通过 Runtime DI 的 settings 构造（替代 M8 期 lru_cache 工厂），
-    参数与 build_main_llm(settings) 完全一致。
+    公共行为(verbatim 复原原 3 个 call_*_llm 公共部分,G3-4 行为字节级等价):
+    - 消息消费 state["messages"](list copy)
+    - intervention_type emit(emit 时机:在 async for 之前;None 时跳过)
+    - async for chunk llm.astream(llm_messages)
+    - 4 段 chunk 派发:reasoning → delta text → finish_reason → usage_metadata
+    - return AIMessage 拼接完整内容
 
-    finish_reason passthrough: only white-list values
-    (stop / length / content_filter) are forwarded; others fall through
-    to the caller which emits "stop" as the default.
-
-    No DB writes: persist_ai_turn is called from me.py generator after
-    the stream ends (T5 single-write-point = generator).
+    差异由参数注入:llm 工厂 / provider key / intervention_type 字符串。
     """
-    ctx = runtime.context
     writer = get_stream_writer()
-    llm = build_main_llm(ctx.settings)
     parts: list[str] = []
-
-    # 消息已由 build_messages_* 节点装配，直接读 state["messages"]
     llm_messages = list(state["messages"])
 
-    provider = ctx.settings.main_provider
-
-    # 在首个 delta 之前发射 intervention_type 信号（与 route_by_risk 同源）
-    _audit = state.get("audit_state", {})
-    if _audit.get("guidance") is not None:
-        writer({"intervention_type": "guided"})
+    if intervention_type is not None:
+        writer({"intervention_type": intervention_type})
 
     async for chunk in llm.astream(llm_messages):
         # astream() yields AIMessageChunk at runtime despite BaseMessage type annotation
@@ -325,47 +321,52 @@ async def call_main_llm(
     return {"messages": [AIMessage(content="".join(parts))]}
 
 
+async def call_main_llm(
+    state: MainDialogueState,
+    runtime: Runtime[ChatContextSchema],
+) -> dict:
+    """调主对话 LLM，通过 get_stream_writer() 流式输出 chunk。
+
+    委托 `_stream_llm_chunks` 公共协程(本节点内私有 helper,非 Runnable)。
+
+    消息已由 build_messages_* 节点装配到 state["messages"] 中，
+    本节点直接消费（不再调历史装配模式）。
+
+    LLM 通过 Runtime DI 的 settings 构造（替代 M8 期 lru_cache 工厂），
+    参数与 build_main_llm(settings) 完全一致。
+
+    finish_reason passthrough: only white-list values
+    (stop / length / content_filter) are forwarded; others fall through
+    to the caller which emits "stop" as the default.
+
+    No DB writes: persist_ai_turn is called from me.py generator after
+    the stream ends (T5 single-write-point = generator).
+    """
+    ctx = runtime.context
+    guidance = state.get("audit_state", {}).get("guidance")
+    return await _stream_llm_chunks(
+        state, ctx,
+        llm=build_main_llm(ctx.settings),
+        provider=ctx.settings.main_provider,
+        intervention_type="guided" if guidance is not None else None,
+    )
+
+
 async def call_crisis_llm(
     state: MainDialogueState,
     runtime: Runtime[ChatContextSchema],
 ) -> dict:
     """调 crisis 干预 LLM，通过 get_stream_writer() 流式输出 chunk。
 
-    Verbatim copy of call_main_llm，仅替换 builder + provider key。
+    委托 `_stream_llm_chunks` 公共协程。干预类型无条件 emit `"crisis"`。
     """
     ctx = runtime.context
-    writer = get_stream_writer()
-    llm = build_crisis_llm(ctx.settings)
-    parts: list[str] = []
-
-    llm_messages = list(state["messages"])
-
-    provider = ctx.settings.audit_provider
-
-    # 在首个 delta 之前发射 intervention_type 信号
-    writer({"intervention_type": "crisis"})
-
-    async for chunk in llm.astream(llm_messages):
-        _chunk_typed: AIMessageChunk = chunk  # type: ignore[assignment]
-
-        if extract_reasoning_content(_chunk_typed, provider):
-            writer({"reasoning": True})
-
-        text = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
-        if text:
-            writer({"delta": text})
-            parts.append(text)
-
-        fr = extract_finish_reason(_chunk_typed, provider)
-        if fr:
-            writer({"finish_reason": fr})
-
-        if _chunk_typed.usage_metadata is not None:
-            usage = extract_usage(_chunk_typed)
-            if usage:
-                writer({"usage_metadata": usage})
-
-    return {"messages": [AIMessage(content="".join(parts))]}
+    return await _stream_llm_chunks(
+        state, ctx,
+        llm=build_crisis_llm(ctx.settings),
+        provider=ctx.settings.audit_provider,
+        intervention_type="crisis",
+    )
 
 
 async def call_redline_llm(
@@ -374,41 +375,15 @@ async def call_redline_llm(
 ) -> dict:
     """调 redline 干预 LLM，通过 get_stream_writer() 流式输出 chunk。
 
-    Verbatim copy of call_main_llm，仅替换 builder + provider key。
+    委托 `_stream_llm_chunks` 公共协程。干预类型无条件 emit `"redline"`。
     """
     ctx = runtime.context
-    writer = get_stream_writer()
-    llm = build_redline_llm(ctx.settings)
-    parts: list[str] = []
-
-    llm_messages = list(state["messages"])
-
-    provider = ctx.settings.audit_provider
-
-    # 在首个 delta 之前发射 intervention_type 信号
-    writer({"intervention_type": "redline"})
-
-    async for chunk in llm.astream(llm_messages):
-        _chunk_typed: AIMessageChunk = chunk  # type: ignore[assignment]
-
-        if extract_reasoning_content(_chunk_typed, provider):
-            writer({"reasoning": True})
-
-        text = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
-        if text:
-            writer({"delta": text})
-            parts.append(text)
-
-        fr = extract_finish_reason(_chunk_typed, provider)
-        if fr:
-            writer({"finish_reason": fr})
-
-        if _chunk_typed.usage_metadata is not None:
-            usage = extract_usage(_chunk_typed)
-            if usage:
-                writer({"usage_metadata": usage})
-
-    return {"messages": [AIMessage(content="".join(parts))]}
+    return await _stream_llm_chunks(
+        state, ctx,
+        llm=build_redline_llm(ctx.settings),
+        provider=ctx.settings.audit_provider,
+        intervention_type="redline",
+    )
 
 
 # ---------------------------------------------------------------------------
