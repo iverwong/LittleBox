@@ -5,7 +5,7 @@ from datetime import date
 
 import pytest
 from app.core.enums import UserRole
-from app.models.accounts import FamilyMember, User
+from app.domain.accounts.models import FamilyMember, User
 from sqlalchemy.ext.asyncio import AsyncSession
 
 

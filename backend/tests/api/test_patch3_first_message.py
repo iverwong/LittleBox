@@ -15,7 +15,7 @@ from httpx import ASGITransport, AsyncClient
 main_graph = build_main_graph()
 from app.core.db import get_db
 from app.core.enums import UserRole
-from app.models.chat import Session as SessionModel
+from app.domain.chat.models import Session as SessionModel
 
 # ---- fixtures (with eval patch for session lock) ----
 

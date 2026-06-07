@@ -26,8 +26,11 @@ from app.core.locks import (
 from app.core.redis import get_redis
 from app.core.runtime import RuntimeResources
 from app.core.time import SHANGHAI
+from app.domain.accounts.models import ChildProfile, User
 from app.domain.accounts.schemas import AccountOut, ChildProfileOut, CurrentAccount
 from app.domain.auth.deps import get_current_account, require_child
+from app.domain.chat.models import Message
+from app.domain.chat.models import Session as SessionModel
 from app.domain.chat.pagination import decode_cursor, encode_cursor
 from app.domain.chat.pipeline import run_llm_pipeline
 from app.domain.chat.schemas import (
@@ -45,9 +48,6 @@ from app.domain.chat.session_policy import (
 from app.domain.chat.stream import ChatStreamState, stream_generator
 from app.domain.chat.stream_signals import running_streams
 from app.domain.chat.turn_intake import intake_human_message
-from app.models.accounts import ChildProfile, User
-from app.models.chat import Message
-from app.models.chat import Session as SessionModel
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/me", tags=["me"])

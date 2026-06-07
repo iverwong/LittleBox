@@ -100,7 +100,7 @@ class TestStopTristateRed:
         from uuid import UUID
 
         from app.core.enums import MessageRole
-        from app.models.chat import Message
+        from app.domain.chat.models import Message
         from sqlalchemy import select
 
         async with integration_runtime.db_session_factory() as db:
@@ -171,7 +171,7 @@ class TestStopTristateRed:
         from uuid import UUID
 
         from app.core.enums import MessageRole
-        from app.models.chat import Message
+        from app.domain.chat.models import Message
         from sqlalchemy import select
 
         async with integration_runtime.db_session_factory() as db:

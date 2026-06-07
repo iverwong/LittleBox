@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db
 from app.core.enums import UserRole
 from app.core.redis import RedisOp, commit_with_redis, get_redis, stage_redis_op
+from app.domain.accounts.models import User
 from app.domain.accounts.rate_limit import (
     check_login_limit,
     incr_login_fail,
@@ -26,7 +27,6 @@ from app.domain.auth.tokens import (
     revoke_all_active_tokens,
     revoke_token,
 )
-from app.models.accounts import User
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])

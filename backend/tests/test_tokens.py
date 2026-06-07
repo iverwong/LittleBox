@@ -11,6 +11,7 @@ import pytest
 import pytest_asyncio
 from app.core.enums import UserRole
 from app.core.redis import commit_with_redis, discard_pending_redis_ops
+from app.domain.accounts.models import AuthToken, Family, FamilyMember, User
 from app.domain.auth.tokens import (
     REDIS_KEY_PREFIX,
     TokenPayload,
@@ -22,7 +23,6 @@ from app.domain.auth.tokens import (
     roll_token_expiry,
     token_hash,
 )
-from app.models.accounts import AuthToken, Family, FamilyMember, User
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # ---- 辅助 fixtures ----

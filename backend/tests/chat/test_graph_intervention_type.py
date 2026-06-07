@@ -20,8 +20,8 @@ from app.chat.graph import build_main_graph
 from app.chat.state import AuditState, MainDialogueState
 from app.core.config import settings
 from app.core.enums import UserRole
-from app.models.accounts import Family, FamilyMember, User
-from app.models.chat import Message, Session
+from app.domain.accounts.models import Family, FamilyMember, User
+from app.domain.chat.models import Message, Session
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 

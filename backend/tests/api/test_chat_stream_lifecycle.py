@@ -22,11 +22,11 @@ pytestmark = pytest.mark.asyncio(loop_scope="function")
 from app.core.config import settings as _module_settings
 from app.core.enums import MessageRole, MessageStatus
 from app.core.runtime import RuntimeResources
+from app.domain.chat.models import Message
+from app.domain.chat.models import Session as SessionModel
 from app.domain.chat.pipeline import run_llm_pipeline
 from app.domain.chat.stream import ChatStreamState, stream_generator
 from app.domain.chat.stream_signals import running_streams
-from app.models.chat import Message
-from app.models.chat import Session as SessionModel
 from sqlalchemy import select
 from tests.api._chat_stream_lifecycle_helpers import (
     lifecycle_ctx,  # noqa: F401  # fixture param,ruff 认不出

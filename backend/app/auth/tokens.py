@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import UserRole
 from app.core.redis import RedisOp, stage_redis_op
-from app.models.accounts import AuthToken, User
+from app.domain.accounts.models import AuthToken, User
 
 
 class TokenPayload(BaseModel):

@@ -5,8 +5,8 @@ from datetime import date
 
 import pytest
 from app.core.enums import UserRole
+from app.domain.accounts.models import Family, FamilyMember, User
 from app.domain.accounts.service import age_to_birth_date
-from app.models.accounts import Family, FamilyMember, User
 from sqlalchemy.ext.asyncio import AsyncSession
 
 

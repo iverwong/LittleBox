@@ -11,11 +11,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from app.audit.worker import run_audit
 from app.core.enums import UserRole
+from app.domain.accounts.models import Family, FamilyMember, User
 from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
 from app.domain.audit.signals import AuditSignalsManager
+from app.domain.chat.models import Session as SessionModel
 from app.domain.chat.usecase import enqueue_audit
-from app.models.accounts import Family, FamilyMember, User
-from app.models.chat import Session as SessionModel
 from fakeredis.aioredis import FakeRedis
 
 pytestmark = pytest.mark.audit

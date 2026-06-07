@@ -120,7 +120,7 @@ class TestKillDisconnectRed:
                 sid_uuid = uuid.UUID(sid)
                 async with integration_runtime.db_session_factory() as db:
                     from app.core.enums import MessageRole
-                    from app.models.chat import Message
+                    from app.domain.chat.models import Message
                     from sqlalchemy import select
 
                     result = await db.execute(

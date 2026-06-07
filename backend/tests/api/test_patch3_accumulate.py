@@ -21,9 +21,9 @@ from sqlalchemy import select
 main_graph = build_main_graph()
 from app.core.db import get_db
 from app.core.enums import Gender, MessageRole, MessageStatus, UserRole
-from app.models.accounts import ChildProfile, Family, FamilyMember, User
-from app.models.chat import Message
-from app.models.chat import Session as SessionModel
+from app.domain.accounts.models import ChildProfile, Family, FamilyMember, User
+from app.domain.chat.models import Message
+from app.domain.chat.models import Session as SessionModel
 from tests.api._chat_stream_lifecycle_helpers import (  # noqa: F401  # lifecycle_ctx 是 fixture param
     lifecycle_ctx,
     lifecycle_setup,

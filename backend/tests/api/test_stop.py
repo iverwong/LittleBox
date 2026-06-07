@@ -16,10 +16,10 @@ import pytest
 from app.core.db import get_db
 from app.core.enums import SessionStatus, UserRole
 from app.core.redis import commit_with_redis
+from app.domain.accounts.models import Family, FamilyMember, User
 from app.domain.auth.tokens import issue_token
+from app.domain.chat.models import Session as SessionModel
 from app.domain.chat.stream_signals import running_streams
-from app.models.accounts import Family, FamilyMember, User
-from app.models.chat import Session as SessionModel
 from httpx import ASGITransport, AsyncClient
 
 # ---------------------------------------------------------------------------

@@ -22,23 +22,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.enums import UserRole
 from app.core.redis import commit_with_redis
-from app.domain.accounts.schemas import (
-    ChildSummary,
-    CreateChildRequest,
-    CurrentAccount,
-)
-from app.domain.auth.tokens import revoke_all_active_tokens
-from app.models.accounts import (
+from app.domain.accounts.models import (
     AuthToken,
     ChildProfile,
+    DataDeletionRequest,
     DeviceToken,
     Family,
     FamilyMember,
     User,
 )
-from app.models.audit import AuditRecord, RollingSummary
-from app.models.chat import Message, Session
-from app.models.parent import DailyReport, DataDeletionRequest, Notification
+from app.domain.accounts.schemas import (
+    ChildSummary,
+    CreateChildRequest,
+    CurrentAccount,
+)
+from app.domain.audit.models import AuditRecord, RollingSummary
+from app.domain.auth.tokens import revoke_all_active_tokens
+from app.domain.chat.models import Message, Session
+from app.domain.expert.models import DailyReport
+from app.domain.notifications.models import Notification
 
 # ---------------------------------------------------------------------------
 # 纯算法工具(M4.8 B2)

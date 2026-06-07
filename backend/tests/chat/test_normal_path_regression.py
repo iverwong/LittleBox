@@ -37,8 +37,8 @@ async def auth_headers_child(db_session, redis_client):
     """创建 child 用户 + token，返回 headers。"""
     from app.core.enums import Gender, UserRole
     from app.core.redis import commit_with_redis
+    from app.domain.accounts.models import ChildProfile, Family, FamilyMember, User
     from app.domain.auth.tokens import issue_token
-    from app.models.accounts import ChildProfile, Family, FamilyMember, User
 
     fam = Family()
     db_session.add(fam)

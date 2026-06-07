@@ -27,8 +27,8 @@ from app.chat.graph import (
 )
 from app.chat.state import MainDialogueState
 from app.core.enums import MessageRole, MessageStatus, UserRole
-from app.models.accounts import Family, User
-from app.models.chat import Message
+from app.domain.accounts.models import Family, User
+from app.domain.chat.models import Message
 from langchain_core.messages import HumanMessage, SystemMessage
 from sqlalchemy import text
 
@@ -328,7 +328,7 @@ class TestRedlinePath:
         )
 
         # rolling_summaries（含 turn_summaries）
-        from app.models.audit import RollingSummary
+        from app.domain.audit.models import RollingSummary
         rs = RollingSummary(
             session_id=sid, last_turn=2,
             turn_summaries=[

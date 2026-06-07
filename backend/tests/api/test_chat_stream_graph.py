@@ -36,8 +36,8 @@ from sqlalchemy import select
 main_graph = build_main_graph()
 from app.core.db import get_db
 from app.core.enums import MessageRole, MessageStatus, UserRole
-from app.models.chat import Message
-from app.models.chat import Session as SessionModel
+from app.domain.chat.models import Message
+from app.domain.chat.models import Session as SessionModel
 from tests.api._chat_stream_lifecycle_helpers import (
     lifecycle_ctx,  # noqa: F401  # fixture param
     lifecycle_setup,

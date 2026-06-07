@@ -7,9 +7,9 @@ from uuid import UUID, uuid4
 
 import pytest
 from app.core.enums import MessageRole
-from app.models.accounts import User
-from app.models.chat import Message
-from app.models.chat import Session as SessionModel
+from app.domain.accounts.models import User
+from app.domain.chat.models import Message
+from app.domain.chat.models import Session as SessionModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 

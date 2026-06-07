@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db
 from app.core.enums import UserRole
 from app.core.redis import commit_with_redis, get_redis
+from app.domain.accounts.models import User
 from app.domain.accounts.schemas import AccountOut, CurrentAccount
 from app.domain.auth.bind_tokens import (
     BIND_KEY_PREFIX,
@@ -32,7 +33,6 @@ from app.domain.auth.schemas import (
     RedeemBindTokenRequest,
 )
 from app.domain.auth.tokens import issue_token, revoke_all_active_tokens
-from app.models.accounts import User
 
 router = APIRouter(prefix="/api/v1/bind-tokens", tags=["bind_tokens"])
 

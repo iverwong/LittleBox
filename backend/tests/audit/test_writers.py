@@ -7,12 +7,12 @@ from datetime import datetime, timezone
 import pytest
 import pytest_asyncio
 from app.core.enums import UserRole
+from app.domain.accounts.models import Family, User
 from app.domain.audit.schemas import (
     AuditDimensionScores,
     AuditOutputSchema,
 )
 from app.domain.audit.usecase import write_audit_results
-from app.models.accounts import Family, User
 from sqlalchemy import text
 
 pytestmark = [

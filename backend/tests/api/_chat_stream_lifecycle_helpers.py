@@ -23,8 +23,8 @@ from app.core.db import get_db
 from app.core.enums import UserRole
 from app.core.redis import get_redis
 from app.core.runtime import RuntimeResources
+from app.domain.accounts.models import User
 from app.main import create_app
-from app.models.accounts import User
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -193,8 +193,8 @@ async def seed_compression_session(ctx, child) -> tuple:
     from uuid import uuid4 as _uuid4
 
     from app.core.enums import MessageRole, MessageStatus
-    from app.models.chat import Message
-    from app.models.chat import Session as SessionModel
+    from app.domain.chat.models import Message
+    from app.domain.chat.models import Session as SessionModel
 
     base_ts = _dt.now(UTC)
     sid = _uuid4()

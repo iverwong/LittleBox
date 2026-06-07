@@ -1,3 +1,4 @@
+from app.core.db import Base
 from app.core.enums import (
     DailyStatus,
     DevicePlatform,
@@ -9,11 +10,18 @@ from app.core.enums import (
     SubTier,
     UserRole,
 )
-from app.models.accounts import AuthToken, ChildProfile, DeviceToken, Family, FamilyMember, User
-from app.models.audit import AuditRecord, RollingSummary
-from app.models.base import Base
-from app.models.chat import Message, Session
-from app.models.parent import DailyReport, DataDeletionRequest, Notification
+from app.domain.accounts.models import (
+    AuthToken,
+    ChildProfile,
+    DeviceToken,
+    Family,
+    FamilyMember,
+    User,
+)
+from app.domain.audit.models import AuditRecord, RollingSummary
+from app.domain.chat.models import Message, Session
+from app.domain.expert.models import DailyReport
+from app.domain.notifications.models import Notification
 
 __all__ = [
     "Base",

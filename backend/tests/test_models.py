@@ -5,7 +5,7 @@
 """
 
 
-from app.models.chat import Session
+from app.domain.chat.models import Session
 from sqlalchemy import inspect
 
 

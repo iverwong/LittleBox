@@ -23,6 +23,8 @@ from app.chat.prompts import build_system_prompt
 from app.core.enums import InterventionType, MessageRole, MessageStatus
 from app.core.locks import release_session_lock
 from app.core.runtime import RuntimeResources
+from app.domain.chat.models import Message
+from app.domain.chat.models import Session as SessionModel
 from app.domain.chat.stream import (
     ChatStreamState,
     frame_sse_event,
@@ -30,8 +32,6 @@ from app.domain.chat.stream import (
 )
 from app.domain.chat.stream_signals import running_streams
 from app.domain.chat.usecase import enqueue_audit, persist_ai_turn
-from app.models.chat import Message
-from app.models.chat import Session as SessionModel
 
 logger = logging.getLogger(__name__)
 

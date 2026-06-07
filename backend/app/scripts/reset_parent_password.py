@@ -34,9 +34,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import UserRole
 from app.core.redis import commit_with_redis
+from app.domain.accounts.models import User
 from app.domain.auth.password import generate_password, hash_password
 from app.domain.auth.tokens import revoke_all_active_tokens
-from app.models.accounts import User
 from app.scripts._common import build_arg_parser, cli_runtime, run_main
 
 

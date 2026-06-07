@@ -99,10 +99,10 @@ class TestInfrastructureSmoke:
         from app.audit.worker import WORKER_SETTINGS
         from app.core.enums import SessionStatus, UserRole
         from app.core.llm import clear_test_llm, set_test_llm
+        from app.domain.accounts.models import Family, User
         from app.domain.audit.signals import AuditSignalsManager
+        from app.domain.chat.models import Session as SessionModel
         from app.domain.chat.usecase import enqueue_audit
-        from app.models.accounts import Family, User
-        from app.models.chat import Session as SessionModel
         from arq import Worker
 
         rr = integration_runtime

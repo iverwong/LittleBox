@@ -33,8 +33,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.chat.prompts import ANCHOR_WINDOW_PREFIX, SUMMARY_PREFIX
 from app.core.config import settings
 from app.core.enums import MessageRole
-from app.models.audit import RollingSummary
-from app.models.chat import Message
+from app.domain.audit.models import RollingSummary
+from app.domain.chat.models import Message
 
 
 async def _load_active_messages(

@@ -21,8 +21,8 @@ from httpx import ASGITransport, AsyncClient
 main_graph = build_main_graph()
 from app.core.db import get_db
 from app.core.enums import MessageRole, MessageStatus, UserRole
-from app.models.chat import Message
-from app.models.chat import Session as SessionModel
+from app.domain.chat.models import Message
+from app.domain.chat.models import Session as SessionModel
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 

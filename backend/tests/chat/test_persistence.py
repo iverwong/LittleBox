@@ -15,8 +15,8 @@ from datetime import datetime, timezone
 
 import pytest
 from app.core.enums import InterventionType, MessageRole, MessageStatus
+from app.domain.chat.models import Message, Session
 from app.domain.chat.usecase import enqueue_audit, persist_ai_turn
-from app.models.chat import Message, Session
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -192,7 +192,7 @@ class TestConcurrentRowLock:
         import asyncio
 
         from app.core.enums import UserRole
-        from app.models.accounts import Family, FamilyMember, User
+        from app.domain.accounts.models import Family, FamilyMember, User
 
         sessions = await concurrent_db_sessions(
             count=6,

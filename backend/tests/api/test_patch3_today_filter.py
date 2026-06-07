@@ -13,8 +13,8 @@ from app.core.enums import UserRole
 from app.core.redis import commit_with_redis
 from app.core.time import SHANGHAI
 from app.domain.auth.tokens import issue_token
+from app.domain.chat.models import Session as SessionModel
 from app.domain.chat.session_policy import logical_day
-from app.models.chat import Session as SessionModel
 from httpx import ASGITransport, AsyncClient
 
 # ---- fixtures ----

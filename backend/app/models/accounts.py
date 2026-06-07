@@ -2,7 +2,7 @@
 
 7 张表(Family / User / ChildProfile / AuthToken / DeviceToken /
 FamilyMember / DataDeletionRequest)已迁至 app.domain.accounts.models。
-此处仅供现存老 import (from app.models.accounts import X) 继续可用;
+此处仅供现存老 import (from app.domain.accounts.models import X) 继续可用;
 新代码应直接 from app.domain.accounts.models import X。
 """
 

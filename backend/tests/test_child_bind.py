@@ -8,10 +8,10 @@ import pytest
 import pytest_asyncio
 from app.core.enums import UserRole
 from app.core.redis import commit_with_redis
+from app.domain.accounts.models import AuthToken, ChildProfile, Family, FamilyMember, User
 from app.domain.auth.bind_tokens import BIND_KEY_PREFIX, BIND_RESULT_KEY_PREFIX, issue_bind_token
 from app.domain.auth.password import generate_phone
 from app.domain.auth.tokens import REDIS_KEY_PREFIX, issue_token
-from app.models.accounts import AuthToken, ChildProfile, Family, FamilyMember, User
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -414,14 +414,14 @@ class TestRedeemBindToken:
         child_token_2 = redeem_resp_b.json()["token"]
 
         # child_profile 数量仍为 1（不新建）
-        from app.models.accounts import ChildProfile
+        from app.domain.accounts.models import ChildProfile
         result = await db_session.execute(
             select(func.count()).select_from(ChildProfile).where(ChildProfile.child_user_id == uuid.UUID(child_id))
         )
         assert result.scalar_one() == 1
 
         # auth_tokens 总数 2，其中 revoked_at IS NULL 的有 1 行
-        from app.models.accounts import AuthToken
+        from app.domain.accounts.models import AuthToken
         all_tokens_result = await db_session.execute(
             select(func.count()).select_from(AuthToken).where(AuthToken.user_id == uuid.UUID(child_id))
         )

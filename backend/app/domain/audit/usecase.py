@@ -27,11 +27,10 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from app.domain.audit.schemas import AuditOutputSchema, TurnSummaryEntry
-
 # 4.6 期间:app/models/audit.py 仍存在(Phase 6.4 才迁到 app/domain/audit/models.py)
 # 故保留 app.models.audit import,Phase 6.4 收口时同步改
-from app.models.audit import AuditRecord, RollingSummary
+from app.domain.audit.models import AuditRecord, RollingSummary
+from app.domain.audit.schemas import AuditOutputSchema, TurnSummaryEntry
 
 logger = logging.getLogger("audit.db")
 

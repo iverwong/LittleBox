@@ -6,15 +6,17 @@ from datetime import date
 
 import pytest
 from app.core.enums import UserRole
-from app.models.accounts import (
+from app.domain.accounts.models import (
     AuthToken,
     ChildProfile,
     Family,
     FamilyMember,
     User,
 )
-from app.models.chat import Session
-from app.models.parent import DailyReport, DataDeletionRequest, Notification
+from app.domain.accounts.models import DataDeletionRequest
+from app.domain.chat.models import Session
+from app.domain.expert.models import DailyReport
+from app.domain.notifications.models import Notification
 from sqlalchemy import func, select
 
 
@@ -356,7 +358,7 @@ class TestDeleteChildTransactionRollback:
 
         # teardown 会自动 rollback，所以这里不再显式调用 await db_session.rollback()
         # DB 验证：child 仍在、审计行未生成
-        from app.models.parent import DataDeletionRequest
+        from app.domain.accounts.models import DataDeletionRequest
         child_count = await db_session.scalar(
             select(func.count()).select_from(User).where(User.id == child.id)
         )

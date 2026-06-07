@@ -28,8 +28,8 @@ from app.chat.context import (
 )
 from app.chat.prompts import ANCHOR_WINDOW_PREFIX
 from app.core.enums import MessageRole, MessageStatus
-from app.models.audit import RollingSummary
-from app.models.chat import Message, Session
+from app.domain.audit.models import RollingSummary
+from app.domain.chat.models import Message, Session
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 

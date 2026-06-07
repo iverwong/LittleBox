@@ -2,8 +2,7 @@
 from __future__ import annotations
 
 import pytest
-from app.domain.auth.tokens import REDIS_KEY_PREFIX
-from app.models.accounts import (
+from app.domain.accounts.models import (
     AuthToken,
     ChildProfile,
     DeviceToken,
@@ -11,7 +10,8 @@ from app.models.accounts import (
     FamilyMember,
     User,
 )
-from app.models.chat import Session
+from app.domain.auth.tokens import REDIS_KEY_PREFIX
+from app.domain.chat.models import Session
 from fakeredis.aioredis import FakeRedis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,7 +30,8 @@ class TestHardDeleteChildService:
 
         from app.core.enums import DailyStatus
         from app.domain.auth.password import generate_password, hash_password
-        from app.models.parent import DailyReport, Notification
+        from app.domain.expert.models import DailyReport
+        from app.domain.notifications.models import Notification
 
         fam = Family()
         db_session.add(fam)
@@ -145,8 +146,8 @@ class TestHardDeleteChildService:
         db_session: AsyncSession,
     ) -> None:
         """审计记录：requested_by / child_id_snapshot / reason='parent_request' / deleted_tables。"""
+        from app.domain.accounts.models import DataDeletionRequest
         from app.domain.auth.password import generate_password, hash_password
-        from app.models.parent import DataDeletionRequest
 
         fam = Family()
         db_session.add(fam)
@@ -200,8 +201,8 @@ class TestRedisZombieCache:
     ) -> None:
         """正例：commit_with_redis 成功清理 Redis 缓存。"""
         from app.core.redis import commit_with_redis
+        from app.domain.accounts.models import DataDeletionRequest
         from app.domain.auth.password import generate_password, hash_password
-        from app.models.parent import DataDeletionRequest
 
         fam = Family()
         db_session.add(fam)

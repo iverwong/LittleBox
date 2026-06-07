@@ -7,17 +7,19 @@ import uuid
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.auth.tokens import revoke_all_active_tokens
-from app.models.accounts import (
+from app.domain.accounts.models import (
     AuthToken,
     ChildProfile,
+    DataDeletionRequest,
     DeviceToken,
     FamilyMember,
     User,
 )
-from app.models.audit import AuditRecord, RollingSummary
-from app.models.chat import Message, Session
-from app.models.parent import DailyReport, DataDeletionRequest, Notification
+from app.domain.audit.models import AuditRecord, RollingSummary
+from app.domain.auth.tokens import revoke_all_active_tokens
+from app.domain.chat.models import Message, Session
+from app.domain.expert.models import DailyReport
+from app.domain.notifications.models import Notification
 
 
 async def hard_delete_child(

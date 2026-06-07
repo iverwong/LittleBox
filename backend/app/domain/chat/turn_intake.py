@@ -22,9 +22,9 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import MessageRole, MessageStatus
+from app.domain.chat.models import Message
+from app.domain.chat.models import Session as SessionModel
 from app.domain.chat.schemas import ChatStreamRequest
-from app.models.chat import Message
-from app.models.chat import Session as SessionModel
 
 
 @dataclass

@@ -35,7 +35,7 @@ class TestCreateParent:
 
         # DB 写入断言
         from app.core.enums import UserRole
-        from app.models.accounts import Family, FamilyMember, User
+        from app.domain.accounts.models import Family, FamilyMember, User
 
         user = await db_session.get(User, info.user_id)
         assert user is not None
@@ -66,7 +66,7 @@ class TestCreateParent:
         info_a = await _create_parent(db_session, redis_client, note="note-aaa")
         info_b = await _create_parent(db_session, redis_client, note="note-bbb")
 
-        from app.models.accounts import User
+        from app.domain.accounts.models import User
 
         user_a = await db_session.get(User, info_a.user_id)
         user_b = await db_session.get(User, info_b.user_id)
@@ -83,7 +83,7 @@ class TestResetPassword:
         """
         info = await _create_parent(db_session, redis_client, note="reset-test")
 
-        from app.models.accounts import User
+        from app.domain.accounts.models import User
 
         old_user = await db_session.get(User, info.user_id)
         old_hash = old_user.password_hash

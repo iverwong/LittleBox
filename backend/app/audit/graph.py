@@ -147,7 +147,7 @@ async def _load_messages_from_pg(
     from sqlalchemy import select
 
     from app.core.enums import MessageRole
-    from app.models.chat import Message
+    from app.domain.chat.models import Message
 
     async with db_session_factory() as db:
         stmt = (

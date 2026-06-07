@@ -45,8 +45,8 @@ from app.chat.prompts import (
 from app.chat.state import AuditState, MainDialogueState
 from app.core.llm import build_crisis_llm, build_main_llm, build_redline_llm
 from app.core.llm_extractors import extract_finish_reason, extract_reasoning_content, extract_usage
+from app.domain.audit.models import RollingSummary
 from app.domain.audit.signals import AuditSignalsManager
-from app.models.audit import RollingSummary
 
 if TYPE_CHECKING:
     from langgraph.runtime import Runtime
