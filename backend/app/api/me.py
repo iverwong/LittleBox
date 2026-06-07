@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import logging
 from collections.abc import AsyncGenerator
@@ -42,6 +41,7 @@ from app.chat.sse import build_flow_pause_frame, stream_graph_to_sse
 from app.core.db import get_db
 from app.core.runtime import RuntimeResources
 from app.domain.accounts.schemas import AccountOut, ChildProfileOut, CurrentAccount
+from app.domain.chat.pagination import decode_cursor, encode_cursor
 from app.domain.chat.schemas import (
     ChatStreamRequest,
     MessageListItem,
@@ -61,65 +61,6 @@ router = APIRouter(prefix="/api/v1/me", tags=["me"])
 # ---------------------------------------------------------------------------
 # 辅助函数 (helpers)
 # ---------------------------------------------------------------------------
-
-# --- cursor (keyset pagination) ---
-
-
-class InvalidCursor(HTTPException):
-    """Raised when cursor decoding fails: bad base64, bad ISO, or bad UUID."""
-
-    def __init__(self) -> None:
-        super().__init__(400, "InvalidCursor")
-
-
-def _encode_cursor(sort_key: datetime, row_id: str) -> str:
-    if sort_key.tzinfo is not None:
-        sort_key = sort_key.replace(tzinfo=None)
-    return base64.urlsafe_b64encode(f"{sort_key.isoformat()}|{row_id}".encode()).decode()
-
-
-def _decode_cursor(cursor: str) -> tuple[datetime, str]:
-    """Decode cursor into (sort_key as naive datetime, row_id as str). Raises InvalidCursor."""
-    try:
-        raw = base64.urlsafe_b64decode(cursor.encode()).decode()
-    except Exception:
-        raise InvalidCursor()
-
-    parts = raw.rsplit("|", 1)
-    if len(parts) != 2:
-        raise InvalidCursor()
-    sort_key_str, row_id = parts
-
-    sort_key_dt: datetime | None = None
-    for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z"):
-        try:
-            dt = datetime.strptime(sort_key_str, fmt)
-            sort_key_dt = dt.replace(tzinfo=None)
-            break
-        except ValueError:
-            continue
-    _naive_fmts = (
-        "%Y-%m-%dT%H:%M:%S.%f",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%d %H:%M:%S.%f",
-        "%Y-%m-%d %H:%M:%S",
-    )
-    for fmt in _naive_fmts:
-        try:
-            sort_key_dt = datetime.strptime(sort_key_str, fmt)
-            break
-        except ValueError:
-            continue
-    if sort_key_dt is None:
-        raise InvalidCursor()
-
-    try:
-        UUID(row_id)
-    except Exception:
-        raise InvalidCursor()
-
-    return sort_key_dt, row_id
-
 
 # --- SSE framing ---
 
@@ -615,7 +556,7 @@ async def list_sessions(
     if today_sid is not None:
         stmt = stmt.where(SessionModel.id != today_sid)
     if cursor:
-        last_active_at_dt, sid = _decode_cursor(cursor)
+        last_active_at_dt, sid = decode_cursor(cursor)
         stmt = stmt.where(
             tuple_(SessionModel.last_active_at, SessionModel.id) < (last_active_at_dt, sid),
         )
@@ -627,7 +568,7 @@ async def list_sessions(
 
     if has_more and items:
         last = items[-1]
-        next_cursor = _encode_cursor(last.last_active_at, str(last.id))
+        next_cursor = encode_cursor(last.last_active_at, str(last.id))
     else:
         next_cursor = None
 
@@ -678,7 +619,7 @@ async def get_messages(
         .limit(limit + 1)
     )
     if cursor:
-        created_at_dt, mid = _decode_cursor(cursor)
+        created_at_dt, mid = decode_cursor(cursor)
         stmt = stmt.where(
             tuple_(Message.created_at, Message.id) < (created_at_dt, mid),
         )
@@ -690,7 +631,7 @@ async def get_messages(
 
     if has_more and items:
         last = items[-1]
-        next_cursor = _encode_cursor(last.created_at, str(last.id))
+        next_cursor = encode_cursor(last.created_at, str(last.id))
     else:
         next_cursor = None
 
