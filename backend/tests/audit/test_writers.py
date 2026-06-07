@@ -8,7 +8,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select, text
 
-from app.audit.writers import write_audit_results
+from app.domain.audit.usecase import write_audit_results
 from app.models.accounts import Family, User
 from app.models.audit import RollingSummary
 from app.models.enums import UserRole

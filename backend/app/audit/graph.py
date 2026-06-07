@@ -31,7 +31,7 @@ from typing_extensions import TypedDict
 
 from app.audit.llm import build_audit_llm
 from app.audit.prompts import build_audit_system_prompt
-from app.audit.writers import write_audit_results
+from app.domain.audit.usecase import write_audit_results
 from app.domain.audit.schemas import (
     AuditDimensionScores,
     AuditOutputSchema,
