@@ -20,10 +20,9 @@ from app.auth.bind import (
     stage_record_bind_result,
 )
 from app.auth.deps import require_parent
-from app.core.redis import get_redis
-from app.core.redis import commit_with_redis
 from app.auth.tokens import issue_token, revoke_all_active_tokens
 from app.core.db import get_db
+from app.core.redis import commit_with_redis, get_redis
 from app.domain.accounts.schemas import AccountOut, CurrentAccount
 from app.domain.auth.schemas import (
     BindTokenResponse,

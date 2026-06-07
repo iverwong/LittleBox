@@ -8,8 +8,6 @@ from fastapi import Depends, Header, HTTPException, Request, status
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.redis import get_redis
-from app.core.redis import commit_with_redis
 from app.auth.tokens import (
     needs_roll,
     resolve_token,
@@ -18,6 +16,7 @@ from app.auth.tokens import (
     token_hash,
 )
 from app.core.db import get_db  # type: ignore[attr-defined]
+from app.core.redis import commit_with_redis, get_redis
 from app.domain.accounts.schemas import CurrentAccount
 from app.models.enums import UserRole
 

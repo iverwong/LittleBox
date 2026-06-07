@@ -16,21 +16,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
 from app.auth.deps import get_current_account, require_child
-from app.core.redis import get_redis
 from app.chat.context_schema import ChatContextSchema
-from app.core.time import SHANGHAI
-from app.domain.chat.session_policy import (
-    logical_day,
-    should_switch_session,
-    today_session_title,
-)
 from app.core.db import get_db
 from app.core.locks import (
     acquire_session_lock,
     acquire_throttle_lock,
     release_session_lock,
 )
+from app.core.redis import get_redis
 from app.core.runtime import RuntimeResources
+from app.core.time import SHANGHAI
 from app.domain.accounts.schemas import AccountOut, ChildProfileOut, CurrentAccount
 from app.domain.chat.pagination import decode_cursor, encode_cursor
 from app.domain.chat.pipeline import run_llm_pipeline
@@ -40,6 +35,11 @@ from app.domain.chat.schemas import (
     MessageListResponse,
     SessionListItem,
     SessionListResponse,
+)
+from app.domain.chat.session_policy import (
+    logical_day,
+    should_switch_session,
+    today_session_title,
 )
 from app.domain.chat.stream import ChatStreamState, stream_generator
 from app.domain.chat.stream_signals import running_streams
@@ -402,9 +402,7 @@ async def chat_stream(
             age=_age,
             gender=_gender,
             user_input=(
-                result.regen_user_input
-                if result.regen_user_input is not None
-                else req.content
+                result.regen_user_input if result.regen_user_input is not None else req.content
             ),
             settings=rr.settings,
             db_session_factory=rr.db_session_factory,

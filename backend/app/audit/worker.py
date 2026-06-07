@@ -18,6 +18,7 @@ T10 变更（D-patch0-7）：
 - 签名新增 child_user_id：由 enqueue_audit 从 ChatContextSchema 取值下传，
   避免 worker 内 SELECT 反查（方案 α）
 """
+
 from __future__ import annotations
 
 import logging
@@ -175,7 +176,9 @@ async def run_audit(
         output = result.get("structured_output")
         if output is not None:
             await manager.set_ready(
-                sid, turn_number, output,
+                sid,
+                turn_number,
+                output,
                 completed_at=datetime.now(UTC).isoformat(),
             )
         else:
@@ -186,7 +189,9 @@ async def run_audit(
         if job_try >= MAX_TRIES:
             # D14: 最后尝试失败，写 failed 状态
             await manager.set_failed(
-                sid, turn_number, str(e),
+                sid,
+                turn_number,
+                str(e),
                 completed_at=datetime.now(UTC).isoformat(),
             )
         raise

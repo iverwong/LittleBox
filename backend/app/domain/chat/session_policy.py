@@ -1,14 +1,17 @@
 """Session 日切策略:4h 硬边界 + 凌晨空闲 30 分切换 + 中文日期标题。
 
 D-4A.2 拆 session_policy:SHANGHAI + 通用 logical_day 迁到 app/core/time.py(零业务依赖);
-本文件保留业务规则 + 薄包装 logical_day(ts) → core.time.logical_day(ts, SESSION_HARD_BOUNDARY_HOUR)。
+本文件保留业务规则 + 薄包装 logical_day(ts) →
+core.time.logical_day(ts, SESSION_HARD_BOUNDARY_HOUR)。
 调用方不感知拆分,churn 最小。
 """
+
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
 
-from app.core.time import SHANGHAI, logical_day as _core_logical_day
+from app.core.time import SHANGHAI
+from app.core.time import logical_day as _core_logical_day
 
 SESSION_HARD_BOUNDARY_HOUR = 4
 SESSION_IDLE_WINDOW = (1, 4)

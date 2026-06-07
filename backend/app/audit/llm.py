@@ -10,6 +10,7 @@ M8-hotfix 追加 with_retry / with_fallbacks 包装：
 - 主端 3 次重试（瞬态错误自动恢复）
 - 备端百炼（主端全量失败时 fallback）
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING

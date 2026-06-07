@@ -17,6 +17,7 @@ from app.models.enums import UserRole
 
 class TokenPayload(BaseModel):
     """Redis 缓存与 DB 查询的统一返回形状。"""
+
     user_id: uuid.UUID
     role: UserRole
     family_id: uuid.UUID
@@ -61,29 +62,42 @@ async def issue_token(
     token = secrets.token_urlsafe(32)
     th = token_hash(token)
     expires_at = (
-        datetime.now(timezone.utc) + timedelta(days=ttl_days)
-        if ttl_days is not None else None
+        datetime.now(timezone.utc) + timedelta(days=ttl_days) if ttl_days is not None else None
     )
-    db.add(AuthToken(
-        user_id=user_id, token_hash=th, expires_at=expires_at,
-        device_id=device_id, device_info=device_info,
-    ))
+    db.add(
+        AuthToken(
+            user_id=user_id,
+            token_hash=th,
+            expires_at=expires_at,
+            device_id=device_id,
+            device_info=device_info,
+        )
+    )
     await db.flush()
     payload = TokenPayload(
-        user_id=user_id, role=role, family_id=family_id,
-        device_id=device_id, expires_at=expires_at,
+        user_id=user_id,
+        role=role,
+        family_id=family_id,
+        device_id=device_id,
+        expires_at=expires_at,
         last_rolled_date=_today_cst() if expires_at is not None else None,
     )
-    stage_redis_op(db, RedisOp(
-        kind="setex", key=_redis_key(th),
-        ttl_seconds=REDIS_TTL_SECONDS,
-        value=payload.model_dump_json(),
-    ))
+    stage_redis_op(
+        db,
+        RedisOp(
+            kind="setex",
+            key=_redis_key(th),
+            ttl_seconds=REDIS_TTL_SECONDS,
+            value=payload.model_dump_json(),
+        ),
+    )
     return token
 
 
 async def resolve_token(
-    db: AsyncSession, redis: Redis, token: str,
+    db: AsyncSession,
+    redis: Redis,
+    token: str,
 ) -> Optional[TokenPayload]:
     """纯读路径：不做 DB UPDATE；续期由 get_current_account 调 roll_token_expiry。"""
     th = token_hash(token)
@@ -113,11 +127,15 @@ async def resolve_token(
     # 能触发今天的首次续期（若今天尚未续）
     seed_date = (
         (tok.expires_at - timedelta(days=7)).astimezone(_CST).date().isoformat()
-        if tok.expires_at is not None else None
+        if tok.expires_at is not None
+        else None
     )
     payload = TokenPayload(
-        user_id=user.id, role=user.role, family_id=user.family_id,
-        device_id=tok.device_id, expires_at=tok.expires_at,
+        user_id=user.id,
+        role=user.role,
+        family_id=user.family_id,
+        device_id=tok.device_id,
+        expires_at=tok.expires_at,
         last_rolled_date=seed_date,
     )
     # 读路径回填：不经 staging；失败下次 miss 重试
@@ -130,44 +148,74 @@ def needs_roll(payload: TokenPayload) -> bool:
 
 
 async def roll_token_expiry(
-    db: AsyncSession, *, token_hash_hex: str, payload: TokenPayload,
+    db: AsyncSession,
+    *,
+    token_hash_hex: str,
+    payload: TokenPayload,
 ) -> TokenPayload:
     new_expires = datetime.now(timezone.utc) + timedelta(days=7)
-    await db.execute(update(AuthToken).where(
-        AuthToken.token_hash == token_hash_hex,
-        AuthToken.revoked_at.is_(None),
-    ).values(expires_at=new_expires))
-    new_payload = payload.model_copy(update={
-        "expires_at": new_expires,
-        "last_rolled_date": _today_cst(),
-    })
-    stage_redis_op(db, RedisOp(
-        kind="setex", key=_redis_key(token_hash_hex),
-        ttl_seconds=REDIS_TTL_SECONDS,
-        value=new_payload.model_dump_json(),
-    ))
+    await db.execute(
+        update(AuthToken)
+        .where(
+            AuthToken.token_hash == token_hash_hex,
+            AuthToken.revoked_at.is_(None),
+        )
+        .values(expires_at=new_expires)
+    )
+    new_payload = payload.model_copy(
+        update={
+            "expires_at": new_expires,
+            "last_rolled_date": _today_cst(),
+        }
+    )
+    stage_redis_op(
+        db,
+        RedisOp(
+            kind="setex",
+            key=_redis_key(token_hash_hex),
+            ttl_seconds=REDIS_TTL_SECONDS,
+            value=new_payload.model_dump_json(),
+        ),
+    )
     return new_payload
 
 
 async def revoke_token(db: AsyncSession, token: str) -> None:
     th = token_hash(token)
-    await db.execute(update(AuthToken).where(
-        AuthToken.token_hash == th, AuthToken.revoked_at.is_(None),
-    ).values(revoked_at=datetime.now(timezone.utc)))
+    await db.execute(
+        update(AuthToken)
+        .where(
+            AuthToken.token_hash == th,
+            AuthToken.revoked_at.is_(None),
+        )
+        .values(revoked_at=datetime.now(timezone.utc))
+    )
     stage_redis_op(db, RedisOp(kind="delete", key=_redis_key(th)))
 
 
 async def revoke_all_active_tokens(db: AsyncSession, user_id: uuid.UUID) -> int:
-    hashes = list((await db.execute(
-        select(AuthToken.token_hash).where(
-            AuthToken.user_id == user_id, AuthToken.revoked_at.is_(None),
+    hashes = list(
+        (
+            await db.execute(
+                select(AuthToken.token_hash).where(
+                    AuthToken.user_id == user_id,
+                    AuthToken.revoked_at.is_(None),
+                )
+            )
         )
-    )).scalars().all())
+        .scalars()
+        .all()
+    )
     if not hashes:
         return 0
-    await db.execute(update(AuthToken).where(
-        AuthToken.user_id == user_id, AuthToken.revoked_at.is_(None),
-    ).values(revoked_at=datetime.now(timezone.utc)))
+    await db.execute(
+        update(AuthToken)
+        .where(
+            AuthToken.user_id == user_id,
+            AuthToken.revoked_at.is_(None),
+        )
+        .values(revoked_at=datetime.now(timezone.utc))
+    )
     for th in hashes:
         stage_redis_op(db, RedisOp(kind="delete", key=_redis_key(th)))
     return len(hashes)

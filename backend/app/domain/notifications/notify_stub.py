@@ -7,6 +7,7 @@ D-4A.3 决议:logger 名保持 "audit.db",与原 audit/writers.py 末尾
 logger.info("notify.stub...") 一致 — 不切换日志输出通道,audit worker
 日志聚合路径不变。
 """
+
 from __future__ import annotations
 
 import logging
@@ -35,5 +36,8 @@ def send(
     """
     logger.info(
         "notify.stub.%s sid=%s turn=%d target=%s",
-        notify_type, session_id, turn_number, target_message_id,
+        notify_type,
+        session_id,
+        turn_number,
+        target_message_id,
     )

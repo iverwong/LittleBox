@@ -12,6 +12,7 @@ D-2 边界:
   (audit 域),`usecase.py`(chat 域)→ audit 域反向引用,
   pre-existing 耦合,本 Phase 3 不修,等 Phase 4.x 域通信重构。
 """
+
 from __future__ import annotations
 
 import logging
@@ -93,9 +94,7 @@ async def persist_ai_turn(
     await db.flush()  # populate msg.id
     # M8: ai_turn_counter 同事务 +1（SQL 列表达式，PG 行锁安全）
     await db.execute(
-        update(Session)
-        .where(Session.id == sid)
-        .values(ai_turn_counter=Session.ai_turn_counter + 1)
+        update(Session).where(Session.id == sid).values(ai_turn_counter=Session.ai_turn_counter + 1)
     )
     return msg.id
 
@@ -124,7 +123,10 @@ async def enqueue_audit(
 
     await arq_pool.enqueue_job(
         AUDIT_JOB_NAME,
-        str(sid), turn_number, str(child_user_id), str(target_message_id),
+        str(sid),
+        turn_number,
+        str(child_user_id),
+        str(target_message_id),
         _job_id=f"audit:{sid}:{turn_number}",
     )
 

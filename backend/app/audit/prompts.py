@@ -4,6 +4,7 @@ D11 v3（M8-hotfix）：tool_choice="auto" + system prompt 强约束。
 不再依赖 tool_choice 枚举值约束（DS/BL 思考模式都不支持 required/any），
 而是在 prompt 文本中明确要求模型以 audit_output 工具调用收尾。
 """
+
 from __future__ import annotations
 
 

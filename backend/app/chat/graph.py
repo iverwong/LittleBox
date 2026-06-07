@@ -34,8 +34,6 @@ from app.chat.context import (
     load_active_history_for_assembly,
 )
 from app.chat.context_schema import ChatContextSchema
-from app.core.llm_extractors import extract_finish_reason, extract_reasoning_content, extract_usage
-from app.core.llm import build_crisis_llm, build_main_llm, build_redline_llm
 from app.chat.prompts import (
     build_crisis_system_prompt,
     build_redline_system_prompt,
@@ -45,6 +43,8 @@ from app.chat.prompts import (
     format_reentry_wrapper_redline,
 )
 from app.chat.state import AuditState, MainDialogueState
+from app.core.llm import build_crisis_llm, build_main_llm, build_redline_llm
+from app.core.llm_extractors import extract_finish_reason, extract_reasoning_content, extract_usage
 from app.domain.audit.signals import AuditSignalsManager
 from app.models.audit import RollingSummary
 
@@ -93,10 +93,12 @@ async def load_audit_state(
 
     sid = str(ctx.session_id)
     manager = AuditSignalsManager(
-        ctx.audit_redis, ttl=ctx.settings.audit_redis_ttl_seconds,
+        ctx.audit_redis,
+        ttl=ctx.settings.audit_redis_ttl_seconds,
     )
     result = await manager.poll_wait(
-        sid, expected_turn=turn - 1,
+        sid,
+        expected_turn=turn - 1,
         timeout=ctx.settings.audit_wait_timeout_seconds,
     )
 
@@ -120,7 +122,9 @@ async def load_audit_state(
     elif result.kind == "turn_mismatch":
         logger.warning(
             "audit.load.turn_mismatch sid=%s turn=%s actual=%s",
-            sid, turn, result.actual_turn,
+            sid,
+            turn,
+            result.actual_turn,
         )
     else:  # timeout
         logger.warning("audit.load.timeout sid=%s turn=%s", sid, turn)
@@ -201,18 +205,25 @@ async def build_messages_main(
 
     async with ctx.db_session_factory() as db:
         history = await load_active_history_for_assembly(
-            ctx.session_id, state["turn_number"], db,
+            ctx.session_id,
+            state["turn_number"],
+            db,
         )
     system_prompt = build_system_prompt(ctx.age, ctx.gender)
 
     audit = state.get("audit_state", {})
-    return {"messages": [
-        system_prompt,
-        *history,
-        HumanMessage(content=format_guidance_wrapper(
-            ctx.user_input, audit.get("guidance"),
-        )),
-    ]}
+    return {
+        "messages": [
+            system_prompt,
+            *history,
+            HumanMessage(
+                content=format_guidance_wrapper(
+                    ctx.user_input,
+                    audit.get("guidance"),
+                )
+            ),
+        ]
+    }
 
 
 async def build_messages_crisis(
@@ -225,20 +236,23 @@ async def build_messages_crisis(
 
     target_mid = audit.get("target_message_id")
     assert target_mid is not None, (
-        "M9 Step 8 前 target_message_id 由 audit 节点必填；"
-        "None 表示 PG 兜底或 Redis 信号尚未就绪"
+        "M9 Step 8 前 target_message_id 由 audit 节点必填；None 表示 PG 兜底或 Redis 信号尚未就绪"
     )
 
     async with ctx.db_session_factory() as db:
         anchor_system, after_anchor = await build_crisis_context(
-            ctx.session_id, db, target_mid,
+            ctx.session_id,
+            db,
+            target_mid,
         )
-    return {"messages": [
-        build_crisis_system_prompt(ctx.age, ctx.gender),
-        anchor_system,
-        *after_anchor,
-        HumanMessage(content=format_reentry_wrapper_crisis(ctx.user_input)),
-    ]}
+    return {
+        "messages": [
+            build_crisis_system_prompt(ctx.age, ctx.gender),
+            anchor_system,
+            *after_anchor,
+            HumanMessage(content=format_reentry_wrapper_crisis(ctx.user_input)),
+        ]
+    }
 
 
 async def build_messages_redline(
@@ -250,14 +264,18 @@ async def build_messages_redline(
 
     async with ctx.db_session_factory() as db:
         summaries_systems, recent_pairs = await build_redline_context(
-            ctx.session_id, state["turn_number"], db,
+            ctx.session_id,
+            state["turn_number"],
+            db,
         )
-    return {"messages": [
-        build_redline_system_prompt(ctx.age, ctx.gender),
-        *summaries_systems,
-        *recent_pairs,
-        HumanMessage(content=format_reentry_wrapper_redline(ctx.user_input)),
-    ]}
+    return {
+        "messages": [
+            build_redline_system_prompt(ctx.age, ctx.gender),
+            *summaries_systems,
+            *recent_pairs,
+            HumanMessage(content=format_reentry_wrapper_redline(ctx.user_input)),
+        ]
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +363,8 @@ async def call_main_llm(
     ctx = runtime.context
     guidance = state.get("audit_state", {}).get("guidance")
     return await _stream_llm_chunks(
-        state, ctx,
+        state,
+        ctx,
         llm=build_main_llm(ctx.settings),
         provider=ctx.settings.main_provider,
         intervention_type="guided" if guidance is not None else None,
@@ -362,7 +381,8 @@ async def call_crisis_llm(
     """
     ctx = runtime.context
     return await _stream_llm_chunks(
-        state, ctx,
+        state,
+        ctx,
         llm=build_crisis_llm(ctx.settings),
         provider=ctx.settings.audit_provider,
         intervention_type="crisis",
@@ -379,7 +399,8 @@ async def call_redline_llm(
     """
     ctx = runtime.context
     return await _stream_llm_chunks(
-        state, ctx,
+        state,
+        ctx,
         llm=build_redline_llm(ctx.settings),
         provider=ctx.settings.audit_provider,
         intervention_type="redline",

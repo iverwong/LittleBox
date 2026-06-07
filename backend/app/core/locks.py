@@ -7,6 +7,7 @@ acquire / release 配对,跨进程互斥由 sticky session routing first 兜底,
 进程级 stop event 登记表见 `app.domain.chat.stream_signals`(拆 D-1 边界:
 锁契约归此处,stop signal 登记契约归 stream_signals)。
 """
+
 from __future__ import annotations
 
 import secrets
@@ -48,9 +49,7 @@ async def acquire_session_lock(redis: "Redis", session_id: str) -> str | None:
     return nonce if ok else None
 
 
-async def release_session_lock(
-    redis: "Redis", session_id: str, nonce: str
-) -> None:
+async def release_session_lock(redis: "Redis", session_id: str, nonce: str) -> None:
     """Release a session lock only if the supplied nonce matches.
 
     Uses an inline Lua script so the get+delete is atomic and safe

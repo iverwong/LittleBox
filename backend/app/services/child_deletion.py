@@ -1,4 +1,5 @@
 """child hard-delete 服务：级联 CASCADE + Redis 缓存清理 + 审计写入。"""
+
 from __future__ import annotations
 
 import uuid
@@ -44,88 +45,94 @@ async def hard_delete_child(
 
     deleted_tables["child_profiles"] = (
         await db.execute(
-            select(func.count()).select_from(ChildProfile).where(
-                ChildProfile.child_user_id == child_user_id
-            )
+            select(func.count())
+            .select_from(ChildProfile)
+            .where(ChildProfile.child_user_id == child_user_id)
         )
     ).scalar_one()
 
     deleted_tables["sessions"] = (
         await db.execute(
-            select(func.count()).select_from(Session).where(
-                Session.child_user_id == child_user_id
-            )
+            select(func.count()).select_from(Session).where(Session.child_user_id == child_user_id)
         )
     ).scalar_one()
 
     # messages/audit_records/rolling_summaries 以 session_ids 为中介
     session_ids = (
-        await db.execute(
-            select(Session.id).where(Session.child_user_id == child_user_id)
-        )
-    ).scalars().all()
+        (await db.execute(select(Session.id).where(Session.child_user_id == child_user_id)))
+        .scalars()
+        .all()
+    )
 
     deleted_tables["messages"] = (
-        await db.execute(
-            select(func.count()).select_from(Message).where(
-                Message.session_id.in_(session_ids)
+        (
+            await db.execute(
+                select(func.count()).select_from(Message).where(Message.session_id.in_(session_ids))
             )
-        )
-    ).scalar_one() if session_ids else 0
+        ).scalar_one()
+        if session_ids
+        else 0
+    )
 
     deleted_tables["audit_records"] = (
-        await db.execute(
-            select(func.count()).select_from(AuditRecord).where(
-                AuditRecord.session_id.in_(session_ids)
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(AuditRecord)
+                .where(AuditRecord.session_id.in_(session_ids))
             )
-        )
-    ).scalar_one() if session_ids else 0
+        ).scalar_one()
+        if session_ids
+        else 0
+    )
 
     deleted_tables["rolling_summaries"] = (
-        await db.execute(
-            select(func.count()).select_from(RollingSummary).where(
-                RollingSummary.session_id.in_(session_ids)
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(RollingSummary)
+                .where(RollingSummary.session_id.in_(session_ids))
             )
-        )
-    ).scalar_one() if session_ids else 0
+        ).scalar_one()
+        if session_ids
+        else 0
+    )
 
     deleted_tables["daily_reports"] = (
         await db.execute(
-            select(func.count()).select_from(DailyReport).where(
-                DailyReport.child_user_id == child_user_id
-            )
+            select(func.count())
+            .select_from(DailyReport)
+            .where(DailyReport.child_user_id == child_user_id)
         )
     ).scalar_one()
 
     deleted_tables["notifications"] = (
         await db.execute(
-            select(func.count()).select_from(Notification).where(
-                Notification.child_user_id == child_user_id
-            )
+            select(func.count())
+            .select_from(Notification)
+            .where(Notification.child_user_id == child_user_id)
         )
     ).scalar_one()
 
     deleted_tables["auth_tokens"] = (
         await db.execute(
-            select(func.count()).select_from(AuthToken).where(
-                AuthToken.user_id == child_user_id
-            )
+            select(func.count()).select_from(AuthToken).where(AuthToken.user_id == child_user_id)
         )
     ).scalar_one()
 
     deleted_tables["device_tokens"] = (
         await db.execute(
-            select(func.count()).select_from(DeviceToken).where(
-                DeviceToken.user_id == child_user_id
-            )
+            select(func.count())
+            .select_from(DeviceToken)
+            .where(DeviceToken.user_id == child_user_id)
         )
     ).scalar_one()
 
     deleted_tables["family_members"] = (
         await db.execute(
-            select(func.count()).select_from(FamilyMember).where(
-                FamilyMember.user_id == child_user_id
-            )
+            select(func.count())
+            .select_from(FamilyMember)
+            .where(FamilyMember.user_id == child_user_id)
         )
     ).scalar_one()
 
@@ -133,11 +140,13 @@ async def hard_delete_child(
     await db.execute(delete(User).where(User.id == child_user_id))
 
     # ④ 写入审计记录
-    db.add(DataDeletionRequest(
-        requested_by=requested_by,
-        child_id_snapshot=child_user_id,
-        deleted_tables=deleted_tables,
-        reason="parent_request",
-    ))
+    db.add(
+        DataDeletionRequest(
+            requested_by=requested_by,
+            child_id_snapshot=child_user_id,
+            deleted_tables=deleted_tables,
+            reason="parent_request",
+        )
+    )
 
     return deleted_tables

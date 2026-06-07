@@ -1,4 +1,5 @@
 """Request/response schemas for /me/sessions endpoints (Step 7) and chat stream (Step 8a)."""
+
 from __future__ import annotations
 
 import uuid

@@ -3,6 +3,7 @@
 `AuditSignalsManager` 封装 Redis SET/GET 操作和 `poll_wait` 轮询协议。
 由主对话图 `load_audit_state` / `enqueue_audit` 和 ARQ worker `run_audit` 消费。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -60,21 +61,31 @@ class AuditSignalsManager:
         self._poll_timeout = poll_timeout
 
     async def set_pending(
-        self, sid: str, turn: int, started_at: str,
+        self,
+        sid: str,
+        turn: int,
+        started_at: str,
     ) -> None:
         """SET `audit:{sid}` 为 pending 状态。
 
         由 `enqueue_audit` 调用（Step 9）。started_at 由调用方传入（UTC ISO-8601）。
         """
         payload = AuditSignalsPayload(
-            status="pending", turn=turn, started_at=started_at,
+            status="pending",
+            turn=turn,
+            started_at=started_at,
         )
         await self._redis.set(
-            f"audit:{sid}", payload.model_dump_json(), ex=self._ttl,
+            f"audit:{sid}",
+            payload.model_dump_json(),
+            ex=self._ttl,
         )
 
     async def set_ready(
-        self, sid: str, turn: int, signals: AuditOutputSchema,
+        self,
+        sid: str,
+        turn: int,
+        signals: AuditOutputSchema,
         completed_at: str | None = None,
     ) -> None:
         """SET `audit:{sid}` 为 ready 状态。
@@ -83,15 +94,22 @@ class AuditSignalsManager:
         completed_at 通常应由 worker 传入（UTC ISO-8601）；None 仅用于测试。
         """
         payload = AuditSignalsPayload(
-            status="ready", turn=turn, signals=signals,
+            status="ready",
+            turn=turn,
+            signals=signals,
             completed_at=completed_at,
         )
         await self._redis.set(
-            f"audit:{sid}", payload.model_dump_json(), ex=self._ttl,
+            f"audit:{sid}",
+            payload.model_dump_json(),
+            ex=self._ttl,
         )
 
     async def set_failed(
-        self, sid: str, turn: int, error: str,
+        self,
+        sid: str,
+        turn: int,
+        error: str,
         completed_at: str | None = None,
     ) -> None:
         """SET `audit:{sid}` 为 failed 状态。
@@ -100,11 +118,15 @@ class AuditSignalsManager:
         completed_at 通常应由调用方传入；None 仅用于测试。
         """
         payload = AuditSignalsPayload(
-            status="failed", turn=turn, error=error,
+            status="failed",
+            turn=turn,
+            error=error,
             completed_at=completed_at,
         )
         await self._redis.set(
-            f"audit:{sid}", payload.model_dump_json(), ex=self._ttl,
+            f"audit:{sid}",
+            payload.model_dump_json(),
+            ex=self._ttl,
         )
 
     async def get(self, sid: str) -> AuditSignalsPayload | None:
@@ -122,7 +144,9 @@ class AuditSignalsManager:
             return None
 
     async def poll_wait(
-        self, sid: str, expected_turn: int,
+        self,
+        sid: str,
+        expected_turn: int,
         timeout: float | None = None,
     ) -> AuditWaitResult:
         """轮询 `audit:{sid}` 直到终端状态或超时（D5 决议）。
@@ -137,9 +161,7 @@ class AuditSignalsManager:
 
         timeout 默认 self._poll_timeout（构造注入，prod=30s，测试可覆盖）。
         """
-        deadline = time.monotonic() + (
-            timeout if timeout is not None else self._poll_timeout
-        )
+        deadline = time.monotonic() + (timeout if timeout is not None else self._poll_timeout)
         while True:
             raw = await self._redis.get(f"audit:{sid}")
             if raw is None:
@@ -149,24 +171,29 @@ class AuditSignalsManager:
                 payload = AuditSignalsPayload.model_validate_json(raw)
             except ValidationError:
                 logger.warning(
-                    "audit.signals.invalid sid=%s raw=%s", sid, raw,
+                    "audit.signals.invalid sid=%s raw=%s",
+                    sid,
+                    raw,
                 )
                 return AuditWaitResult(kind="miss")
 
             if payload.turn != expected_turn:
                 # D6：turn 严格不等即 mismatch，不论大小
                 return AuditWaitResult(
-                    kind="turn_mismatch", actual_turn=payload.turn,
+                    kind="turn_mismatch",
+                    actual_turn=payload.turn,
                 )
 
             if payload.status == "ready":
                 return AuditWaitResult(
-                    kind="ready", signals=payload.signals,
+                    kind="ready",
+                    signals=payload.signals,
                 )
 
             if payload.status == "failed":
                 return AuditWaitResult(
-                    kind="failed", error=payload.error,
+                    kind="failed",
+                    error=payload.error,
                 )
 
             # status == "pending" → 继续等

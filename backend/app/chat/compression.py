@@ -18,9 +18,7 @@ logger = logging.getLogger(__name__)
 
 CONTEXT_COMPRESS_THRESHOLD_TOKENS = 500_000  # V4 1M 上下文的 50%
 
-_OUTPUT_CONTRACT = (
-    "\n\n请只输出 <summary>…</summary> 包裹的内容，不要其他文字。"
-)
+_OUTPUT_CONTRACT = "\n\n请只输出 <summary>…</summary> 包裹的内容，不要其他文字。"
 
 
 def build_compression_prompt(history: list[BaseMessage]) -> list[BaseMessage]:

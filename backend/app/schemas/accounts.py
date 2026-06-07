@@ -1,4 +1,5 @@
 """Account schemas for auth API."""
+
 from __future__ import annotations
 
 import uuid
@@ -29,9 +30,7 @@ class CurrentAccount(BaseModel):
     id: uuid.UUID
     role: UserRole
     family_id: uuid.UUID
-    expires_at: Optional[datetime] = Field(
-        default=None, description="None 表示永不过期（子账号）"
-    )
+    expires_at: Optional[datetime] = Field(default=None, description="None 表示永不过期（子账号）")
 
 
 class LoginRequest(BaseModel):
@@ -97,8 +96,10 @@ class BindTokenStatusOut(BaseModel):
 
     status: Literal["pending", "bound"]
     child_user_id: Optional[uuid.UUID] = Field(
-        default=None, description="status=bound 时返回；pending 时为 None",
+        default=None,
+        description="status=bound 时返回；pending 时为 None",
     )
     bound_at: Optional[datetime] = Field(
-        default=None, description="status=bound 时子端完成兑换的 UTC 时间",
+        default=None,
+        description="status=bound 时子端完成兑换的 UTC 时间",
     )

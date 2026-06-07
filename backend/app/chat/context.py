@@ -68,9 +68,7 @@ async def load_active_history_for_assembly(
     - load_active_history_for_assembly: main W1 装配链专用，不含本轮 human，
       前缀含 turn_summaries SystemMessage 列表
     """
-    rs = await db.scalar(
-        select(RollingSummary).where(RollingSummary.session_id == sid).limit(1)
-    )
+    rs = await db.scalar(select(RollingSummary).where(RollingSummary.session_id == sid).limit(1))
     summaries: list[SystemMessage] = []
     if rs and rs.turn_summaries:
         for s in rs.turn_summaries:
@@ -95,11 +93,7 @@ async def build_context(sid: UUID, db: AsyncSession) -> list[BaseMessage]:
 
     # rolling_summaries：M6 只读路径，始终 fall through
     # （M8 review worker 写入后改由非空 turn_summaries 触发注入）
-    sm_stmt = (
-        select(RollingSummary.turn_summaries)
-        .where(RollingSummary.session_id == sid)
-        .limit(1)
-    )
+    sm_stmt = select(RollingSummary.turn_summaries).where(RollingSummary.session_id == sid).limit(1)
     row = (await db.execute(sm_stmt)).scalar_one_or_none()
 
     # scalar_one_or_none()：None=无行；[]=空列表（二者均 falsy → fallback）
@@ -161,9 +155,7 @@ async def build_crisis_context(
         - anchor_system: SystemMessage(content="[anchor 窗口]\\nrole: content\\n...")
         - after_anchor: 剩余 active 消息列表（HumanMessage/AIMessage）
     """
-    anchor = await db.scalar(
-        select(Message).where(Message.id == target_message_id)
-    )
+    anchor = await db.scalar(select(Message).where(Message.id == target_message_id))
     if anchor is None:
         raise ValueError(f"crisis anchor not found: {target_message_id}")
 
@@ -185,9 +177,7 @@ async def build_crisis_context(
         .scalars()
         .all()
     )
-    anchor_text_lines = [
-        f"{m.role.value}: {m.content}" for m in reversed(aw_rows)
-    ]
+    anchor_text_lines = [f"{m.role.value}: {m.content}" for m in reversed(aw_rows)]
     anchor_system = SystemMessage(
         content=ANCHOR_WINDOW_PREFIX + "\n" + "\n".join(anchor_text_lines)
     )
@@ -223,9 +213,7 @@ async def build_redline_context(
         - summaries_systems: 最近 redline_turn_summaries_window 条摘要的 SystemMessage 列表
         - recent_pairs: 最近 redline_context_recent_turns 对 active 消息
     """
-    rs = await db.scalar(
-        select(RollingSummary).where(RollingSummary.session_id == sid).limit(1)
-    )
+    rs = await db.scalar(select(RollingSummary).where(RollingSummary.session_id == sid).limit(1))
     summaries: list[SystemMessage] = []
     if rs and rs.turn_summaries:
         # 取最近 redline_turn_summaries_window 条
@@ -235,12 +223,16 @@ async def build_redline_context(
             summaries.append(SystemMessage(content=text))
 
     pairs = await load_recent_active_pairs(
-        sid, current_turn, db, n=settings.redline_context_recent_turns,
+        sid,
+        current_turn,
+        db,
+        n=settings.redline_context_recent_turns,
     )
     return summaries, pairs
 
 
 # ---- LangChain 消息转换 ----
+
 
 def _to_lc_message(m: Message) -> BaseMessage:
     """将 Message ORM 对象转换为 LangChain 消息。"""

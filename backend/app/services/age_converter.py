@@ -1,4 +1,5 @@
 """age ↔ birth_date 换算服务（M4.8 B2）。纯函数，无 IO 依赖。"""
+
 from __future__ import annotations
 
 from datetime import date
@@ -43,7 +44,5 @@ def birth_date_to_age(birth_date: date, ref: date | None = None) -> int:
         3–21 之间的年龄。
     """
     ref = ref if ref is not None else date.today()
-    raw = ref.year - birth_date.year - (
-        (ref.month, ref.day) < (birth_date.month, birth_date.day)
-    )
+    raw = ref.year - birth_date.year - ((ref.month, ref.day) < (birth_date.month, birth_date.day))
     return max(3, min(21, raw))

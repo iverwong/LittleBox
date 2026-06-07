@@ -1,4 +1,5 @@
 """密码哈希与随机生成。argon2id + OWASP 2024 参数。"""
+
 import secrets
 
 from argon2 import PasswordHasher

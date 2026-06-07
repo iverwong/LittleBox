@@ -9,6 +9,7 @@ M8 上下文压缩、M9 危机 / 红线干预 LLM 调用共用本模块。
 - content 必须 XML 转义
 - 配套 extract_wrapped_output 用于从 LLM 输出提取契约 tag 内容
 """
+
 from __future__ import annotations
 
 import re

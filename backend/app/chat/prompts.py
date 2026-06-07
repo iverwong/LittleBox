@@ -14,6 +14,7 @@
 
 14 个 prompt 占位 slot 待专人审核后填充。
 """
+
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -128,33 +129,23 @@ ANCHOR_WINDOW_PREFIX = "[anchor 窗口]"
 
 # C.1
 STUB_CRISIS_SYSTEM_PROMPT = (
-    "# TODO(prompts-content): crisis 接管身份与安全底线\n"
-    "[STUB crisis intervention system prompt]"
+    "# TODO(prompts-content): crisis 接管身份与安全底线\n[STUB crisis intervention system prompt]"
 )
 
 # C.2
 STUB_REDLINE_SYSTEM_PROMPT = (
-    "# TODO(prompts-content): redline 接管身份与安全底线\n"
-    "[STUB redline intervention system prompt]"
+    "# TODO(prompts-content): redline 接管身份与安全底线\n[STUB redline intervention system prompt]"
 )
 
 # C.3
-STUB_REENTRY_WRAPPER_CRISIS = (
-    "TODO(prompts-content): crisis 重入 wrapper\n"
-    "用户输入：{user_input}"
-)
+STUB_REENTRY_WRAPPER_CRISIS = "TODO(prompts-content): crisis 重入 wrapper\n用户输入：{user_input}"
 
 # C.4
-STUB_REENTRY_WRAPPER_REDLINE = (
-    "TODO(prompts-content): redline 重入 wrapper\n"
-    "用户输入：{user_input}"
-)
+STUB_REENTRY_WRAPPER_REDLINE = "TODO(prompts-content): redline 重入 wrapper\n用户输入：{user_input}"
 
 # C.5（guidance 为空时透传 user_input，不包装）
 STUB_GUIDANCE_WRAPPER = (
-    "TODO(prompts-content): 引导注入 wrapper\n"
-    "用户输入：{user_input}\n"
-    "引导建议：{guidance}"
+    "TODO(prompts-content): 引导注入 wrapper\n用户输入：{user_input}\n引导建议：{guidance}"
 )
 
 
@@ -199,4 +190,3 @@ def format_guidance_wrapper(user_input: str, guidance: str | None) -> str:
     if not guidance:
         return user_input
     return STUB_GUIDANCE_WRAPPER.format(user_input=user_input, guidance=guidance)
-

@@ -4,6 +4,7 @@
 phase 6.5 之前,旧 `app.schemas.audit` 仍被 `app.state.audit_signals` 引用(1.2 才迁),
 本 `__init__.py` 暂无外部调用方,纯过渡占位。
 """
+
 from app.domain.audit.schemas import (
     AppendNote,
     AuditDimensionScores,

@@ -17,6 +17,7 @@ T11（D-patch0-7）：无参工厂 + 4 节点 Runtime[AuditContextSchema] DI 替
 T12：_load_messages_from_pg text-SQL → ORM `select(Message.role, Message.content)`，
 保留 M8 契约（不过滤 status、DESC + LIMIT + Python reversed()）。
 """
+
 from __future__ import annotations
 
 import json
@@ -31,11 +32,11 @@ from typing_extensions import TypedDict
 
 from app.audit.llm import build_audit_llm
 from app.audit.prompts import build_audit_system_prompt
-from app.domain.audit.usecase import write_audit_results
 from app.domain.audit.schemas import (
     AuditDimensionScores,
     AuditOutputSchema,
 )
+from app.domain.audit.usecase import write_audit_results
 
 if TYPE_CHECKING:
     from langgraph.runtime import Runtime
@@ -103,11 +104,18 @@ def _build_audit_output_default(
     """
     return AuditOutputSchema(
         dimension_scores=AuditDimensionScores(
-            emotional=0, social=0, romance=0, values=0,
-            boundaries=0, academic=0, lifestyle=0,
+            emotional=0,
+            social=0,
+            romance=0,
+            values=0,
+            boundaries=0,
+            academic=0,
+            lifestyle=0,
         ),
-        crisis_detected=False, crisis_topic=None,
-        redline_triggered=False, redline_detail=None,
+        crisis_detected=False,
+        crisis_topic=None,
+        redline_triggered=False,
+        redline_detail=None,
         guidance_injection=guidance_injection,
         turn_summary=turn_summary,
     )
@@ -225,9 +233,7 @@ async def audit_llm_call(
             # guidance_injection 不再传运营态字符串：降级时主 LLM 不应收到
             # 任何 guidance 注入（route_by_risk.ready 分支 guidance 为 None
             # → 落到 main 分支而非 guidance 分支）。
-            logger.warning(
-                "audit_pipeline: 模型连续两次未调用 audit_output，默认 verdict=warn"
-            )
+            logger.warning("audit_pipeline: 模型连续两次未调用 audit_output，默认 verdict=warn")
             return {
                 "messages": [response],
                 "structured_output": _build_audit_output_default(
@@ -314,7 +320,9 @@ async def _audit_tools_impl(state: AuditGraphState, max_iter: int) -> dict:
     if iter_count >= max_iter:
         logger.warning(
             "audit.loop_exceeded sid=%s turn=%s count=%d",
-            state["sid"], state["turn_number"], iter_count,
+            state["sid"],
+            state["turn_number"],
+            iter_count,
         )
         # 最后一条未应用 tool_call 的内容 append 到 notes
         last_tc = last_ai.tool_calls[-1]
@@ -349,7 +357,10 @@ def route_after_tools(state: AuditGraphState) -> Literal["audit_llm_call", "writ
     if state["tool_iter_count"] >= max_iter:
         logger.warning(
             "audit.loop_exceeded sid=%s turn=%s iter=%d max=%d",
-            state["sid"], state["turn_number"], state["tool_iter_count"], max_iter,
+            state["sid"],
+            state["turn_number"],
+            state["tool_iter_count"],
+            max_iter,
         )
         return "write_results"
     return "audit_llm_call"

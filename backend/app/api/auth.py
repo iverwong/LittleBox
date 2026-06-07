@@ -12,14 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import require_parent
 from app.auth.password import verify_password
-from app.core.redis import get_redis
-from app.core.redis import RedisOp, commit_with_redis, stage_redis_op
 from app.auth.tokens import (
     issue_token,
     revoke_all_active_tokens,
     revoke_token,
 )
 from app.core.db import get_db
+from app.core.redis import RedisOp, commit_with_redis, get_redis, stage_redis_op
 from app.domain.accounts.rate_limit import (
     check_login_limit,
     incr_login_fail,

@@ -38,9 +38,7 @@ from langchain_openai import ChatOpenAI
 
 _VERIFIED_LCO_VERSIONS = ("1.2.",)  # 当前已验证版本前缀
 _lco_version = _metadata.version("langchain-openai")
-assert any(
-    _lco_version.startswith(v) for v in _VERIFIED_LCO_VERSIONS
-), (
+assert any(_lco_version.startswith(v) for v in _VERIFIED_LCO_VERSIONS), (
     f"langchain-openai 版本 {_lco_version} 未经验证，"
     f"_convert_message_to_dict monkeypatch 可能失效。"
     f"已验证版本前缀：{_VERIFIED_LCO_VERSIONS}。"
@@ -182,7 +180,8 @@ _CLIENT_BUILDER: dict[tuple[str, str], Callable[..., Runnable]] = {
     ("compression", "deepseek"): _build_compression_deepseek,  # 独立 builder(陷阱 ②)
 }
 
-# 公开 key 列表(保持字符串名不变,调用方 (audit/llm.py / chat/graph.py / set_test_llm inject) 不改 key)
+# 公开 key 列表(字符串名保持不变)
+# 调用方:audit/llm.py / chat/graph.py / set_test_llm inject,不感知 key 是否被拆
 _PUBLIC_KEYS: tuple[str, ...] = (
     "deepseek",
     "openai",
@@ -200,9 +199,9 @@ def _parse_key(provider: str) -> tuple[str, str]:
     其他        → role='main',   provider_base=provider
     """
     if provider.startswith("audit_"):
-        return ("audit", provider[len("audit_"):])
+        return ("audit", provider[len("audit_") :])
     if provider.startswith("compression_"):
-        return ("compression", provider[len("compression_"):])
+        return ("compression", provider[len("compression_") :])
     return ("main", provider)
 
 
@@ -252,7 +251,8 @@ def build_provider_llm(provider: str, settings: Any) -> Runnable:
         msg = f"Unknown provider '{provider}'. Registered: {list(_PUBLIC_KEYS)}"
         raise ProviderNotRegisteredError(msg)
 
-    # compression 角色走 self-contained 独立 builder（陷阱 ②:不传 reasoning_effort / 自己取 settings）
+    # compression 角色走 self-contained 独立 builder
+    # 陷阱 ②:不传 reasoning_effort / 自己取 settings
     if builder is _build_compression_deepseek:
         return builder(settings)
 
@@ -277,7 +277,8 @@ def build_provider_llm(provider: str, settings: Any) -> Runnable:
             timeout=settings.llm_request_timeout_seconds,
         )
 
-    # _build_chat_deepseek 需要 (api_key, base_url, model, timeout, thinking_enabled, reasoning_effort)
+    # _build_chat_deepseek 参数
+    # (api_key, base_url, model, timeout, thinking_enabled, reasoning_effort)
     return builder(
         api_key=api_key,
         base_url=base_url,

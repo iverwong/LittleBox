@@ -1,4 +1,5 @@
 """FastAPI app factory."""
+
 import asyncio
 import logging
 from contextlib import asynccontextmanager
@@ -12,8 +13,8 @@ from app.api.bind_tokens import router as bind_tokens_router
 from app.api.children import router as children_router
 from app.api.health import router as health_router
 from app.api.me import router as me_router
-from app.core.redis import redis_lifespan
 from app.core.config import settings
+from app.core.redis import redis_lifespan
 from app.core.runtime import build_runtime, teardown_runtime
 
 if TYPE_CHECKING:

@@ -12,6 +12,7 @@ Step 2 不测清理;Step 8c 集成测试覆盖。
 
 Redis 锁原语 / Lua 部署契约见 `app.core.locks`(拆 D-1 边界)。
 """
+
 from __future__ import annotations
 
 import asyncio

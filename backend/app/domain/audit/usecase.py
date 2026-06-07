@@ -18,6 +18,7 @@ prompts/context_schema,Phase 6 整体重命名前的过渡形态。
 - crisis_locked 累积:一旦为 true 不可回 false
 - WHERE last_turn < :turn 防回退(代码层提前 return,不等 DB)
 """
+
 from __future__ import annotations
 
 import logging
@@ -27,6 +28,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 
 from app.domain.audit.schemas import AuditOutputSchema, TurnSummaryEntry
+
 # 4.6 期间:app/models/audit.py 仍存在(Phase 6.4 才迁到 app/domain/audit/models.py)
 # 故保留 app.models.audit import,Phase 6.4 收口时同步改
 from app.models.audit import AuditRecord, RollingSummary
@@ -56,7 +58,9 @@ async def write_audit_results(
     if rs is not None and turn_number <= rs.last_turn:
         logger.warning(
             "audit.turn.rollback sid=%s turn=%d last_turn=%d",
-            sid, turn_number, rs.last_turn,
+            sid,
+            turn_number,
+            rs.last_turn,
         )
         return
 
@@ -66,18 +70,20 @@ async def write_audit_results(
         if structured_output.dimension_scores is not None
         else None
     )
-    db.add(AuditRecord(
-        session_id=sid,
-        turn_number=turn_number,
-        target_message_id=target_message_id,
-        dimension_scores=dims,
-        crisis_detected=structured_output.crisis_detected,
-        crisis_topic=structured_output.crisis_topic,
-        guidance_injection=structured_output.guidance_injection,    # schema→ORM 同名透传
-        redline_triggered=structured_output.redline_triggered,
-        redline_detail=structured_output.redline_detail,
-        notify_sent=False,   # M8 期不发送通知;server_default 不足,ORM 需显式
-    ))
+    db.add(
+        AuditRecord(
+            session_id=sid,
+            turn_number=turn_number,
+            target_message_id=target_message_id,
+            dimension_scores=dims,
+            crisis_detected=structured_output.crisis_detected,
+            crisis_topic=structured_output.crisis_topic,
+            guidance_injection=structured_output.guidance_injection,  # schema→ORM 同名透传
+            redline_triggered=structured_output.redline_triggered,
+            redline_detail=structured_output.redline_detail,
+            notify_sent=False,  # M8 期不发送通知;server_default 不足,ORM 需显式
+        )
+    )
 
     # Step 4: upsert rolling_summaries
     entry = TurnSummaryEntry(
@@ -89,15 +95,17 @@ async def write_audit_results(
 
     if rs is None:
         # 4a: INSERT 新行(crisis_locked_message_id 短路保留:初始命中才写)
-        db.add(RollingSummary(
-            session_id=sid,
-            last_turn=turn_number,
-            crisis_locked_message_id=(
-                target_message_id if structured_output.crisis_detected else None
-            ),
-            session_notes=session_notes_final,
-            turn_summaries=[entry_dict],
-        ))
+        db.add(
+            RollingSummary(
+                session_id=sid,
+                last_turn=turn_number,
+                crisis_locked_message_id=(
+                    target_message_id if structured_output.crisis_detected else None
+                ),
+                session_notes=session_notes_final,
+                turn_summaries=[entry_dict],
+            )
+        )
     else:
         # 4b: UPDATE 既有行(crisis_locked_message_id 短路保留旧值,粘性不可逆)
         summaries = (rs.turn_summaries or []) + [entry_dict]
@@ -114,4 +122,5 @@ async def write_audit_results(
     if structured_output.crisis_detected or structured_output.redline_triggered:
         notify_type = "crisis" if structured_output.crisis_detected else "redline"
         from app.domain.notifications.notify_stub import send as notify_send
+
         notify_send(notify_type, sid, turn_number, target_message_id)
