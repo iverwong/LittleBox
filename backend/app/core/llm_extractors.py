@@ -20,12 +20,6 @@ from langchain_core.messages import AIMessageChunk
 
 ALLOWED_FINISH_REASONS = frozenset({"stop", "length", "content_filter"})
 
-# Provider → field path for finish_reason extraction
-_FINISH_REASON_PATH: dict[str, str] = {
-    "deepseek": "response_metadata.finish_reason",
-    "openai": "response_metadata.finish_reason",
-}
-
 
 def extract_finish_reason(chunk: AIMessageChunk, provider: str) -> str | None:
     """从 chunk.response_metadata 提取 finish_reason。

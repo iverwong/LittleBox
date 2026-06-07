@@ -9,7 +9,7 @@ from app.chat.compression import (
     build_compression_prompt,
     extract_compression_summary,
 )
-from app.chat.extractors import extract_usage
+from app.core.llm_extractors import extract_usage
 from app.chat.prompts import COMPRESSION_PROMPT_STUB
 
 
