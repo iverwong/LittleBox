@@ -42,8 +42,14 @@ class LoginResponse(BaseModel):
 
 
 class BindTokenResponse(BaseModel):
+    """POST /bind-tokens(create)响应:返回给父端拿去生成 QR。
+
+    `bind_token` 一次性,扫码 redeem 后立即 invalidate;5 分钟未 redeem 则 TTL 过期。
+    过期判定由前端 5s 轮询 GET /bind-tokens/{bind_token}/status 拿到 404 来切态,
+    不在响应里下发改 TTL 也要同步前端——见 docs/M4-plan §1.2。
+    """
+
     bind_token: str = Field(description="5 分钟 TTL，一次性使用")
-    expires_in_seconds: Literal[300] = 300
 
 
 class CreateBindTokenRequest(BaseModel):

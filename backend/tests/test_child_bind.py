@@ -166,7 +166,6 @@ class TestBindToken:
         )
         assert bind_resp.status_code == 201
         assert bind_resp.json()["bind_token"]
-        assert bind_resp.json()["expires_in_seconds"] == 300
 
     @pytest.mark.asyncio
     async def test_generate_bind_token_wrong_family_404(
