@@ -42,7 +42,6 @@ from app.domain.chat.schemas import (
     SessionListResponse,
 )
 from app.domain.chat.session_policy import (
-    logical_day,
     should_switch_session,
     today_session_title,
 )
@@ -108,7 +107,7 @@ async def list_sessions(
 ) -> SessionListResponse:
     """List sessions for the authenticated child (keyset pagination, no in_progress).
 
-    M6-patch3：响应顶层附 today_session_id；sessions 数组过滤今日 logical_day。
+    M6-patch3：响应顶层附 today_session_id；sessions 数组过滤今日(由 today_session_id 标识)。
     """
     if cursor is not None and cursor == "":
         cursor = None
@@ -122,8 +121,11 @@ async def list_sessions(
             .limit(1)
         )
     ).scalar_one_or_none()
+    # 与 chat/stream 入口保持一致:hard cut + 凌晨空闲 30min 软切(should_switch_session)。
+    # 仅靠逻辑日相等判定会漏掉凌晨空闲场景,导致 list 暴露的 today_session_id
+    # 与 chat/stream 实际新建的 session 不一致(客户端跳到旧 session 反而触发新建)。
     today_sid = (
-        latest.id if latest and logical_day(latest.last_active_at) == logical_day(now) else None
+        latest.id if latest and not should_switch_session(latest.last_active_at, now) else None
     )
 
     stmt = (
