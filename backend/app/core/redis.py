@@ -24,9 +24,10 @@ rr.audit_redis(RuntimeResources 注入);_audit_redis 是 redis_lifespan
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import AsyncIterator, Literal
+from typing import Literal
 from urllib.parse import urlparse, urlunparse
 
 from redis.asyncio import Redis
@@ -50,7 +51,7 @@ def _build_arq_redis_url() -> str:
 
 
 @asynccontextmanager
-async def redis_lifespan() -> AsyncIterator[None]:
+async def redis_lifespan() -> AsyncGenerator[None, None]:
     """挂到 FastAPI lifespan:创建主 Redis + ARQ Redis 连接池。"""
     global _redis, _audit_redis
     _redis = Redis.from_url(

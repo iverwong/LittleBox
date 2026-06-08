@@ -23,8 +23,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, AsyncIterator
+from typing import TYPE_CHECKING
 
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,7 +40,7 @@ if TYPE_CHECKING:
 
 
 @asynccontextmanager
-async def cli_runtime() -> AsyncIterator[tuple[AsyncSession, Redis]]:
+async def cli_runtime() -> AsyncGenerator[tuple[AsyncSession, Redis], None]:
     """CLI 专用：build_runtime 拿进程级资源 + 自建主库 db=0 redis；退出时统一释放。
 
     yield (session, redis)：
