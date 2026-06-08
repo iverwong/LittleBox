@@ -85,8 +85,6 @@ backend/
     │   ├── children.py      # /api/v1/children CRUD
     │   └── me.py            # /api/v1/me/*(拆薄后,只路由 + 委托)
     │
-    ├── audit/               # [Phase 7 远期]LangGraph 旧实现暂留,与 domain/audit/ 并存
-    ├── chat/                # [Phase 7 远期]LangGraph 旧实现暂留,与 domain/chat/ 并存
     ├── scripts/             # CLI 脚本(创建父端 / 重置密码 / 画 mermaid)
     └── artifacts/           # 生成的工件(mermaid,gitignore 内仅保目录)
 ```
