@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { toast } from '@/components/ui';
 import { api } from '@/services/api/client';
 import { useAuthStore } from '@/stores/auth';
+import { Endpoints } from '@/constants/endpoints';
 
 type AccountOut = {
   id: string;
@@ -31,7 +32,7 @@ export function useBindRedeem(options?: {
     setIsPending(true);
 
     const result = await api.post<LoginResponse>(
-      `/bind-tokens/${bindToken}/redeem`,
+      Endpoints.bindTokenRedeem(bindToken),
       { device_id: deviceId },
     );
 

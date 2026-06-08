@@ -11,6 +11,7 @@ import { StyleSheet, Text, View } from 'react-native'
 
 import { Mascot } from '@/components/mascot/Mascot'
 import { api } from '@/services/api/client'
+import { Endpoints } from '@/constants/endpoints'
 
 /**
  * GET /me/profile 响应类型。
@@ -30,7 +31,7 @@ export function WelcomeContent() {
     useEffect(() => {
         let cancelled = false
         const fetchProfile = async () => {
-            const result = await api.get<ChildProfileOut>('/me/profile')
+            const result = await api.get<ChildProfileOut>(Endpoints.meProfile)
             if (cancelled) return
             if (result.ok && result.data.nickname) {
                 setNickname(result.data.nickname)

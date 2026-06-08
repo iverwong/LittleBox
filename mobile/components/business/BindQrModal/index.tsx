@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/Button'
 import { useTheme } from '@/theme'
 import { api } from '@/services/api/client'
 import { toast } from '@/components/ui/Toast'
+import { Endpoints } from '@/constants/endpoints'
 
 interface BindQrModalProps {
     visible: boolean
@@ -73,7 +74,7 @@ export function BindQrModal({
         setToken(null)
         setPhase('loading')
 
-        const res = await api.post<BindTokenResponse>('/bind-tokens', {
+        const res = await api.post<BindTokenResponse>(Endpoints.bindTokens, {
             child_user_id: childId,
         })
 
@@ -110,7 +111,7 @@ export function BindQrModal({
 
         const tick = async () => {
             const res = await api.get<BindTokenStatusResponse>(
-                `/bind-tokens/${token}/status`,
+                Endpoints.bindTokenStatus(token),
             )
             if (cancelledRef.current) return
 
