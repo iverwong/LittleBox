@@ -34,7 +34,6 @@ interface BindQrModalProps {
 
 interface BindTokenResponse {
     bind_token: string
-    expires_in_seconds: number
 }
 
 interface BindTokenStatusResponse {
@@ -202,7 +201,7 @@ export function BindQrModal({
         phase === 'active'
             ? '请用孩子的设备扫描上方二维码'
             : phase === 'expired'
-                ? '二维码 5 分钟有效，请重新生成'
+                ? '二维码已失效，请重新生成'
                 : phase === 'error'
                     ? '请检查网络后重试'
                     : '正在申请二维码...'
