@@ -1,7 +1,7 @@
 """M4.8 B4 TDD：GET /children 列表。"""
+
 from __future__ import annotations
 
-import asyncio
 import uuid
 from datetime import datetime, timezone
 
@@ -41,9 +41,7 @@ class TestListChildrenEmpty:
     """列表为空：parent 尚未创建任何 child。"""
 
     @pytest.mark.asyncio
-    async def test_empty_list(
-        self, api_client, seeded_parent: tuple[User, str]
-    ) -> None:
+    async def test_empty_list(self, api_client, seeded_parent: tuple[User, str]) -> None:
         parent, pw = seeded_parent
         token = await _login(api_client, parent, pw)
         resp = await api_client.get(
@@ -59,9 +57,7 @@ class TestListChildrenSingle:
     """单 child 场景：未绑定 / 已绑定。"""
 
     @pytest.mark.asyncio
-    async def test_single_unbound(
-        self, api_client, seeded_parent: tuple[User, str]
-    ) -> None:
+    async def test_single_unbound(self, api_client, seeded_parent: tuple[User, str]) -> None:
         parent, pw = seeded_parent
         token = await _login(api_client, parent, pw)
 
@@ -79,9 +75,7 @@ class TestListChildrenSingle:
         assert data[0]["is_bound"] is False
 
     @pytest.mark.asyncio
-    async def test_single_bound(
-        self, api_client, seeded_parent: tuple[User, str]
-    ) -> None:
+    async def test_single_bound(self, api_client, seeded_parent: tuple[User, str]) -> None:
         parent, pw = seeded_parent
         parent_token = await _login(api_client, parent, pw)
 
@@ -171,9 +165,7 @@ class TestListChildrenRevoke:
     """revoke-tokens 回归：revoke 后 is_bound 翻 false。"""
 
     @pytest.mark.asyncio
-    async def test_revoke_is_bound_false(
-        self, api_client, seeded_parent: tuple[User, str]
-    ) -> None:
+    async def test_revoke_is_bound_false(self, api_client, seeded_parent: tuple[User, str]) -> None:
         parent, pw = seeded_parent
         token = await _login(api_client, parent, pw)
 
@@ -218,17 +210,29 @@ class TestListChildrenOrdering:
 
     @pytest.mark.asyncio
     async def test_ordering_by_created_at(
-        self, api_client, seeded_parent: tuple[User, str]
+        self, api_client, db_session, seeded_parent: tuple[User, str]
     ) -> None:
         parent, pw = seeded_parent
         token = await _login(api_client, parent, pw)
 
-        # 顺序创建 3 个 child，每次间隔 3s 保证 created_at 秒级精度下必然不同
-        await _make_child(api_client, token, "first", age=10, gender="unknown")
-        await asyncio.sleep(3.0)
-        await _make_child(api_client, token, "second", age=11, gender="unknown")
-        await asyncio.sleep(3.0)
-        await _make_child(api_client, token, "third", age=12, gender="unknown")
+        # 顺序创建 3 个 child
+        first = await _make_child(api_client, token, "first", age=10, gender="unknown")
+        second = await _make_child(api_client, token, "second", age=11, gender="unknown")
+        third = await _make_child(api_client, token, "third", age=12, gender="unknown")
+
+        # 直接 UPDATE 3 条 ChildProfile.created_at 为递增秒级时间戳：用显式时间戳回填
+        # 代替真实 sleep —— 避免 6s 真实等待，同时验证"秒级精度下 created_at 不同则按
+        # created_at 升序排序"。镜像同文件 sibling 测试
+        # test_ordering_secondary_by_child_profile_id_when_created_at_equal (252 行)
+        # 的 db_session + UPDATE 写法。
+        base_ts = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        for child, secs in ((first, 0), (second, 1), (third, 2)):
+            await db_session.execute(
+                update(ChildProfile)
+                .where(ChildProfile.child_user_id == uuid.UUID(child["id"]))
+                .values(created_at=base_ts.replace(second=secs))
+            )
+        await db_session.commit()
 
         resp = await api_client.get(
             "/api/v1/children",
@@ -237,6 +241,14 @@ class TestListChildrenOrdering:
         assert resp.status_code == 200
         children = resp.json()["children"]
         assert len(children) == 3
+
+        # 顺序断言：回填 base/0s/1s/2s 后,GET 顺序必须严格按 first/second/third 升序。
+        # 补强自 Gate B 裁决(原断言只验 len==3 + ids1==ids2 稳定性,不验 created_at 升序)。
+        # 回填已锁死顺序(秒级差),无 flaky 风险。
+        children_ids = [c["id"] for c in children]
+        assert children_ids == [first["id"], second["id"], third["id"]], (
+            f"expected created_at ascending order, got children_ids={children_ids}"
+        )
 
         # 幂等：二次调用顺序一致（ORDER BY 稳定性验证）
         resp2 = await api_client.get(
@@ -276,8 +288,9 @@ class TestListChildrenOrdering:
 
         # 3. 从 DB 读出 3 条 ChildProfile 的 (id, child_user_id)
         result = await db_session.execute(
-            select(ChildProfile.id, ChildProfile.child_user_id)
-            .where(ChildProfile.child_user_id.in_(child_uuids))
+            select(ChildProfile.id, ChildProfile.child_user_id).where(
+                ChildProfile.child_user_id.in_(child_uuids)
+            )
         )
         rows = result.fetchall()
         # 4. expected_order = sorted by ChildProfile.id
@@ -292,9 +305,7 @@ class TestListChildrenOrdering:
         actual_order = [c["id"] for c in resp.json()["children"]]
 
         # 6. 断言顺序匹配
-        assert actual_order == expected_order, (
-            f"expected {expected_order}, got {actual_order}"
-        )
+        assert actual_order == expected_order, f"expected {expected_order}, got {actual_order}"
 
 
 class TestListChildrenCrossFamily:
@@ -328,12 +339,14 @@ class TestListChildrenCrossFamily:
         db_session.add(parent_b)
         await db_session.flush()
 
-        db_session.add(FamilyMember(
-            family_id=family_b.id,
-            user_id=parent_b.id,
-            role=UserRole.parent,
-            joined_at=datetime.now(timezone.utc),
-        ))
+        db_session.add(
+            FamilyMember(
+                family_id=family_b.id,
+                user_id=parent_b.id,
+                role=UserRole.parent,
+                joined_at=datetime.now(timezone.utc),
+            )
+        )
         await db_session.commit()
 
         token_b = await _login(api_client, parent_b, "TestParent2!", device_id="device_b")
@@ -358,9 +371,7 @@ class TestListChildrenAuth:
         assert resp.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_child_token_forbidden(
-        self, api_client, seeded_parent: tuple[User, str]
-    ) -> None:
+    async def test_child_token_forbidden(self, api_client, seeded_parent: tuple[User, str]) -> None:
         parent, pw = seeded_parent
         parent_token = await _login(api_client, parent, pw)
 
