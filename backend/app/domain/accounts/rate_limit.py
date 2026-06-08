@@ -29,6 +29,10 @@ LOGIN_PHONE_LIMIT = 5
 LOGIN_IP_LIMIT = 20
 LOGIN_WINDOW_SECONDS = 60
 
+# Redis key 命名空间:phone / ip 双桶独立计数,60s 滑动窗口
+LOGIN_FAIL_PHONE_KEY_PREFIX = "login_fail:phone:"
+LOGIN_FAIL_IP_KEY_PREFIX = "login_fail:ip:"
+
 
 # ---------------------------------------------------------------------------
 # 限流 helper (从 app/api/auth.py 抽离)
@@ -42,11 +46,11 @@ async def check_login_limit(redis: Redis, phone: str, ip: str | None) -> None:
     避免把所有"未知 IP"请求合并到同一个共享桶而触发误伤式 DoS。
     phone 桶始终参与, 保留单账号爆破的硬上限。
     """
-    phone_count = int(await redis.get(f"login_fail:phone:{phone}") or 0)
+    phone_count = int(await redis.get(f"{LOGIN_FAIL_PHONE_KEY_PREFIX}{phone}") or 0)
     if phone_count >= LOGIN_PHONE_LIMIT:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many attempts; try again later")
     if ip is not None:
-        ip_count = int(await redis.get(f"login_fail:ip:{ip}") or 0)
+        ip_count = int(await redis.get(f"{LOGIN_FAIL_IP_KEY_PREFIX}{ip}") or 0)
         if ip_count >= LOGIN_IP_LIMIT:
             raise HTTPException(
                 status.HTTP_429_TOO_MANY_REQUESTS, "too many attempts; try again later"
@@ -64,9 +68,9 @@ async def incr_login_fail(redis: Redis, phone: str, ip: str | None) -> None:
     保证 DB token 签发 + Redis 计数清零的原子性。
     """
     async with redis.pipeline(transaction=False) as pipe:
-        pipe.incr(f"login_fail:phone:{phone}")
-        pipe.expire(f"login_fail:phone:{phone}", LOGIN_WINDOW_SECONDS, nx=True)
+        pipe.incr(f"{LOGIN_FAIL_PHONE_KEY_PREFIX}{phone}")
+        pipe.expire(f"{LOGIN_FAIL_PHONE_KEY_PREFIX}{phone}", LOGIN_WINDOW_SECONDS, nx=True)
         if ip is not None:
-            pipe.incr(f"login_fail:ip:{ip}")
-            pipe.expire(f"login_fail:ip:{ip}", LOGIN_WINDOW_SECONDS, nx=True)
+            pipe.incr(f"{LOGIN_FAIL_IP_KEY_PREFIX}{ip}")
+            pipe.expire(f"{LOGIN_FAIL_IP_KEY_PREFIX}{ip}", LOGIN_WINDOW_SECONDS, nx=True)
         await pipe.execute()

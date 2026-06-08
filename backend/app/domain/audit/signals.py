@@ -19,6 +19,10 @@ from app.domain.audit.schemas import AuditOutputSchema, AuditSignalsPayload
 
 logger = logging.getLogger("audit.signals")
 
+# Redis key 命名空间:`audit:<sid>` 存三态信号(pending/ready/failed)。
+# 与 auth/bind/chat/locks 域隔开,集中保证前缀一致。
+AUDIT_SIGNAL_KEY_PREFIX = "audit:"
+
 
 @dataclass
 class AuditWaitResult:
@@ -76,7 +80,7 @@ class AuditSignalsManager:
             started_at=started_at,
         )
         await self._redis.set(
-            f"audit:{sid}",
+            f"{AUDIT_SIGNAL_KEY_PREFIX}{sid}",
             payload.model_dump_json(),
             ex=self._ttl,
         )
@@ -100,7 +104,7 @@ class AuditSignalsManager:
             completed_at=completed_at,
         )
         await self._redis.set(
-            f"audit:{sid}",
+            f"{AUDIT_SIGNAL_KEY_PREFIX}{sid}",
             payload.model_dump_json(),
             ex=self._ttl,
         )
@@ -124,7 +128,7 @@ class AuditSignalsManager:
             completed_at=completed_at,
         )
         await self._redis.set(
-            f"audit:{sid}",
+            f"{AUDIT_SIGNAL_KEY_PREFIX}{sid}",
             payload.model_dump_json(),
             ex=self._ttl,
         )
@@ -134,7 +138,7 @@ class AuditSignalsManager:
 
         JSON 损坏 / schema 不匹配时 log warning + return None（与 miss 等价降级）。
         """
-        raw = await self._redis.get(f"audit:{sid}")
+        raw = await self._redis.get(f"{AUDIT_SIGNAL_KEY_PREFIX}{sid}")
         if raw is None:
             return None
         try:
@@ -163,7 +167,7 @@ class AuditSignalsManager:
         """
         deadline = time.monotonic() + (timeout if timeout is not None else self._poll_timeout)
         while True:
-            raw = await self._redis.get(f"audit:{sid}")
+            raw = await self._redis.get(f"{AUDIT_SIGNAL_KEY_PREFIX}{sid}")
             if raw is None:
                 return AuditWaitResult(kind="miss")
 

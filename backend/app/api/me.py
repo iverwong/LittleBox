@@ -18,6 +18,7 @@ from starlette.responses import StreamingResponse
 from app.core.db import get_db
 from app.core.enums import MessageRole, MessageStatus, SessionStatus
 from app.core.locks import (
+    CHAT_LOCK_KEY_PREFIX,
     acquire_session_lock,
     acquire_throttle_lock,
     release_session_lock,
@@ -217,7 +218,7 @@ async def get_messages(
         next_cursor = None
 
     try:
-        in_progress = bool(await redis.exists(f"chat:lock:{sid}"))
+        in_progress = bool(await redis.exists(f"{CHAT_LOCK_KEY_PREFIX}{sid}"))
     except RedisError as e:
         in_progress = False
         logger.warning(

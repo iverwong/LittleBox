@@ -16,6 +16,11 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from redis.asyncio import Redis
 
+# Redis key 命名空间:与 auth/bind/audit 域隔开,见同文件 `acquire_session_lock` 注释。
+# 也供 `app/api/me.py` 反查锁状态——`api/*` import `core/*` 合法(D-1 边界)。
+CHAT_THROTTLE_KEY_PREFIX = "chat:throttle:"
+CHAT_LOCK_KEY_PREFIX = "chat:lock:"
+
 RELEASE_LOCK_LUA = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
   return redis.call('del', KEYS[1])
@@ -32,7 +37,7 @@ async def acquire_throttle_lock(redis: "Redis", child_user_id: str) -> bool:
     Uses SETNX + 1.5s TTL so that rapid re-stream attempts within
     the TTL window are rejected (return False).
     """
-    key = f"chat:throttle:{child_user_id}"
+    key = f"{CHAT_THROTTLE_KEY_PREFIX}{child_user_id}"
     return await redis.set(key, "1", nx=True, px=1500)
 
 
@@ -43,7 +48,7 @@ async def acquire_session_lock(redis: "Redis", session_id: str) -> str | None:
     nonce to release_session_lock to atomically delete the key (Lua
     compare-and-delete). Returns None if the session is already locked.
     """
-    key = f"chat:lock:{session_id}"
+    key = f"{CHAT_LOCK_KEY_PREFIX}{session_id}"
     nonce = secrets.token_hex(16)
     ok = await redis.set(key, nonce, nx=True, px=180_000)
     return nonce if ok else None
@@ -59,6 +64,6 @@ async def release_session_lock(redis: "Redis", session_id: str, nonce: str) -> N
     await redis.eval(
         RELEASE_LOCK_LUA,
         1,
-        f"chat:lock:{session_id}",
+        f"{CHAT_LOCK_KEY_PREFIX}{session_id}",
         nonce,
     )  # type: ignore[reportGeneralTypeIssues]  # type stub bug: Awaitable[str]|str, real impl always awaitable

@@ -15,6 +15,8 @@ from app.core.enums import UserRole
 from app.core.redis import RedisOp, commit_with_redis, get_redis, stage_redis_op
 from app.domain.accounts.models import User
 from app.domain.accounts.rate_limit import (
+    LOGIN_FAIL_IP_KEY_PREFIX,
+    LOGIN_FAIL_PHONE_KEY_PREFIX,
     check_login_limit,
     incr_login_fail,
 )
@@ -87,7 +89,10 @@ async def login(
         User.is_active.is_(True),
     )
     user = (await db.execute(stmt)).scalar_one_or_none()
-    if user is None or user.password_hash is None:
+    if (
+        user is None or user.password_hash is None
+    ):  # TODO 两个作用，一个是 verify_password 接非空字符串；
+        # 二个是做防御性兜底；后期转统一认证后该验证剔除
         await incr_login_fail(redis, payload.phone, client_ip)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
     if not verify_password(user.password_hash, payload.password):
@@ -95,9 +100,9 @@ async def login(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
 
     # 成功：清零两个计数器 (走 staging, 随 commit_with_redis 一起 flush)
-    stage_redis_op(db, RedisOp(kind="delete", key=f"login_fail:phone:{payload.phone}"))
+    stage_redis_op(db, RedisOp(kind="delete", key=f"{LOGIN_FAIL_PHONE_KEY_PREFIX}{payload.phone}"))
     if client_ip is not None:
-        stage_redis_op(db, RedisOp(kind="delete", key=f"login_fail:ip:{client_ip}"))
+        stage_redis_op(db, RedisOp(kind="delete", key=f"{LOGIN_FAIL_IP_KEY_PREFIX}{client_ip}"))
 
     # 新设备登录吊销该 parent 所有活跃 token
     await revoke_all_active_tokens(db, user.id)
