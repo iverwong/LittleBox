@@ -1,9 +1,9 @@
 """Schema 单元测试：SessionListResponse 字段 / today_session_id 类型 / 重命名。"""
 
-from datetime import datetime, timezone
 import uuid
+from datetime import datetime, timezone
 
-from app.schemas.sessions import SessionListResponse, SessionListItem
+from app.domain.chat.schemas import SessionListItem, SessionListResponse
 
 
 class TestSessionListResponse:

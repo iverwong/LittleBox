@@ -1,13 +1,10 @@
 """审查 prompt + tool schema JSON 结构测试。"""
 from __future__ import annotations
 
-import json
-
 import pytest
+from app.domain.audit.prompts import build_audit_system_prompt
+from app.domain.audit.schemas import AppendNote, AuditOutputSchema, ReplaceInNotes
 from langchain_core.utils.function_calling import convert_to_openai_function
-
-from app.audit.prompts import build_audit_system_prompt
-from app.schemas.audit import AppendNote, AuditOutputSchema, ReplaceInNotes
 
 pytestmark = pytest.mark.audit
 

@@ -18,16 +18,15 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest_asyncio
+from app.core.config import settings as _module_settings
+from app.core.db import get_db
+from app.core.enums import UserRole
+from app.core.redis import get_redis
+from app.core.runtime import RuntimeResources
+from app.domain.accounts.models import User
+from app.main import create_app
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker
-
-from app.auth.redis_client import get_redis
-from app.config import settings as _module_settings
-from app.db import get_db
-from app.main import create_app
-from app.runtime import RuntimeResources
-from app.models.accounts import Family, FamilyMember, User
-from app.models.enums import UserRole
 
 TABLES = [
     "families", "users", "family_members", "child_profiles",
@@ -153,8 +152,8 @@ async def seed_child_user(sess) -> User:
 
 async def make_auth_headers(sess, redis_client, user) -> dict:
     """Issue a child auth token and return auth headers dict."""
-    from app.auth.redis_ops import commit_with_redis
-    from app.auth.tokens import issue_token
+    from app.core.redis import commit_with_redis
+    from app.domain.auth.tokens import issue_token
 
     device_id = "test-device-lifecycle"
     token = await issue_token(
@@ -189,12 +188,13 @@ async def seed_compression_session(ctx, child) -> tuple:
 
     Returns (sid, child, msg1_id, msg2_id) matching compression_session fixture.
     """
-    from datetime import UTC, datetime as _dt
+    from datetime import UTC
+    from datetime import datetime as _dt
     from uuid import uuid4 as _uuid4
 
-    from app.models.chat import Message
-    from app.models.chat import Session as SessionModel
-    from app.models.enums import MessageRole, MessageStatus
+    from app.core.enums import MessageRole, MessageStatus
+    from app.domain.chat.models import Message
+    from app.domain.chat.models import Session as SessionModel
 
     base_ts = _dt.now(UTC)
     sid = _uuid4()

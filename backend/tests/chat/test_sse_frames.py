@@ -1,6 +1,6 @@
 """build_flow_pause_frame 帧格式测试。"""
 
-from app.chat import sse
+from app.domain.chat import stream as sse
 
 
 class TestBuildFlowPauseFrame:

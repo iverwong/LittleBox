@@ -4,10 +4,9 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
+from app.domain.audit.signals import AuditSignalsManager
 from fakeredis.aioredis import FakeRedis
-
-from app.schemas.audit import AuditDimensionScores, AuditOutputSchema
-from app.state.audit_signals import AuditSignalsManager
 
 pytestmark = pytest.mark.audit
 
@@ -144,6 +143,6 @@ class TestBuildArqRedisUrl:
     """_build_arq_redis_url 纯函数测试。"""
 
     def test_arq_url_ends_with_db_1(self):
-        from app.auth.redis_client import _build_arq_redis_url
+        from app.core.redis import _build_arq_redis_url
         url = _build_arq_redis_url()
         assert url.endswith("/1"), f"Expected /1 suffix, got {url}"

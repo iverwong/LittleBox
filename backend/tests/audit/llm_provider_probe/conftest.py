@@ -15,8 +15,7 @@ from typing import Any
 
 import httpx
 import pytest
-
-from app.config import Settings
+from app.core.config import Settings
 
 # ── 路径 ──────────────────────────────────────────────
 ARTIFACTS_DIR = Path(__file__).parent / "artifacts"

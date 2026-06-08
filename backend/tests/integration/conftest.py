@@ -27,13 +27,12 @@ from urllib.parse import urlparse, urlunparse
 
 import pytest
 import pytest_asyncio
+from app.core.config import Settings
 from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
-
-from app.config import Settings
 
 INTEGRATION_DB_NAME = "littlebox_integration"
 INTEGRATION_REDIS_DB = 15
@@ -139,6 +138,7 @@ def _integration_row_count_guard():
     yield
 
     import asyncio
+
     from sqlalchemy import text as _text
     from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -269,7 +269,7 @@ async def integration_runtime(
       暴露给测试（integration_runtime 返回值），阶段二测试可通过
       rr.register_chat_task 句柄 await 段一收口。
     """
-    from app.runtime import build_runtime, teardown_runtime
+    from app.core.runtime import build_runtime, teardown_runtime
 
     s = build_integration_settings()
     rr = await build_runtime(s)
@@ -300,10 +300,9 @@ async def app(
     httpx ASGITransport 自动触发 lifespan。本 fixture 不覆写
     application.router.lifespan_context，让真 lifespan 运行。
     """
+    from app.core.db import get_db
+    from app.core.redis import get_redis
     from app.main import create_app
-
-    from app.auth.redis_client import get_redis
-    from app.db import get_db
 
     application = create_app()
 
@@ -358,12 +357,11 @@ async def arq_worker(integration_runtime: Any) -> AsyncGenerator[Callable[[], in
 
     约束（计划 §4）：
       functions=WORKER_SETTINGS["functions"] 使用字符串路径
-      ["app.audit.worker.run_audit"]，禁止写成 [run_audit]。
+      ["app.domain.audit.worker.run_audit"]，禁止写成 [run_audit]。
     """
+    from app.domain.audit.worker import WORKER_SETTINGS
+    from app.domain.audit.signals import AuditSignalsManager
     from arq import Worker
-
-    from app.audit.worker import WORKER_SETTINGS
-    from app.state.audit_signals import AuditSignalsManager
 
     rr = integration_runtime
 
@@ -380,7 +378,7 @@ async def arq_worker(integration_runtime: Any) -> AsyncGenerator[Callable[[], in
         pass
 
     worker = Worker(
-        functions=WORKER_SETTINGS["functions"],  # 字符串路径：["app.audit.worker.run_audit"]
+        functions=WORKER_SETTINGS["functions"],  # 字符串路径：["app.domain.audit.worker.run_audit"]
         redis_pool=rr.arq_pool,
         burst=True,
         on_startup=_on_startup,

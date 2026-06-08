@@ -6,11 +6,10 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
+from app.core.enums import UserRole
+from app.domain.accounts.models import ChildProfile, Family, FamilyMember, User
+from app.domain.auth.password import hash_password
 from sqlalchemy import select, update
-
-from app.auth.password import hash_password
-from app.models.accounts import ChildProfile, Family, FamilyMember, User
-from app.models.enums import UserRole
 
 
 async def _login(api_client, user: User, pw: str, device_id: str = "test_device") -> str:

@@ -27,33 +27,35 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
+
 pytestmark = pytest.mark.asyncio(loop_scope="function")
 
 
 @pytest.fixture(autouse=True)
 def _mock_enqueue_audit():
     """所有控制平面测试共用：enqueue_audit mock 避免 Redis lifespan 依赖。"""
-    with patch("app.api.me.enqueue_audit", AsyncMock()):
+    with patch("app.domain.chat.pipeline.enqueue_audit", AsyncMock()):
         yield
 
 
+from app.domain.chat.graph import build_main_graph
+from app.core.redis import commit_with_redis
+from app.domain.auth.tokens import issue_token
+from app.domain.chat.stream import frame_sse_event
 from fakeredis.aioredis import FakeRedis
 from httpx import AsyncClient
 from sqlalchemy import select
 
-from app.api.me import _frame_sse_event
-from app.auth.redis_ops import commit_with_redis
-from app.auth.tokens import issue_token
-from app.chat.graph import build_main_graph
-
 main_graph = build_main_graph()
-from app.chat.locks import acquire_session_lock
-from app.db import get_db
-from app.models.accounts import Family, FamilyMember, User
-from app.models.chat import Message
-from app.models.chat import Session as SessionModel
-from app.models.enums import InterventionType, MessageRole, MessageStatus, UserRole
-from tests.api._chat_stream_lifecycle_helpers import lifecycle_ctx, lifecycle_setup
+from app.core.db import get_db
+from app.core.enums import InterventionType, MessageRole, MessageStatus, UserRole
+from app.core.locks import acquire_session_lock
+from app.domain.chat.models import Message
+from app.domain.chat.models import Session as SessionModel
+from tests.api._chat_stream_lifecycle_helpers import (  # noqa: F401  # lifecycle_ctx 是 fixture param
+    lifecycle_ctx,
+    lifecycle_setup,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -81,9 +83,8 @@ async def redis_client_with_eval(redis_client: FakeRedis) -> FakeRedis:
 @pytest.fixture
 async def app_with_eval(db_session, redis_client_with_eval):
     """App fixture using redis_client_with_eval (needed for Lua DEL via release_session_lock)."""
-    from unittest.mock import patch
 
-    from app.auth.redis_client import get_redis
+    from app.core.redis import get_redis
     from app.main import create_app
     from tests.conftest import _inject_mock_resources
 
@@ -490,15 +491,15 @@ async def test_decision_row6_orphan_reuse_feeds_user_input(lifecycle_ctx):
         # 抓 me.py 装配出的 ctx，验证 user_input 不为空
         captured["user_input"] = kwargs["ctx"].user_input
         captured["session_id"] = kwargs["ctx"].session_id
-        # 推 end + None 让 _stream_generator 正常终止
+        # 推 end + None 让 stream_generator 正常终止
         kwargs["queue"].put_nowait(
-            _frame_sse_event("end", {"finish_reason": "stop", "aid": str(uuid4())})
+            frame_sse_event("end", {"finish_reason": "stop", "aid": str(uuid4())})
         )
         kwargs["queue"].put_nowait(None)
 
     body = make_payload(content="", session_id=str(sid), regenerate_for=str(orphan_id))
 
-    with patch("app.api.me._run_llm_pipeline", new=fake_run_llm_pipeline):
+    with patch("app.api.me.run_llm_pipeline", new=fake_run_llm_pipeline):
         resp = await client.post("/api/v1/me/chat/stream", json=body, headers=headers)
 
     assert resp.status_code == 200
@@ -796,7 +797,7 @@ async def test_session_lock_rejects_concurrent(
     assert "SessionBusy" in resp.text
 
     # Clean up lock
-    from app.chat.locks import release_session_lock
+    from app.core.locks import release_session_lock
 
     await release_session_lock(redis_client, str(sid), nonce)
 
@@ -940,7 +941,7 @@ async def test_lock_released_in_generator_finally(
     await resp.aclose()  # ensure response fully consumed
 
     # After response closes, lock should be gone
-    from app.chat.locks import acquire_session_lock
+    from app.core.locks import acquire_session_lock
 
     nonce = await acquire_session_lock(
         redis_client, _parse_sse_stream(resp.text)[0]["data"]["session_id"]
@@ -960,7 +961,6 @@ async def test_multi_turn_natural_end(lifecycle_ctx):
     - Turn1：ai 行 turn_number==1 且 session.ai_turn_counter==1
     - Turn2：ai 行 turn_number==2 且 session.ai_turn_counter==2
     """
-    import asyncio
 
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
@@ -1049,11 +1049,10 @@ async def test_multi_turn_natural_end(lifecycle_ctx):
 @pytest.mark.asyncio
 async def test_multi_turn_stop_with_ai(lifecycle_ctx):
     """(b) StopWithAi：有内容时 stop → ai 行 + turn_number + counter 自增。"""
+    import asyncio
     from uuid import uuid4
 
-    import asyncio
-
-    from app.chat.locks import running_streams
+    from app.domain.chat.stream_signals import running_streams
 
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
@@ -1121,11 +1120,10 @@ async def test_multi_turn_stop_with_ai(lifecycle_ctx):
 @pytest.mark.asyncio
 async def test_multi_turn_stop_no_ai(lifecycle_ctx):
     """(c) StopNoAi：无内容时 stop → 不写 ai 行、counter 不变。"""
+    import asyncio
     from uuid import uuid4
 
-    import asyncio
-
-    from app.chat.locks import running_streams
+    from app.domain.chat.stream_signals import running_streams
 
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
@@ -1347,11 +1345,10 @@ async def test_intervention_type_normal(lifecycle_ctx):
 @pytest.mark.asyncio
 async def test_intervention_type_stop_with_ai_crisis(lifecycle_ctx):
     """StopWithAi + crisis：有内容时 stop → ai 行 intervention_type=crisis。"""
+    import asyncio
     from uuid import uuid4
 
-    import asyncio
-
-    from app.chat.locks import running_streams
+    from app.domain.chat.stream_signals import running_streams
 
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
     sid = uuid4()

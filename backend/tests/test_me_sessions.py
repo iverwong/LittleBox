@@ -6,12 +6,11 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
+from app.core.enums import MessageRole
+from app.domain.accounts.models import User
+from app.domain.chat.models import Message
+from app.domain.chat.models import Session as SessionModel
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models.accounts import User
-from app.models.chat import Message
-from app.models.chat import Session as SessionModel
-from app.models.enums import MessageRole
 
 
 async def _login(api_client, user: User, pw: str, device_id: str = "test_device") -> str:

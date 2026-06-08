@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from .conftest import ArtifactBuilder, SYSTEM_MESSAGE, USER_MESSAGE
+from .conftest import SYSTEM_MESSAGE, USER_MESSAGE, ArtifactBuilder
 
 pytestmark = [pytest.mark.live, pytest.mark.asyncio]
 
@@ -70,7 +70,7 @@ async def test_finish_reason_last_chunk(ds_config: dict) -> None:
 
     assert all_content, "streaming content 为空"
     # 输出解析信息到 stdout 便于肉眼确认
-    print(f"\n=== 末 chunk 分析 ===")
+    print("\n=== 末 chunk 分析 ===")
     print(f"chunk_count={chunk_count}")
     print(f"additional_kwargs={ak}")
     print(f"response_metadata顶层={last_chunk_raw.get('response_metadata') if last_chunk_raw else None}")

@@ -9,10 +9,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.auth.redis_ops import commit_with_redis, discard_pending_redis_ops
-from app.auth.tokens import (
+from app.core.enums import UserRole
+from app.core.redis import commit_with_redis, discard_pending_redis_ops
+from app.domain.accounts.models import AuthToken, Family, FamilyMember, User
+from app.domain.auth.tokens import (
     REDIS_KEY_PREFIX,
     TokenPayload,
     issue_token,
@@ -23,8 +23,7 @@ from app.auth.tokens import (
     roll_token_expiry,
     token_hash,
 )
-from app.models.accounts import AuthToken, Family, FamilyMember, User
-from app.models.enums import UserRole
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # ---- 辅助 fixtures ----
 
@@ -373,7 +372,7 @@ class TestRollTokenExpiry:
         assert payload is not None
 
         # 手动把 payload.last_rolled_date 拨到昨天（强制 needs_roll=True）
-        import app.auth.tokens as tokens_mod
+        import app.domain.auth.tokens as tokens_mod
         yesterday = (
             datetime.fromisoformat(tokens_mod._today_cst()).date()
             - timedelta(days=1)
@@ -411,7 +410,7 @@ class TestRollTokenExpiry:
     ) -> None:
         """commit_with_redis 后，Redis `auth:<th>` 的 JSON value 已更新：
         expires_at 增大，last_rolled_date == today_cst，value 字符串本身发生变化。"""
-        import app.auth.tokens as tokens_mod
+        import app.domain.auth.tokens as tokens_mod
 
         token = await issue_token(
             db_session,
@@ -464,7 +463,7 @@ class TestRollTokenExpiry:
     ) -> None:
         """roll + commit 后，Redis payload.last_rolled_date == today_cst()，
         且 needs_roll(new_payload) is False。Redis key: auth:<th>，value: JSON 字符串。"""
-        import app.auth.tokens as tokens_mod
+        import app.domain.auth.tokens as tokens_mod
 
         token = await issue_token(
             db_session,
@@ -487,7 +486,7 @@ class TestRollTokenExpiry:
         def _fake_yesterday() -> str:
             return yesterday
 
-        monkeypatch.setattr("app.auth.tokens._today_cst", _fake_yesterday)
+        monkeypatch.setattr("app.domain.auth.tokens._today_cst", _fake_yesterday)
 
         try:
             # fresh resolve（cache hit 不修改 last_rolled_date；
@@ -499,7 +498,7 @@ class TestRollTokenExpiry:
             )
         finally:
             # 恢复 _today_cst（roll 写回时 last_rolled_date 用 _today_cst() 写入）
-            monkeypatch.setattr("app.auth.tokens._today_cst", original_today_cst)
+            monkeypatch.setattr("app.domain.auth.tokens._today_cst", original_today_cst)
 
         # 调 roll + commit
         await roll_token_expiry(db_session, token_hash_hex=th, payload=payload)

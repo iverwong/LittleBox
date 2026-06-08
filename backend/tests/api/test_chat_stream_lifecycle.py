@@ -6,37 +6,32 @@ shutdown wait / shutdown cancel / stop signal / commit①~create_task lock relea
 三种策略：
 - HTTP 全栈（#1 #4 #7 #8）：走 lifecycle_ctx.client POST；
 - 纯 async 单元（#5 #6）：直操 asyncio.wait 逻辑，不需 HTTP；
-- 协程级直测（#2 #3）：直接驱动 _stream_generator / _run_llm_pipeline。
+- 协程级直测（#2 #3）：直接驱动 stream_generator / run_llm_pipeline。
 """
 from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
-from uuid import UUID, uuid4
+from uuid import uuid4
 
-import anyio
 import pytest
+
 pytestmark = pytest.mark.asyncio(loop_scope="function")
 
+from app.core.config import settings as _module_settings
+from app.core.enums import MessageRole, MessageStatus
+from app.core.runtime import RuntimeResources
+from app.domain.chat.models import Message
+from app.domain.chat.models import Session as SessionModel
+from app.domain.chat.pipeline import run_llm_pipeline
+from app.domain.chat.stream import ChatStreamState, stream_generator
+from app.domain.chat.stream_signals import running_streams
 from sqlalchemy import select
-
-from app.api.me import _ChatStreamState, _run_llm_pipeline, _stream_generator
-from app.chat.locks import release_session_lock, running_streams
-from app.chat.sse import build_flow_pause_frame
-from app.config import settings as _module_settings
-from app.models.chat import Message
-from app.models.chat import Session as SessionModel
-from app.models.enums import MessageRole, MessageStatus
-from app.runtime import RuntimeResources
 from tests.api._chat_stream_lifecycle_helpers import (
-    TABLES,
-    lifecycle_ctx,
+    lifecycle_ctx,  # noqa: F401  # fixture param,ruff 认不出
     lifecycle_setup,
-    make_auth_headers,
-    seed_child_user,
 )
-
 
 # ---- Helpers shared across tests ----
 
@@ -82,7 +77,6 @@ async def test_normal_stream_emits_deltas_and_end(lifecycle_ctx):
         if line.startswith("event:"):
             current_type = line[len("event:"):].strip()
         elif line.startswith("data:") and current_type is not None:
-            import json
             frames.append(current_type)
     assert frames == ["session_meta", "delta", "delta", "delta", "end"]
 
@@ -119,13 +113,13 @@ async def test_normal_stream_emits_deltas_and_end(lifecycle_ctx):
 
 @pytest.mark.asyncio
 async def test_client_disconnect_keeps_bg_task_running(lifecycle_ctx):
-    """Given an in-progress _stream_generator,
+    """Given an in-progress stream_generator,
     When we aclose() it mid-stream (模拟客户端断连),
     Then it should return silently without raising,
-         and a separately driven _run_llm_pipeline should still
+         and a separately driven run_llm_pipeline should still
          commit the ai row + release the lock.
     """
-    # 直接用 _run_llm_pipeline 和 _stream_generator 的单元级驱动
+    # 直接用 run_llm_pipeline 和 stream_generator 的单元级驱动
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
     sid = uuid4()
 
@@ -136,7 +130,7 @@ async def test_client_disconnect_keeps_bg_task_running(lifecycle_ctx):
     await lifecycle_ctx.seed_sess.commit()
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=128)
-    state = _ChatStreamState()
+    state = ChatStreamState()
     stop_event = asyncio.Event()
 
     async def fake_astream(initial_state, stream_mode="custom", **kwargs):
@@ -145,7 +139,7 @@ async def test_client_disconnect_keeps_bg_task_running(lifecycle_ctx):
         yield {"finish_reason": "stop"}
 
     # 准备段一参数
-    from app.chat.context_schema import ChatContextSchema
+    from app.domain.chat.context_schema import ChatContextSchema
     ctx = ChatContextSchema(
         session_id=sid, child_user_id=child.id, child_profile={},
         age=8, gender=None, user_input="测试",
@@ -165,7 +159,7 @@ async def test_client_disconnect_keeps_bg_task_running(lifecycle_ctx):
 
     # 同时启动段一 segment task
     task = asyncio.create_task(
-        _run_llm_pipeline(
+        run_llm_pipeline(
             rr=rr, redis=lifecycle_ctx.redis_client, sid=sid, hid=hid, nonce=nonce,
             child_user_id=child.id, turn_number=1,
             initial_state={"messages": []}, ctx=ctx,
@@ -176,7 +170,7 @@ async def test_client_disconnect_keeps_bg_task_running(lifecycle_ctx):
     )
 
     # 驱动段二，消费几帧后 aclose
-    gen = _stream_generator(queue, state, sid)
+    gen = stream_generator(queue, state, sid)
     frames = []
     try:
         async for frame in gen:
@@ -209,7 +203,7 @@ async def test_queue_full_triggers_flow_pause_and_headless_continuation(lifecycl
     """Given chat_queue_maxsize=2 and enough graph payloads,
     When the producer fills the queue,
     Then state.overflow flips True,
-         the _stream_generator yields flow_pause + returns,
+         the stream_generator yields flow_pause + returns,
          and the bg task still commits the ai row + releases the lock.
     """
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
@@ -221,7 +215,7 @@ async def test_queue_full_triggers_flow_pause_and_headless_continuation(lifecycl
     await lifecycle_ctx.seed_sess.commit()
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=2)
-    state = _ChatStreamState()
+    state = ChatStreamState()
     stop_event = asyncio.Event()
 
     async def fake_astream(initial_state, stream_mode="custom", **kwargs):
@@ -229,7 +223,7 @@ async def test_queue_full_triggers_flow_pause_and_headless_continuation(lifecycl
             yield {"delta": f"x{i}"}
         yield {"finish_reason": "stop"}
 
-    from app.chat.context_schema import ChatContextSchema
+    from app.domain.chat.context_schema import ChatContextSchema
     ctx = ChatContextSchema(
         session_id=sid, child_user_id=child.id, child_profile={},
         age=8, gender=None, user_input="测试",
@@ -246,7 +240,7 @@ async def test_queue_full_triggers_flow_pause_and_headless_continuation(lifecycl
     running_streams[str(sid)] = stop_event
 
     task = asyncio.create_task(
-        _run_llm_pipeline(
+        run_llm_pipeline(
             rr=rr, redis=lifecycle_ctx.redis_client, sid=sid, hid=hid, nonce=nonce,
             child_user_id=child.id, turn_number=1,
             initial_state={"messages": []}, ctx=ctx,
@@ -259,7 +253,7 @@ async def test_queue_full_triggers_flow_pause_and_headless_continuation(lifecycl
     # 延迟启动段二，使 queue 填满
     await asyncio.sleep(0.05)
 
-    gen = _stream_generator(queue, state, sid)
+    gen = stream_generator(queue, state, sid)
     frames = []
     async for frame in gen:
         frames.append(frame)
@@ -341,7 +335,6 @@ async def test_shutdown_waits_for_in_flight_bg_task(engine, redis_client):
     Then asyncio.wait should return with done containing the task
          before the 30s timeout, and the task should not be cancelled.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
 
     rr = _make_real_rr_for_shutdown(engine, redis_client)
 
@@ -373,7 +366,6 @@ async def test_shutdown_cancels_stuck_bg_task_after_timeout(engine, redis_client
     When lifespan shutdown with patched short timeout runs,
     Then the pending task should be cancelled and gather without raising.
     """
-    from unittest.mock import patch
 
     rr = _make_real_rr_for_shutdown(engine, redis_client)
 
@@ -407,7 +399,7 @@ def _make_real_rr_for_shutdown(engine=None, redis_client=None) -> RuntimeResourc
     Uses real engine/redis when provided (from conftest fixtures);
     falls back to MagicMock for standalone use.
     """
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import MagicMock
 
     kwargs = dict(
         settings=_module_settings,
@@ -522,7 +514,6 @@ async def test_lock_released_on_non_http_exception_between_commit1_and_create_ta
     Then the except Exception block should call release_session_lock,
          and Redis chat:lock:<sid> should not be left dangling (HTTP 5xx).
     """
-    from unittest.mock import patch
 
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
 

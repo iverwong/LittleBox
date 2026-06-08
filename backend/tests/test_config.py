@@ -1,5 +1,5 @@
 """M8 audit settings 默认值验证。"""
-from app.config import Settings
+from app.core.config import Settings
 
 
 def test_audit_settings_defaults():

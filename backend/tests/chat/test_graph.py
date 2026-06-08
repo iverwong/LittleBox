@@ -8,18 +8,9 @@ M6 Step 6 coverage:
 - M8 always routes to "main" (all signals False)
 """
 
-import logging
 
 import pytest
-from langchain_core.messages import (
-    AIMessage,
-    AIMessageChunk,
-    BaseMessage,
-    HumanMessage,
-    SystemMessage,
-)
-
-from app.chat.graph import (
+from app.domain.chat.graph import (
     build_main_graph,
     call_crisis_llm,
     call_main_llm,
@@ -27,7 +18,14 @@ from app.chat.graph import (
     load_audit_state,
     route_by_risk,
 )
-from app.chat.state import MainDialogueState
+from app.domain.chat.state import MainDialogueState
+from langchain_core.messages import (
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+)
+
 from tests.chat.test_load_audit_state import _make_fake_runtime as _mk_runtime
 
 main_graph = build_main_graph()
@@ -227,7 +225,7 @@ def _make_stub_runtime():
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    from app.config import settings as _app_settings
+    from app.core.config import settings as _app_settings
 
     return SimpleNamespace(
         context=SimpleNamespace(
@@ -269,8 +267,8 @@ async def test_crisis_llm_streams_via_writer(monkeypatch):
         async def astream(self, msgs):
             yield fake_chunk
 
-    monkeypatch.setattr("app.chat.graph.get_stream_writer", lambda: fake_writer)
-    monkeypatch.setattr("app.chat.graph.build_crisis_llm", lambda _: _FakeLLM())
+    monkeypatch.setattr("app.domain.chat.graph.get_stream_writer", lambda: fake_writer)
+    monkeypatch.setattr("app.domain.chat.graph.build_crisis_llm", lambda _: _FakeLLM())
 
     await call_crisis_llm(state, runtime)
 
@@ -299,8 +297,8 @@ async def test_redline_llm_streams_via_writer(monkeypatch):
         async def astream(self, msgs):
             yield fake_chunk
 
-    monkeypatch.setattr("app.chat.graph.get_stream_writer", lambda: fake_writer)
-    monkeypatch.setattr("app.chat.graph.build_redline_llm", lambda _: _FakeLLM())
+    monkeypatch.setattr("app.domain.chat.graph.get_stream_writer", lambda: fake_writer)
+    monkeypatch.setattr("app.domain.chat.graph.build_redline_llm", lambda _: _FakeLLM())
 
     await call_redline_llm(state, runtime)
 
@@ -339,11 +337,11 @@ async def test_call_main_llm_finish_reason_passthrough_stop(monkeypatch):
             ]
         )
 
-    monkeypatch.setattr("app.chat.graph.build_main_llm", lambda _: _fake_get_llm())
+    monkeypatch.setattr("app.domain.chat.graph.build_main_llm", lambda _: _fake_get_llm())
 
     written: list[dict] = []
     monkeypatch.setattr(
-        "app.chat.graph.get_stream_writer",
+        "app.domain.chat.graph.get_stream_writer",
         lambda: type("W", (), {"__call__": lambda self, d: written.append(d)})(),
     )
 
@@ -371,11 +369,11 @@ async def test_call_main_llm_finish_reason_passthrough_length(monkeypatch):
             ]
         )
 
-    monkeypatch.setattr("app.chat.graph.build_main_llm", lambda _: _fake_get_llm())
+    monkeypatch.setattr("app.domain.chat.graph.build_main_llm", lambda _: _fake_get_llm())
 
     written: list[dict] = []
     monkeypatch.setattr(
-        "app.chat.graph.get_stream_writer",
+        "app.domain.chat.graph.get_stream_writer",
         lambda: type("W", (), {"__call__": lambda self, d: written.append(d)})(),
     )
 
@@ -403,11 +401,11 @@ async def test_call_main_llm_finish_reason_passthrough_content_filter(monkeypatc
             ]
         )
 
-    monkeypatch.setattr("app.chat.graph.build_main_llm", lambda _: _fake_get_llm())
+    monkeypatch.setattr("app.domain.chat.graph.build_main_llm", lambda _: _fake_get_llm())
 
     written: list[dict] = []
     monkeypatch.setattr(
-        "app.chat.graph.get_stream_writer",
+        "app.domain.chat.graph.get_stream_writer",
         lambda: type("W", (), {"__call__": lambda self, d: written.append(d)})(),
     )
 
@@ -435,11 +433,11 @@ async def test_call_main_llm_finish_reason_non_whitelist_filtered(monkeypatch):
             ]
         )
 
-    monkeypatch.setattr("app.chat.graph.build_main_llm", lambda _: _fake_get_llm())
+    monkeypatch.setattr("app.domain.chat.graph.build_main_llm", lambda _: _fake_get_llm())
 
     written: list[dict] = []
     monkeypatch.setattr(
-        "app.chat.graph.get_stream_writer",
+        "app.domain.chat.graph.get_stream_writer",
         lambda: type("W", (), {"__call__": lambda self, d: written.append(d)})(),
     )
 
@@ -475,11 +473,11 @@ async def test_call_main_llm_emits_reasoning_signal_on_reasoning_content(monkeyp
             ]
         )
 
-    monkeypatch.setattr("app.chat.graph.build_main_llm", lambda _: _fake_get_llm())
+    monkeypatch.setattr("app.domain.chat.graph.build_main_llm", lambda _: _fake_get_llm())
 
     written: list[dict] = []
     monkeypatch.setattr(
-        "app.chat.graph.get_stream_writer",
+        "app.domain.chat.graph.get_stream_writer",
         lambda: type("W", (), {"__call__": lambda self, d: written.append(d)})(),
     )
 
@@ -509,11 +507,11 @@ async def test_call_main_llm_no_reasoning_no_signal(monkeypatch):
             ]
         )
 
-    monkeypatch.setattr("app.chat.graph.build_main_llm", lambda _: _fake_get_llm())
+    monkeypatch.setattr("app.domain.chat.graph.build_main_llm", lambda _: _fake_get_llm())
 
     written: list[dict] = []
     monkeypatch.setattr(
-        "app.chat.graph.get_stream_writer",
+        "app.domain.chat.graph.get_stream_writer",
         lambda: type("W", (), {"__call__": lambda self, d: written.append(d)})(),
     )
 

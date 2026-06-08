@@ -9,8 +9,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-from app.audit.graph import AuditGraphState, load_context, audit_llm_call
+from app.domain.audit.graph import AuditGraphState, audit_llm_call, load_context
 
 pytestmark = [pytest.mark.audit, pytest.mark.asyncio]
 
@@ -37,7 +36,7 @@ def _make_fake_runtime() -> object:
     """构造最小 Runtime[AuditContextSchema] 替代（SimpleNamespace 范式）。"""
     from types import SimpleNamespace
 
-    from app.audit.context_schema import AuditContextSchema
+    from app.domain.audit.context_schema import AuditContextSchema
 
     ctx = AuditContextSchema(
         session_id=SID,
@@ -56,7 +55,7 @@ async def test_load_context_passes_db_session_factory():
     state = _make_state()
     runtime = _make_fake_runtime()
 
-    with patch("app.audit.graph._load_messages_from_pg", return_value=[]) as mock_load:
+    with patch("app.domain.audit.graph._load_messages_from_pg", return_value=[]) as mock_load:
         result = await load_context(state, runtime)
 
     # _load_messages_from_pg 被调一次，第二个参数 == runtime.context.db_session_factory
@@ -75,7 +74,7 @@ async def test_load_context_returns_messages_with_max_iter():
     state = _make_state()
     runtime = _make_fake_runtime()
 
-    with patch("app.audit.graph._load_messages_from_pg", return_value=[]):
+    with patch("app.domain.audit.graph._load_messages_from_pg", return_value=[]):
         result = await load_context(state, runtime)
 
     assert "messages" in result
@@ -92,7 +91,7 @@ async def test_audit_llm_call_passes_settings():
     runtime = _make_fake_runtime()
     from langchain_core.messages import AIMessage
 
-    with patch("app.audit.graph.build_audit_llm") as mock_build:
+    with patch("app.domain.audit.graph.build_audit_llm") as mock_build:
         # 首次 ainvoke 返回纯文本（触发 post-processing 追问）
         first_ai = AIMessage(content="需要分析一下", tool_calls=[])
         # 第二次 ainvoke 返回 audit_output

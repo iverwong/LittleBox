@@ -1,17 +1,8 @@
 """M4.8 B6 TDD：hard_delete_child 服务层 + Redis 缓存防退化测试。"""
 from __future__ import annotations
 
-import uuid
-
 import pytest
-import pytest_asyncio
-from fakeredis.aioredis import FakeRedis
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.auth.redis_ops import RedisOp, stage_redis_op
-from app.auth.tokens import REDIS_KEY_PREFIX
-from app.models.accounts import (
+from app.domain.accounts.models import (
     AuthToken,
     ChildProfile,
     DeviceToken,
@@ -19,7 +10,11 @@ from app.models.accounts import (
     FamilyMember,
     User,
 )
-from app.models.chat import Session
+from app.domain.auth.tokens import REDIS_KEY_PREFIX
+from app.domain.chat.models import Session
+from fakeredis.aioredis import FakeRedis
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class TestHardDeleteChildService:
@@ -31,10 +26,12 @@ class TestHardDeleteChildService:
         db_session: AsyncSession,
     ) -> None:
         """deleted_tables 包含所有 10 张被 CASCADE 清理的表（无业务过滤）。"""
-        from app.auth.password import generate_password, hash_password
-        from app.models.enums import DailyStatus
-        from app.models.parent import DailyReport, Notification
         from datetime import date
+
+        from app.core.enums import DailyStatus
+        from app.domain.auth.password import generate_password, hash_password
+        from app.domain.expert.models import DailyReport
+        from app.domain.notifications.models import Notification
 
         fam = Family()
         db_session.add(fam)
@@ -67,7 +64,7 @@ class TestHardDeleteChildService:
         db_session.add(Notification(parent_user_id=parent.id, child_user_id=child.id, type="crisis"))
         await db_session.commit()
 
-        from app.services.child_deletion import hard_delete_child
+        from app.domain.accounts.service import hard_delete_child
         deleted_tables = await hard_delete_child(
             db_session, child_user_id=child.id, requested_by=parent.id,
         )
@@ -99,8 +96,9 @@ class TestHardDeleteChildService:
     ) -> None:
         """SELECT COUNT auth_tokens 不带 revoked_at 过滤，与 CASCADE 实际删除行数一致。"""
         from datetime import datetime, timezone
-        from app.auth.password import generate_password, hash_password
-        from app.auth.redis_ops import discard_pending_redis_ops
+
+        from app.core.redis import discard_pending_redis_ops
+        from app.domain.auth.password import generate_password, hash_password
 
         fam = Family()
         db_session.add(fam)
@@ -130,7 +128,7 @@ class TestHardDeleteChildService:
         ))
         await db_session.commit()
 
-        from app.services.child_deletion import hard_delete_child
+        from app.domain.accounts.service import hard_delete_child
         deleted_tables = await hard_delete_child(
             db_session, child_user_id=child.id, requested_by=parent.id,
         )
@@ -148,8 +146,8 @@ class TestHardDeleteChildService:
         db_session: AsyncSession,
     ) -> None:
         """审计记录：requested_by / child_id_snapshot / reason='parent_request' / deleted_tables。"""
-        from app.auth.password import generate_password, hash_password
-        from app.models.parent import DataDeletionRequest
+        from app.domain.accounts.models import DataDeletionRequest
+        from app.domain.auth.password import generate_password, hash_password
 
         fam = Family()
         db_session.add(fam)
@@ -170,7 +168,7 @@ class TestHardDeleteChildService:
         db_session.add(FamilyMember(family_id=fam.id, user_id=child.id, role="child"))
         await db_session.commit()
 
-        from app.services.child_deletion import hard_delete_child
+        from app.domain.accounts.service import hard_delete_child
         await hard_delete_child(db_session, child_user_id=child.id, requested_by=parent.id)
         await db_session.commit()
 
@@ -202,9 +200,9 @@ class TestRedisZombieCache:
         redis_client: FakeRedis,
     ) -> None:
         """正例：commit_with_redis 成功清理 Redis 缓存。"""
-        from app.auth.password import generate_password, hash_password
-        from app.auth.redis_ops import commit_with_redis
-        from app.models.parent import DataDeletionRequest
+        from app.core.redis import commit_with_redis
+        from app.domain.accounts.models import DataDeletionRequest
+        from app.domain.auth.password import generate_password, hash_password
 
         fam = Family()
         db_session.add(fam)
@@ -240,7 +238,7 @@ class TestRedisZombieCache:
         assert await redis_client.get(redis_key) is not None
 
         # 执行 hard_delete_child + commit_with_redis
-        from app.services.child_deletion import hard_delete_child
+        from app.domain.accounts.service import hard_delete_child
         await hard_delete_child(db_session, child_user_id=child.id, requested_by=parent.id)
         await commit_with_redis(db_session, redis_client)
 
@@ -262,8 +260,8 @@ class TestRedisZombieCache:
         redis_client: FakeRedis,
     ) -> None:
         """反例：hard_delete_child 后裸 commit → Redis 缓存残留（防退化）。"""
-        from app.auth.password import generate_password, hash_password
-        from app.auth.redis_ops import discard_pending_redis_ops
+        from app.core.redis import discard_pending_redis_ops
+        from app.domain.auth.password import generate_password, hash_password
 
         fam = Family()
         db_session.add(fam)
@@ -298,7 +296,7 @@ class TestRedisZombieCache:
 
         assert await redis_client.get(redis_key) is not None
 
-        from app.services.child_deletion import hard_delete_child
+        from app.domain.accounts.service import hard_delete_child
         await hard_delete_child(db_session, child_user_id=child.id, requested_by=parent.id)
         # 裸 commit（绕开 commit_with_redis）
         await db_session.commit()

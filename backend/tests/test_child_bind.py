@@ -6,15 +6,14 @@ import uuid
 
 import pytest
 import pytest_asyncio
+from app.core.enums import UserRole
+from app.core.redis import commit_with_redis
+from app.domain.accounts.models import AuthToken, ChildProfile, Family, FamilyMember, User
+from app.domain.auth.bind_tokens import BIND_KEY_PREFIX, BIND_RESULT_KEY_PREFIX, issue_bind_token
+from app.domain.auth.password import generate_phone
+from app.domain.auth.tokens import REDIS_KEY_PREFIX, issue_token
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.auth.bind import BIND_KEY_PREFIX, BIND_RESULT_KEY_PREFIX, issue_bind_token
-from app.auth.password import generate_password, generate_phone, hash_password
-from app.auth.redis_ops import commit_with_redis
-from app.auth.tokens import REDIS_KEY_PREFIX, issue_token
-from app.models.accounts import AuthToken, ChildProfile, Family, FamilyMember, User
-from app.models.enums import UserRole
 
 # ---- C3 · 响应屏蔽辅助函数 ----
 
@@ -415,14 +414,14 @@ class TestRedeemBindToken:
         child_token_2 = redeem_resp_b.json()["token"]
 
         # child_profile 数量仍为 1（不新建）
-        from app.models.accounts import ChildProfile
+        from app.domain.accounts.models import ChildProfile
         result = await db_session.execute(
             select(func.count()).select_from(ChildProfile).where(ChildProfile.child_user_id == uuid.UUID(child_id))
         )
         assert result.scalar_one() == 1
 
         # auth_tokens 总数 2，其中 revoked_at IS NULL 的有 1 行
-        from app.models.accounts import AuthToken
+        from app.domain.accounts.models import AuthToken
         all_tokens_result = await db_session.execute(
             select(func.count()).select_from(AuthToken).where(AuthToken.user_id == uuid.UUID(child_id))
         )
@@ -440,7 +439,6 @@ class TestRedeemBindToken:
         result_b = await redis_client.get(f"{BIND_RESULT_KEY_PREFIX}{token_b}")
         assert result_a is not None
         assert result_b is not None
-        import json
 
         bound_a = json.loads(result_a)
         bound_b = json.loads(result_b)
@@ -535,9 +533,8 @@ class TestRedeemBindToken:
         """get_bind_token_status 签名中不含 AsyncSession（注解级展开检查）。"""
         import typing
 
-        from sqlalchemy.ext.asyncio import AsyncSession
-
         from app.api.bind_tokens import get_bind_token_status
+        from sqlalchemy.ext.asyncio import AsyncSession
 
         def _annotation_contains_type(annotation: object, target: object) -> bool:
             """递归检查某个类型是否出现在注解树的任意深度。"""
@@ -572,7 +569,7 @@ class TestRedeemBindToken:
         seeded_parent: tuple[User, str],
     ) -> None:
         """get_bind_token_status 运行时调 get_db → 覆盖并验证不触发。"""
-        from app.db import get_db
+        from app.core.db import get_db
 
         parent_user, _pw = seeded_parent
         device_id = "dev_status_nodb"

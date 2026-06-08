@@ -2,16 +2,16 @@
 
 场景：httpx 客户端在消费部分 delta 帧后主动 aclose() 中断连接。
 后端预期行为：
-  段二（_stream_generator）：收到 ConnectionError → 退出
-  段一（_run_llm_pipeline）：作为独立 bg task 不受影响，照常跑完 commit②
+  段二（stream_generator）：收到 ConnectionError → 退出
+  段一（run_llm_pipeline）：作为独立 bg task 不受影响，照常跑完 commit②
     → accumulated 完整落库（ai 行）
     → enqueue_audit 入队
     → finally 释放 chat:lock:{sid}、running_streams pop
 
 段一 await 语义（子代理核实）：
-  register_chat_task 保存 asyncio.Task，await 返回 None（_run_llm_pipeline 签名为 -> None）。
+  register_chat_task 保存 asyncio.Task，await 返回 None（run_llm_pipeline 签名为 -> None）。
   段一异常会传播到 await 方（不是被 Task 吞掉）。
-  running_streams 在 _run_llm_pipeline finally 中 pop。
+  running_streams 在 run_llm_pipeline finally 中 pop。
 
 关注点 4（真 commit + 段一 bg task 跨测试污染防护）：
   本测试结束时必须 await 段一收口，确保段一在 teardown（test teardown
@@ -24,8 +24,7 @@ import uuid
 from typing import Any
 
 import pytest
-
-from app.chat.factory import clear_test_llm, set_test_llm
+from app.core.llm import clear_test_llm, set_test_llm
 
 from ._helpers import FakeMainLLM, seed_integration_child
 
@@ -120,8 +119,9 @@ class TestKillDisconnectRed:
             if sid:
                 sid_uuid = uuid.UUID(sid)
                 async with integration_runtime.db_session_factory() as db:
+                    from app.core.enums import MessageRole
+                    from app.domain.chat.models import Message
                     from sqlalchemy import select
-                    from app.models.chat import Message, MessageRole
 
                     result = await db.execute(
                         select(Message).where(

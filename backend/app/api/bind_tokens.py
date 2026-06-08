@@ -1,4 +1,5 @@
 """bind_tokens 路由：绑定凭证完整生命周期（创建 / status / redeem）。"""
+
 from __future__ import annotations
 
 import json
@@ -11,29 +12,27 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.bind import (
+from app.core.db import get_db
+from app.core.enums import UserRole
+from app.core.redis import commit_with_redis, get_redis
+from app.domain.accounts.models import User
+from app.domain.accounts.schemas import AccountOut, CurrentAccount
+from app.domain.auth.bind_tokens import (
     BIND_KEY_PREFIX,
     BIND_RESULT_KEY_PREFIX,
     consume_bind_token,
     issue_bind_token,
     stage_record_bind_result,
 )
-from app.auth.deps import require_parent
-from app.auth.redis_client import get_redis
-from app.auth.redis_ops import commit_with_redis
-from app.auth.tokens import issue_token, revoke_all_active_tokens
-from app.db import get_db
-from app.models.accounts import User
-from app.models.enums import UserRole
-from app.schemas.accounts import (
-    AccountOut,
+from app.domain.auth.deps import require_parent
+from app.domain.auth.schemas import (
     BindTokenResponse,
     BindTokenStatusOut,
     CreateBindTokenRequest,
-    CurrentAccount,
     LoginResponse,
     RedeemBindTokenRequest,
 )
+from app.domain.auth.tokens import issue_token, revoke_all_active_tokens
 
 router = APIRouter(prefix="/api/v1/bind-tokens", tags=["bind_tokens"])
 
@@ -60,7 +59,9 @@ async def create_bind_token(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "child not found in family")
 
     token = await issue_bind_token(
-        redis, parent_user_id=parent.id, child_user_id=child.id,
+        redis,
+        parent_user_id=parent.id,
+        child_user_id=child.id,
     )
     return BindTokenResponse(bind_token=token)
 

@@ -17,31 +17,33 @@ from unittest.mock import AsyncMock, patch
 
 import anyio
 import pytest
+
 pytestmark = pytest.mark.asyncio(loop_scope="function")
 
 
 @pytest.fixture(autouse=True)
 def _mock_enqueue_audit():
     """mock enqueue_audit 避免 Redis lifespan 依赖。"""
-    with patch("app.api.me.enqueue_audit", AsyncMock()):
+    with patch("app.domain.chat.pipeline.enqueue_audit", AsyncMock()):
         yield
 
 
+from app.domain.chat.graph import build_main_graph
+from app.core.redis import commit_with_redis
+from app.domain.auth.tokens import issue_token
 from fakeredis.aioredis import FakeRedis
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from app.auth.redis_ops import commit_with_redis
-from app.auth.tokens import issue_token
-from app.chat.graph import build_main_graph
-
 main_graph = build_main_graph()
-from app.chat.locks import running_streams
-from app.db import get_db
-from app.models.accounts import Family, FamilyMember, User
-from app.models.chat import Message
-from app.models.enums import MessageRole, MessageStatus, UserRole
-from tests.api._chat_stream_lifecycle_helpers import lifecycle_ctx, lifecycle_setup
+from app.core.db import get_db
+from app.core.enums import MessageRole, MessageStatus, UserRole
+from app.domain.chat.models import Message
+from app.domain.chat.stream_signals import running_streams
+from tests.api._chat_stream_lifecycle_helpers import (  # noqa: F401  # lifecycle_ctx 是 fixture param
+    lifecycle_ctx,
+    lifecycle_setup,
+)
 
 # ---------------------------------------------------------------------------
 # _BrokenOnCall: 通过 athrow 将异常注入生成器的 yield 暂停点，
@@ -124,9 +126,8 @@ async def redis_client_with_eval(redis_client: FakeRedis) -> FakeRedis:
 @pytest.fixture
 async def app_with_eval(db_session, redis_client_with_eval):
     """App fixture with patched redis for Lua DEL simulation."""
-    from unittest.mock import patch
 
-    from app.auth.redis_client import get_redis
+    from app.core.redis import get_redis
     from app.main import create_app
     from tests.conftest import _inject_mock_resources
 
@@ -361,7 +362,7 @@ async def test_stop_with_ai(lifecycle_ctx):
 # ---------------------------------------------------------------------------
 #
 # Key design: mock stream_graph_to_sse to raise ConnectionError after the
-# first successful delta.  The generator's inner try/except catches it,
+# first successful delta.  The stream_generator's inner try/except catches it,
 # sets client_alive=False, and continues consuming the graph stream.
 # ---------------------------------------------------------------------------
 
@@ -396,7 +397,7 @@ async def test_keepgo_connection_error(lifecycle_ctx):
             yield _make_delta_frame(p.get("delta", ""))
 
     lifecycle_ctx.rr.main_graph.astream = fake_astream
-    with patch("app.api.me.stream_graph_to_sse", mock_stream_to_sse):
+    with patch("app.domain.chat.pipeline.stream_graph_to_sse", mock_stream_to_sse):
         body = make_payload(content="Hi")
         resp = await client.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,

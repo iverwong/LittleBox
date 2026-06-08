@@ -1,4 +1,4 @@
-"""Tests for app.chat.factory — provider registry + ChatDeepSeek primary.
+"""Tests for app.core.llm — provider registry + ChatDeepSeek primary.
 
 M6 patch 2 (Step 11.1): replaces ChatOpenAI + with_fallbacks tests with
 registry dispatch + ChatDeepSeek primary + fallback chain coverage.
@@ -8,19 +8,17 @@ M8-hotfix: adds audit_bailian registry key and audit LLM retry/fallback tests.
 from typing import Any
 
 import pytest
-from langchain_core.runnables import RunnableBinding, RunnableWithFallbacks
-from langchain_deepseek import ChatDeepSeek
-from langchain_openai import ChatOpenAI
-
-from app.chat.factory import (
-    ProviderNotRegisteredError,
+from app.core.llm import (
     _PROVIDER_REGISTRY,
+    ProviderNotRegisteredError,
     build_crisis_llm,
     build_main_llm,
     build_provider_llm,
     build_redline_llm,
 )
-
+from langchain_core.runnables import RunnableBinding, RunnableWithFallbacks
+from langchain_deepseek import ChatDeepSeek
+from langchain_openai import ChatOpenAI
 
 # ---------------------------------------------------------------------------
 # Fixtures: minimal settings object
@@ -28,7 +26,12 @@ from app.chat.factory import (
 
 
 class _FakeSettings:
-    """Minimal settings stub matching fields consumed by factory builders."""
+    """Minimal settings stub matching fields consumed by factory builders.
+
+    D-4B.1 加固:bailian_model / audit_model 默认值与 deepseek_model 故意不同,
+    防止 model 字段相关断言在两者同值时退化为空断言(openai 应取 bailian_model,
+    不是 deepseek_model;audit_* 应取 audit_model)。
+    """
 
     def __init__(self, **kwargs: Any) -> None:
         from pydantic import SecretStr
@@ -45,10 +48,12 @@ class _FakeSettings:
         self.bailian_base_url = kwargs.get(
             "bailian_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
-        self.bailian_model = kwargs.get("bailian_model", "deepseek-v4-flash")
+        # D-4B.1:故意与 deepseek_model 不同(防止 model 字段空断言)
+        self.bailian_model = kwargs.get("bailian_model", "qwen3-max")
         self.llm_request_timeout_seconds = 60.0
         # M8 audit pipeline settings
-        self.audit_model = kwargs.get("audit_model", "deepseek-v4-flash")
+        # D-4B.1:故意与 deepseek_model 不同(audit_* provider 应取 audit_model)
+        self.audit_model = kwargs.get("audit_model", "audit-v2")
         self.audit_reasoning_effort = kwargs.get("audit_reasoning_effort", "max")
         self.audit_thinking_enabled = kwargs.get("audit_thinking_enabled", True)
         # M8 compression pipeline settings
@@ -113,6 +118,32 @@ class TestBuildProviderLlm:
         settings = _FakeSettings()
         with pytest.raises(ProviderNotRegisteredError, match="unknown"):
             build_provider_llm("unknown", settings)
+
+    def test_openai_uses_bailian_model_not_deepseek(self) -> None:
+        """D-4B.1 防回归:openai provider 的 model 字段取 bailian_model,不是 deepseek_model。
+
+        原 4.1 实现把 model 字段折叠到 _ROLE_SETTINGS["main"],统一取
+        deepseek_model,导致 openai provider 在 bailian 端点发错误 model 名。
+        修复后 _MODEL_FIELD[(main, openai)] = "bailian_model"。
+        """
+        settings = _FakeSettings()
+        assert settings.bailian_model != settings.deepseek_model  # fixture 防护
+        llm = build_provider_llm("openai", settings)
+        assert llm.model == settings.bailian_model
+        assert llm.model != settings.deepseek_model
+
+    def test_audit_providers_use_audit_model(self) -> None:
+        """D-4B.1 防回归:audit_deepseek / audit_bailian 都取 audit_model,不是 deepseek_model。"""
+        settings = _FakeSettings()
+        assert settings.audit_model != settings.deepseek_model  # fixture 防护
+
+        llm_ds = build_provider_llm("audit_deepseek", settings)
+        assert llm_ds.model == settings.audit_model
+        assert llm_ds.model != settings.deepseek_model
+
+        llm_bl = build_provider_llm("audit_bailian", settings)
+        assert llm_bl.model == settings.audit_model
+        assert llm_bl.model != settings.deepseek_model
 
 
 # ---- T2: build_main_llm default (with fallback) ----
@@ -198,15 +229,29 @@ class TestChatDeepSeekConstruction:
         }
 
     def test_openai_construction_params(self) -> None:
-        """Construct ChatOpenAI via registry and verify params on instance."""
+        """Construct ChatOpenAI via registry and verify params on instance.
+
+        D-4B.1 加固:openai provider 的 model 字段必须取 settings.bailian_model,
+        不是 deepseek_model(陷阱 ① 同 provider 不同 model)。bailian_model 与
+        deepseek_model 在 _FakeSettings 默认值故意不同,断言强绑定字段。
+        """
         settings = _FakeSettings()
+        assert settings.bailian_model != settings.deepseek_model, (
+            "fixture 同值会让本测试退化为空断言"
+        )
         llm = _PROVIDER_REGISTRY["openai"](settings)
         # ChatOpenAI maps base_url → openai_api_base via Pydantic alias
         assert llm.openai_api_base.startswith("https://dashscope.aliyuncs.com")
-        assert llm.model == "deepseek-v4-flash"
+        assert llm.model == settings.bailian_model
+        assert llm.model != settings.deepseek_model
 
     def test_audit_deepseek_construction_params(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Mock ChatDeepSeek.__init__ to verify audit_deepseek uses audit_* settings."""
+        """Mock ChatDeepSeek.__init__ to verify audit_deepseek uses audit_* settings.
+
+        D-4B.1 加固:audit_* provider 的 model 字段必须取 settings.audit_model,
+        不是 deepseek_model。audit_model 与 deepseek_model 在 _FakeSettings
+        默认值故意不同,断言强绑定字段。
+        """
         captured: dict[str, Any] = {}
 
         def mock_init(self, **kwargs: Any) -> None:
@@ -215,9 +260,13 @@ class TestChatDeepSeekConstruction:
         monkeypatch.setattr(ChatDeepSeek, "__init__", mock_init)
 
         settings = _FakeSettings()
+        assert settings.audit_model != settings.deepseek_model, (
+            "fixture 同值会让本测试退化为空断言"
+        )
         _PROVIDER_REGISTRY["audit_deepseek"](settings)
 
-        assert captured.get("model") == "deepseek-v4-flash"
+        assert captured.get("model") == settings.audit_model
+        assert captured.get("model") != settings.deepseek_model
         assert captured.get("extra_body") == {
             "thinking": {"type": "enabled"},
             "reasoning_effort": "max",
@@ -321,7 +370,7 @@ class TestCompressionFactory:
 
     def test_invoked_via_build_provider_llm(self) -> None:
         settings = _FakeSettings()
-        from app.chat.factory import build_provider_llm
+        from app.core.llm import build_provider_llm
 
         llm = build_provider_llm("compression_deepseek", settings)
         assert isinstance(llm, ChatDeepSeek)
@@ -344,7 +393,7 @@ class TestAuditLlmRetry:
         """主端首次 ConnectError → with_retry 重试 → 第二次成功。"""
         import httpx
         import respx
-        from app.config import settings
+        from app.core.config import settings
 
         url = f"{settings.deepseek_base_url}/chat/completions"
 
@@ -367,7 +416,7 @@ class TestAuditLlmRetry:
                 ],
             )
 
-            from app.audit.llm import build_audit_llm
+            from app.domain.audit.llm import build_audit_llm
             llm = build_audit_llm(settings)
             from langchain_core.messages import HumanMessage
             result = await llm.ainvoke([HumanMessage(content="你好")])
@@ -379,7 +428,7 @@ class TestAuditLlmRetry:
         """主端持续 ConnectError → with_retry 耗尽 → fallback 百炼返回成功。"""
         import httpx
         import respx
-        from app.config import settings
+        from app.core.config import settings
 
         primary_url = f"{settings.deepseek_base_url}/chat/completions"
         fallback_url = f"{settings.bailian_base_url}/chat/completions"
@@ -404,7 +453,7 @@ class TestAuditLlmRetry:
                 },
             )
 
-            from app.audit.llm import build_audit_llm
+            from app.domain.audit.llm import build_audit_llm
             llm = build_audit_llm(settings)
             from langchain_core.messages import HumanMessage
             result = await llm.ainvoke([HumanMessage(content="你好")])
@@ -437,12 +486,12 @@ class TestInjectionSeam:
 
     def teardown_method(self) -> None:
         """每测试后清理 override，避免跨测试泄漏。"""
-        from app.chat.factory import clear_test_llm
+        from app.core.llm import clear_test_llm
         clear_test_llm()
 
     def test_set_provider_override_returns_fake(self) -> None:
         """set_test_llm("deepseek", fake) → build_provider_llm 返回 fake。"""
-        from app.chat.factory import build_provider_llm, set_test_llm
+        from app.core.llm import build_provider_llm, set_test_llm
         fake = _FakeRunnable()
         set_test_llm("deepseek", fake)
         result = build_provider_llm("deepseek", None)
@@ -450,7 +499,7 @@ class TestInjectionSeam:
 
     def test_audit_provider_override_returns_fake(self) -> None:
         """set_test_llm("audit_deepseek", fake) → build_provider_llm 返回 fake。"""
-        from app.chat.factory import build_provider_llm, set_test_llm
+        from app.core.llm import build_provider_llm, set_test_llm
         fake = _FakeRunnable()
         set_test_llm("audit_deepseek", fake)
         result = build_provider_llm("audit_deepseek", None)
@@ -458,8 +507,7 @@ class TestInjectionSeam:
 
     def test_override_only_affects_specified_provider(self) -> None:
         """只 override "deepseek" 时，"openai" 仍走 registry。"""
-        from app.chat.factory import (
-            _PROVIDER_REGISTRY,
+        from app.core.llm import (
             build_provider_llm,
             set_test_llm,
         )
@@ -475,7 +523,7 @@ class TestInjectionSeam:
 
     def test_clear_single_provider(self) -> None:
         """clear_test_llm("deepseek") 只清除该 provider 的 override。"""
-        from app.chat.factory import (
+        from app.core.llm import (
             build_provider_llm,
             clear_test_llm,
             set_test_llm,
@@ -496,7 +544,7 @@ class TestInjectionSeam:
 
     def test_clear_all_providers(self) -> None:
         """clear_test_llm() 清除全部 provider 的 override。"""
-        from app.chat.factory import (
+        from app.core.llm import (
             build_provider_llm,
             clear_test_llm,
             set_test_llm,
@@ -514,7 +562,7 @@ class TestInjectionSeam:
 
     def test_build_main_llm_respects_override(self) -> None:
         """build_main_llm 内部调 build_provider_llm("deepseek", ...)，应返回 override。"""
-        from app.chat.factory import build_main_llm, set_test_llm
+        from app.core.llm import build_main_llm, set_test_llm
         fake = _FakeRunnable()
         set_test_llm("deepseek", fake)
         result = build_main_llm(_FakeSettings(enable_fallback=False))
@@ -522,7 +570,7 @@ class TestInjectionSeam:
 
     def test_build_crisis_llm_respects_override(self) -> None:
         """build_crisis_llm 内部调 build_provider_llm("audit_deepseek", ...)，应返回 override。"""
-        from app.chat.factory import build_crisis_llm, set_test_llm
+        from app.core.llm import build_crisis_llm, set_test_llm
         fake = _FakeRunnable()
         set_test_llm("audit_deepseek", fake)
         result = build_crisis_llm(_FakeSettings())
@@ -530,8 +578,8 @@ class TestInjectionSeam:
 
     def test_build_audit_llm_respects_override(self) -> None:
         """build_audit_llm 内部调 build_provider_llm("audit_deepseek", ...)，应返回 override。"""
-        from app.audit.llm import build_audit_llm
-        from app.chat.factory import set_test_llm
+        from app.domain.audit.llm import build_audit_llm
+        from app.core.llm import set_test_llm
         fake = _FakeRunnable()
         set_test_llm("audit_deepseek", fake)
         result = build_audit_llm(_FakeSettings())
@@ -539,5 +587,5 @@ class TestInjectionSeam:
 
     def test_override_empty_after_teardown(self) -> None:
         """teardown_method 后 _test_llm_overrides 应为空。"""
-        from app.chat.factory import _test_llm_overrides
+        from app.core.llm import _test_llm_overrides
         assert _test_llm_overrides == {}

@@ -28,10 +28,10 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.password import generate_password, generate_phone, hash_password
-from app.auth.redis_ops import commit_with_redis
-from app.models.accounts import Family, FamilyMember, User
-from app.models.enums import UserRole
+from app.core.enums import UserRole
+from app.core.redis import commit_with_redis
+from app.domain.accounts.models import Family, FamilyMember, User
+from app.domain.auth.password import generate_password, generate_phone, hash_password
 from app.scripts._common import build_arg_parser, cli_runtime, run_main
 
 MAX_PHONE_RETRIES = 10
@@ -40,6 +40,7 @@ MAX_PHONE_RETRIES = 10
 @dataclass(frozen=True)
 class ParentInfo:
     """_create_parent 的返回值。CLI 与测试共用。"""
+
     phone: str
     plain_password: str
     user_id: uuid.UUID

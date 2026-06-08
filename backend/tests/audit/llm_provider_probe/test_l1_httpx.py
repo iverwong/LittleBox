@@ -12,10 +12,10 @@ import json
 import pytest
 
 from .conftest import (
-    ArtifactBuilder,
     SHARED_TOOLS,
     SYSTEM_MESSAGE,
     USER_MESSAGE,
+    ArtifactBuilder,
 )
 
 pytestmark = [

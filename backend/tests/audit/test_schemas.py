@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
-from app.schemas.audit import (
+from app.domain.audit.schemas import (
     AppendNote,
     AuditDimensionScores,
     AuditOutputSchema,
@@ -12,6 +10,7 @@ from app.schemas.audit import (
     ReplaceInNotes,
     TurnSummaryEntry,
 )
+from pydantic import ValidationError
 
 pytestmark = pytest.mark.audit
 

@@ -12,10 +12,7 @@ from datetime import date
 from unittest.mock import patch
 
 import pytest
-
-from langchain_core.messages import SystemMessage
-
-from app.chat.prompts import (
+from app.domain.chat.prompts import (
     STUB_CRISIS_SYSTEM_PROMPT,
     STUB_GENDER_FEMALE,
     STUB_GENDER_MALE,
@@ -33,6 +30,7 @@ from app.chat.prompts import (
     format_reentry_wrapper_crisis,
     format_reentry_wrapper_redline,
 )
+from langchain_core.messages import SystemMessage
 
 
 class TestComputeAge:
@@ -40,14 +38,14 @@ class TestComputeAge:
 
     def test_birthday_passed(self) -> None:
         """正常情况：生日已过，age = today.year - birth.year"""
-        with patch("app.chat.prompts.datetime") as mock_dt:
+        with patch("app.domain.chat.prompts.datetime") as mock_dt:
             mock_dt.now.return_value = __import__("datetime").datetime(2025, 6, 15)
             mock_dt.ZoneInfo = __import__("zoneinfo").ZoneInfo
             assert compute_age(date(2013, 3, 10)) == 12
 
     def test_birthday_not_yet(self) -> None:
         """生日未到，age 减 1"""
-        with patch("app.chat.prompts.datetime") as mock_dt:
+        with patch("app.domain.chat.prompts.datetime") as mock_dt:
             mock_dt.now.return_value = __import__("datetime").datetime(2025, 6, 15)
             mock_dt.ZoneInfo = __import__("zoneinfo").ZoneInfo
             assert compute_age(date(2013, 7, 20)) == 11
@@ -56,7 +54,7 @@ class TestComputeAge:
         """非闰年 2/28：出生 2000-02-28，今天正好生日，age = 25（已满）。"""
         # 出生 2000-02-28；上海时间 2025-02-28
         # today == birth month-day → birthday IS today → age = 25（刚满）
-        with patch("app.chat.prompts.datetime") as mock_dt:
+        with patch("app.domain.chat.prompts.datetime") as mock_dt:
             mock_dt.now.return_value = __import__("datetime").datetime(2025, 2, 28)
             mock_dt.ZoneInfo = __import__("zoneinfo").ZoneInfo
             assert compute_age(date(2000, 2, 28)) == 25
@@ -65,7 +63,7 @@ class TestComputeAge:
         """非闰年 2/28：出生 2000-03-01，今天还未到生日，age = 24。"""
         # 出生 2000-03-01；上海时间 2025-02-28
         # today=(2,28) < birth=(3,1) → birthday not yet → age = 25-1 = 24
-        with patch("app.chat.prompts.datetime") as mock_dt:
+        with patch("app.domain.chat.prompts.datetime") as mock_dt:
             mock_dt.now.return_value = __import__("datetime").datetime(2025, 2, 28)
             mock_dt.ZoneInfo = __import__("zoneinfo").ZoneInfo
             assert compute_age(date(2000, 3, 1)) == 24
@@ -79,7 +77,7 @@ class TestComputeAge:
         """
         # 场景：上海时间 2025-02-28 23:30（UTC 2025-03-01 15:30）
         # mock 上海时间 = 2025-02-28
-        with patch("app.chat.prompts.datetime") as mock_dt:
+        with patch("app.domain.chat.prompts.datetime") as mock_dt:
             mock_dt.now.return_value = __import__("datetime").datetime(2025, 2, 28, 23, 30)
             mock_dt.ZoneInfo = __import__("zoneinfo").ZoneInfo
             # 2000-03-01 出生，上海时间 2025-02-28 尚未过生日 → 24岁
@@ -236,7 +234,7 @@ class TestStubCount:
         import subprocess
 
         result = subprocess.run(
-            ["grep", "-c", "TODO(prompts-content)", "app/chat/prompts.py"],
+            ["grep", "-c", "TODO(prompts-content)", "app/domain/chat/prompts.py"],
             capture_output=True,
             text=True,
             cwd="/app",

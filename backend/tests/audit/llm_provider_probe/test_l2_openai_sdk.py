@@ -9,14 +9,13 @@ from __future__ import annotations
 
 import json
 
-import httpx
 import pytest
 
 from .conftest import (
-    ArtifactBuilder,
     SHARED_TOOLS,
     SYSTEM_MESSAGE,
     USER_MESSAGE,
+    ArtifactBuilder,
 )
 
 pytestmark = [

@@ -2,14 +2,10 @@
 from __future__ import annotations
 
 import pytest
-import pytest_asyncio
+from app.core.redis import commit_with_redis
+from app.domain.accounts.models import User
+from app.domain.auth.tokens import REDIS_KEY_PREFIX, issue_token, token_hash
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.auth.password import generate_phone
-from app.auth.redis_ops import commit_with_redis
-from app.auth.tokens import REDIS_KEY_PREFIX, issue_token, token_hash
-from app.models.accounts import Family, FamilyMember, User
-from app.models.enums import UserRole
 
 # ---- C3 · 响应屏蔽辅助函数 ----
 
@@ -85,9 +81,8 @@ class TestLoginEndpoint:
         token = resp.json()["token"]
         th = token_hash(token)
 
+        from app.domain.accounts.models import AuthToken
         from sqlalchemy import select
-
-        from app.models.accounts import AuthToken
         row = (await db_session.execute(
             select(AuthToken.device_id).where(AuthToken.token_hash == th)
         )).scalar_one()
@@ -236,9 +231,8 @@ class TestLoginEndpoint:
         assert revoked_resp.status_code == 401
 
         # DB revoked_at 已写入
+        from app.domain.accounts.models import AuthToken
         from sqlalchemy import select
-
-        from app.models.accounts import AuthToken
         revoked_at = (await db_session.execute(
             select(AuthToken.revoked_at).where(AuthToken.token_hash == th_a)
         )).scalar_one()
@@ -485,9 +479,8 @@ class TestLogoutEndpoint:
         assert me_resp.status_code == 401
 
         # DB revoked_at 已写入
+        from app.domain.accounts.models import AuthToken
         from sqlalchemy import select
-
-        from app.models.accounts import AuthToken
         revoked_at = (await db_session.execute(
             select(AuthToken.revoked_at).where(AuthToken.token_hash == th)
         )).scalar_one()

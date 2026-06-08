@@ -2,8 +2,8 @@
 
 修复后：
   stream_graph_to_sse 仍然只映射 delta 帧，
-  但 me.py _run_llm_pipeline 在解析到 payload.intervention_type 时
-  直接 _put(_frame_sse_event("intervention_type", {"type": it_raw})),
+  但 me.py run_llm_pipeline 在解析到 payload.intervention_type 时
+  直接 _put(frame_sse_event("intervention_type", {"type": it_raw})),
   该 SSE 事件在首个 delta 帧之前被写入队列 → 帧序正确。
 
 两轮协议：
@@ -21,8 +21,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
-from app.chat.factory import clear_test_llm, set_test_llm
+from app.core.llm import clear_test_llm, set_test_llm
 
 from ._helpers import FakeMainLLM, parse_sse_events, seed_integration_child
 
@@ -61,9 +60,8 @@ class TestSseFrameOrderGreen:
         同时用 FakeMainLLM 覆盖 audit_deepseek provider，
         防止 call_redline_llm 调用真实 API。
         """
-        from datetime import datetime, timezone
-        from app.state.audit_signals import AuditSignalsManager
-        from app.schemas.audit import AuditDimensionScores, AuditOutputSchema
+        from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
+        from app.domain.audit.signals import AuditSignalsManager
 
         child, headers = await seed_integration_child(integration_runtime)
         set_test_llm("deepseek", FakeMainLLM())
