@@ -104,6 +104,7 @@ async def redeem_bind_token(
     bind_token 从 path param 取；body 仅携带 device_id（device_info B0 不再由客户端传入）。
 
     TODO(redeem-family-check):拿到 parent_id_at_issue 后补 family 边界校验
+    这部分可以留到 family 多家长，以及家长解绑绑定时再做
     (parent_at_issue.family_id == child.family_id + parent is_active + role=parent),
     防御运维 SQL 误改 family_id / 未来分家转交 API。详情见 review notes。
     """
