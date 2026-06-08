@@ -15,9 +15,9 @@ PROMPT_LIKE_PATTERNS = [
 
 # 需要特别关注的 Python 文件
 TARGET_FILES = [
-    "app/chat/graph.py",
+    "app/domain/chat/graph.py",
     "app/api/me.py",
-    "app/chat/context.py",
+    "app/domain/chat/context.py",
 ]
 
 # 已知合法的函数 docstring 行号范围（key=(basename, start), value=end）

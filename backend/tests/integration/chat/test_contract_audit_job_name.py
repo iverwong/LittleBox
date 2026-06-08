@@ -4,8 +4,8 @@ enqueue_audit 在 `app.domain.chat.usecase` 中调用的 job 名应与
 WORKER_SETTINGS 中注册的函数路径完全一致。
 
 修复后匹配：
-  usecase.py:    AUDIT_JOB_NAME = "app.audit.worker.run_audit"
-  worker.py:89:  WORKER_SETTINGS["functions"] = ["app.audit.worker.run_audit"]
+  usecase.py:    AUDIT_JOB_NAME = "app.domain.audit.worker.run_audit"
+  worker.py:89:  WORKER_SETTINGS["functions"] = ["app.domain.audit.worker.run_audit"]
 
 ⚠️ 若移动或重命名 worker 模块，两处都必须同步更新。
 """
@@ -23,7 +23,7 @@ def test_audit_job_name_contract() -> None:
     从 `usecase.py` 与 `worker.py` 各取一次字面量做双侧断言
     （不写死任何一侧的字符串,避免单侧漂移盲区）。
     """
-    from app.audit.worker import WORKER_SETTINGS
+    from app.domain.audit.worker import WORKER_SETTINGS
     from app.domain.chat.usecase import AUDIT_JOB_NAME
 
     registered = WORKER_SETTINGS["functions"][0]

@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from app.audit.graph import (
+from app.domain.audit.graph import (
     TOOL_NAME_APPEND,
     TOOL_NAME_OUTPUT,
     TOOL_NAME_REPLACE,
@@ -112,7 +112,7 @@ def _make_fake_runtime(max_iter: int = 5) -> object:
     from types import SimpleNamespace
     from unittest.mock import MagicMock
 
-    from app.audit.context_schema import AuditContextSchema
+    from app.domain.audit.context_schema import AuditContextSchema
 
     ctx = AuditContextSchema(
         session_id=SID,
@@ -137,14 +137,14 @@ def _run(
     T11：build_audit_graph() 无参调用 + context= 参数传递。
     """
     fake = FakeAuditLLM(responses, exhausted_raises=exhausted_raises)
-    monkeypatch.setattr("app.audit.graph.build_audit_llm", lambda s: fake)
+    monkeypatch.setattr("app.domain.audit.graph.build_audit_llm", lambda s: fake)
     # mock 数据层调用为 no-op
     async def _mock_load(*_: Any, **__: Any) -> list:
         return []
-    monkeypatch.setattr("app.audit.graph._load_messages_from_pg", _mock_load)
+    monkeypatch.setattr("app.domain.audit.graph._load_messages_from_pg", _mock_load)
     async def _mock_write(*_: Any, **__: Any) -> None:
         pass
-    monkeypatch.setattr("app.audit.graph.write_audit_results", _mock_write)
+    monkeypatch.setattr("app.domain.audit.graph.write_audit_results", _mock_write)
 
     graph = build_audit_graph()
     state = _initial_state()
@@ -223,13 +223,13 @@ class TestAuditGraph:
             _aim(tool_calls=[_tc(TOOL_NAME_REPLACE, {"old_str": "a a", "new_str": "b b"})]),
             _aim(tool_calls=[_TC_OUTPUT]),
         ])
-        monkeypatch.setattr("app.audit.graph.build_audit_llm", lambda s: fake)
+        monkeypatch.setattr("app.domain.audit.graph.build_audit_llm", lambda s: fake)
         async def _mock_load(*_: Any, **__: Any) -> list:
             return []
-        monkeypatch.setattr("app.audit.graph._load_messages_from_pg", _mock_load)
+        monkeypatch.setattr("app.domain.audit.graph._load_messages_from_pg", _mock_load)
         async def _mock_write(*_: Any, **__: Any) -> None:
             pass
-        monkeypatch.setattr("app.audit.graph.write_audit_results", _mock_write)
+        monkeypatch.setattr("app.domain.audit.graph.write_audit_results", _mock_write)
 
         graph = build_audit_graph()
         runtime = _make_fake_runtime(max_iter=5)

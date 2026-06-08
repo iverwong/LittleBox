@@ -26,7 +26,7 @@ def _mock_enqueue_audit():
         yield
 
 
-from app.chat.graph import build_main_graph
+from app.domain.chat.graph import build_main_graph
 from app.core.redis import commit_with_redis
 from app.domain.auth.tokens import issue_token
 from fakeredis.aioredis import FakeRedis
@@ -1096,7 +1096,7 @@ async def test_compression_with_existing_summary(lifecycle_ctx):
     from unittest.mock import patch as _patch
     from uuid import uuid4 as _uuid4
 
-    from app.chat.prompts import SUMMARY_PREFIX
+    from app.domain.chat.prompts import SUMMARY_PREFIX
 
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
     sid = _uuid4()

@@ -17,14 +17,14 @@ from uuid import UUID
 from redis.asyncio import Redis
 from sqlalchemy import select
 
-from app.chat.compression import CONTEXT_COMPRESS_THRESHOLD_TOKENS
-from app.chat.context_schema import ChatContextSchema
-from app.chat.prompts import build_system_prompt
 from app.core.enums import InterventionType, MessageRole, MessageStatus
 from app.core.locks import release_session_lock
 from app.core.runtime import RuntimeResources
+from app.domain.chat.compression import CONTEXT_COMPRESS_THRESHOLD_TOKENS
+from app.domain.chat.context_schema import ChatContextSchema
 from app.domain.chat.models import Message
 from app.domain.chat.models import Session as SessionModel
+from app.domain.chat.prompts import build_system_prompt
 from app.domain.chat.stream import (
     ChatStreamState,
     frame_sse_event,
@@ -104,12 +104,12 @@ async def run_llm_pipeline(
                     try:
                         _put(frame_sse_event("compression_start", {}))
 
-                        from app.chat.compression import (
+                        from app.core.llm import build_provider_llm
+                        from app.domain.chat.compression import (
                             build_compression_prompt,
                             extract_compression_summary,
                         )
-                        from app.chat.context import _to_lc_message
-                        from app.core.llm import build_provider_llm
+                        from app.domain.chat.context import _to_lc_message
 
                         if protected_id is None:
                             raise RuntimeError(

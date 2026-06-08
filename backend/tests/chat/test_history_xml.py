@@ -1,7 +1,7 @@
 """history_xml.py 单元测试：XML 序列化与输出提取。"""
 from __future__ import annotations
 
-from app.chat.history_xml import (
+from app.domain.chat.history_xml import (
     escape_xml_text,
     extract_wrapped_output,
     serialize_history_to_xml,

@@ -38,7 +38,7 @@ def _mock_enqueue_audit():
         yield
 
 
-from app.chat.graph import build_main_graph
+from app.domain.chat.graph import build_main_graph
 from app.core.redis import commit_with_redis
 from app.domain.auth.tokens import issue_token
 from app.domain.chat.stream import frame_sse_event

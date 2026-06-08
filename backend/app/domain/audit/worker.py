@@ -28,8 +28,8 @@ from urllib.parse import urlparse
 
 from arq.connections import RedisSettings
 
-from app.audit.graph import AuditGraphState
 from app.core.config import settings
+from app.domain.audit.graph import AuditGraphState
 from app.domain.audit.signals import AuditSignalsManager
 
 logger = logging.getLogger("audit.worker")
@@ -87,7 +87,7 @@ async def on_job_end(ctx: dict[str, Any]) -> None:
 MAX_TRIES = 3
 
 WORKER_SETTINGS: dict[str, Any] = {
-    "functions": ["app.audit.worker.run_audit"],
+    "functions": ["app.domain.audit.worker.run_audit"],
     "redis_settings": RedisSettings(
         host=_parsed_redis.hostname or "localhost",
         port=_parsed_redis.port or 6379,
@@ -130,8 +130,8 @@ async def run_audit(
     """
     import uuid
 
-    from app.audit.context_schema import AuditContextSchema
     from app.core.runtime import RuntimeResources
+    from app.domain.audit.context_schema import AuditContextSchema
 
     rr: RuntimeResources = ctx["resources"]
     manager: AuditSignalsManager = ctx["signals_manager"]

@@ -1,12 +1,12 @@
 """compression.py 单元测试：阈值常量 + build_compression_prompt + extract_compression_summary。"""
 from __future__ import annotations
 
-from app.chat.compression import (
+from app.domain.chat.compression import (
     CONTEXT_COMPRESS_THRESHOLD_TOKENS,
     build_compression_prompt,
     extract_compression_summary,
 )
-from app.chat.prompts import COMPRESSION_PROMPT_STUB
+from app.domain.chat.prompts import COMPRESSION_PROMPT_STUB
 from app.core.llm_extractors import extract_usage
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 

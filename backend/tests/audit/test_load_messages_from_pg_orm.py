@@ -12,7 +12,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 import pytest
-from app.audit.graph import _load_messages_from_pg
+from app.domain.audit.graph import _load_messages_from_pg
 from app.core.enums import MessageRole, MessageStatus
 from app.domain.chat.models import Message
 

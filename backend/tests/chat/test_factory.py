@@ -1,4 +1,4 @@
-"""Tests for app.chat.factory — provider registry + ChatDeepSeek primary.
+"""Tests for app.core.llm — provider registry + ChatDeepSeek primary.
 
 M6 patch 2 (Step 11.1): replaces ChatOpenAI + with_fallbacks tests with
 registry dispatch + ChatDeepSeek primary + fallback chain coverage.
@@ -416,7 +416,7 @@ class TestAuditLlmRetry:
                 ],
             )
 
-            from app.audit.llm import build_audit_llm
+            from app.domain.audit.llm import build_audit_llm
             llm = build_audit_llm(settings)
             from langchain_core.messages import HumanMessage
             result = await llm.ainvoke([HumanMessage(content="你好")])
@@ -453,7 +453,7 @@ class TestAuditLlmRetry:
                 },
             )
 
-            from app.audit.llm import build_audit_llm
+            from app.domain.audit.llm import build_audit_llm
             llm = build_audit_llm(settings)
             from langchain_core.messages import HumanMessage
             result = await llm.ainvoke([HumanMessage(content="你好")])
@@ -578,7 +578,7 @@ class TestInjectionSeam:
 
     def test_build_audit_llm_respects_override(self) -> None:
         """build_audit_llm 内部调 build_provider_llm("audit_deepseek", ...)，应返回 override。"""
-        from app.audit.llm import build_audit_llm
+        from app.domain.audit.llm import build_audit_llm
         from app.core.llm import set_test_llm
         fake = _FakeRunnable()
         set_test_llm("audit_deepseek", fake)

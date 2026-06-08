@@ -139,7 +139,7 @@ async def test_client_disconnect_keeps_bg_task_running(lifecycle_ctx):
         yield {"finish_reason": "stop"}
 
     # 准备段一参数
-    from app.chat.context_schema import ChatContextSchema
+    from app.domain.chat.context_schema import ChatContextSchema
     ctx = ChatContextSchema(
         session_id=sid, child_user_id=child.id, child_profile={},
         age=8, gender=None, user_input="测试",
@@ -223,7 +223,7 @@ async def test_queue_full_triggers_flow_pause_and_headless_continuation(lifecycl
             yield {"delta": f"x{i}"}
         yield {"finish_reason": "stop"}
 
-    from app.chat.context_schema import ChatContextSchema
+    from app.domain.chat.context_schema import ChatContextSchema
     ctx = ChatContextSchema(
         session_id=sid, child_user_id=child.id, child_profile={},
         age=8, gender=None, user_input="测试",

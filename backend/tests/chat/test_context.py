@@ -18,7 +18,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from app.chat.context import (
+from app.domain.chat.context import (
     _to_lc_message,
     build_context,
     build_crisis_context,
@@ -26,7 +26,7 @@ from app.chat.context import (
     load_active_history_for_assembly,
     load_recent_active_pairs,
 )
-from app.chat.prompts import ANCHOR_WINDOW_PREFIX
+from app.domain.chat.prompts import ANCHOR_WINDOW_PREFIX
 from app.core.enums import MessageRole, MessageStatus
 from app.domain.audit.models import RollingSummary
 from app.domain.chat.models import Message, Session

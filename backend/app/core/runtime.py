@@ -101,12 +101,12 @@ async def build_runtime(settings: Settings) -> RuntimeResources:
     )
 
     # 5. main_graph（惰性导入：当前 commit 时 build_main_graph 尚不存在）
-    from app.chat.graph import build_main_graph
+    from app.domain.chat.graph import build_main_graph
 
     main_graph = build_main_graph()
 
     # 6. audit_graph（惰性导入；T11 改无参工厂 + Runtime DI）
-    from app.audit.graph import build_audit_graph
+    from app.domain.audit.graph import build_audit_graph
 
     audit_graph = build_audit_graph()
 

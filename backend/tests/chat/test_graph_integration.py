@@ -17,15 +17,15 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-from app.chat.context_schema import ChatContextSchema
-from app.chat.graph import (
+from app.domain.chat.context_schema import ChatContextSchema
+from app.domain.chat.graph import (
     build_messages_crisis,
     build_messages_main,
     build_messages_redline,
     load_audit_state,
     route_by_risk,
 )
-from app.chat.state import MainDialogueState
+from app.domain.chat.state import MainDialogueState
 from app.core.enums import MessageRole, MessageStatus, UserRole
 from app.domain.accounts.models import Family, User
 from app.domain.chat.models import Message
@@ -150,7 +150,7 @@ class TestMainPath:
         fake_history = [HumanMessage(content="历史消息")]
 
         with patch(
-            "app.chat.graph.load_active_history_for_assembly",
+            "app.domain.chat.graph.load_active_history_for_assembly",
             return_value=fake_history,
         ):
             result = await build_messages_main(state, runtime)
@@ -279,9 +279,9 @@ class TestCrisisStickyPath:
         # build_crisis_context 会查真库 — mock 掉
         fake_anchor = SystemMessage(content="[anchor 窗口]\nmock")
         with (
-            patch("app.chat.graph.build_crisis_context",
+            patch("app.domain.chat.graph.build_crisis_context",
                   return_value=(fake_anchor, [HumanMessage(content="mock after")])),
-            patch("app.chat.graph.build_crisis_system_prompt",
+            patch("app.domain.chat.graph.build_crisis_system_prompt",
                   return_value=SystemMessage(content="[crisis system]")),
         ):
             result = await build_messages_crisis(state, runtime)
@@ -411,7 +411,7 @@ class TestGuidancePath:
         fake_history = [HumanMessage(content="之前的消息")]
 
         with patch(
-            "app.chat.graph.load_active_history_for_assembly",
+            "app.domain.chat.graph.load_active_history_for_assembly",
             return_value=fake_history,
         ):
             result = await build_messages_main(state, runtime)
@@ -502,9 +502,9 @@ class TestAuditStateCascade:
 
         with (
             patch(
-                "app.chat.graph.AuditSignalsManager",
+                "app.domain.chat.graph.AuditSignalsManager",
                 return_value=AsyncMock(poll_wait=_mock_poll),
             ),
-            patch("app.chat.graph._pg_crisis_fallback", side_effect=_mock_pg),
+            patch("app.domain.chat.graph._pg_crisis_fallback", side_effect=_mock_pg),
         ):
             return await load_audit_state(state, runtime)

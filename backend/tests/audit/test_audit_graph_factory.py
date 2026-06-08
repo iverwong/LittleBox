@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import pytest
-from app.audit.graph import build_audit_graph
+from app.domain.audit.graph import build_audit_graph
 
 pytestmark = pytest.mark.audit
 

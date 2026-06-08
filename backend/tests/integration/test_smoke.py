@@ -96,7 +96,7 @@ class TestInfrastructureSmoke:
           3. redis_pool 与 enqueue 端同源（同一 integration_runtime.arq_pool）
           4. 审计图 write_results 正常落库（需 DB 中有 family + user + session）
         """
-        from app.audit.worker import WORKER_SETTINGS
+        from app.domain.audit.worker import WORKER_SETTINGS
         from app.core.enums import SessionStatus, UserRole
         from app.core.llm import clear_test_llm, set_test_llm
         from app.domain.accounts.models import Family, User
@@ -139,7 +139,7 @@ class TestInfrastructureSmoke:
             )
 
         worker = Worker(
-            functions=["app.audit.worker.run_audit"],
+            functions=["app.domain.audit.worker.run_audit"],
             redis_pool=rr.arq_pool,
             burst=True,
             on_startup=_on_startup,

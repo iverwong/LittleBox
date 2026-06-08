@@ -357,9 +357,9 @@ async def arq_worker(integration_runtime: Any) -> AsyncGenerator[Callable[[], in
 
     约束（计划 §4）：
       functions=WORKER_SETTINGS["functions"] 使用字符串路径
-      ["app.audit.worker.run_audit"]，禁止写成 [run_audit]。
+      ["app.domain.audit.worker.run_audit"]，禁止写成 [run_audit]。
     """
-    from app.audit.worker import WORKER_SETTINGS
+    from app.domain.audit.worker import WORKER_SETTINGS
     from app.domain.audit.signals import AuditSignalsManager
     from arq import Worker
 
@@ -378,7 +378,7 @@ async def arq_worker(integration_runtime: Any) -> AsyncGenerator[Callable[[], in
         pass
 
     worker = Worker(
-        functions=WORKER_SETTINGS["functions"],  # 字符串路径：["app.audit.worker.run_audit"]
+        functions=WORKER_SETTINGS["functions"],  # 字符串路径：["app.domain.audit.worker.run_audit"]
         redis_pool=rr.arq_pool,
         burst=True,
         on_startup=_on_startup,

@@ -30,8 +30,8 @@ from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
 from typing_extensions import TypedDict
 
-from app.audit.llm import build_audit_llm
-from app.audit.prompts import build_audit_system_prompt
+from app.domain.audit.llm import build_audit_llm
+from app.domain.audit.prompts import build_audit_system_prompt
 from app.domain.audit.schemas import (
     AuditDimensionScores,
     AuditOutputSchema,
@@ -42,7 +42,7 @@ if TYPE_CHECKING:
     from langgraph.runtime import Runtime
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from app.audit.context_schema import AuditContextSchema
+    from app.domain.audit.context_schema import AuditContextSchema
 
 logger = logging.getLogger("audit.graph")
 
@@ -418,7 +418,7 @@ def build_audit_graph() -> CompiledStateGraph:
     context_schema=AuditContextSchema 开启 Runtime DI，各节点函数体内
     从 runtime.context 取资源，替代 M8 期 closure 注入 + 模块级会话工厂。
     """
-    from app.audit.context_schema import AuditContextSchema
+    from app.domain.audit.context_schema import AuditContextSchema
 
     builder = StateGraph(AuditGraphState, context_schema=AuditContextSchema)
 

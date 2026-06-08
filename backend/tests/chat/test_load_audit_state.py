@@ -14,8 +14,8 @@ import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from app.chat.graph import load_audit_state
-from app.chat.state import MainDialogueState
+from app.domain.chat.graph import load_audit_state
+from app.domain.chat.state import MainDialogueState
 from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
 from app.domain.audit.signals import AuditWaitResult
 
@@ -33,7 +33,7 @@ def _make_fake_runtime(sid: str = "00000000-0000-0000-0000-000000000001") -> obj
     """
     from types import SimpleNamespace
 
-    from app.chat.context_schema import ChatContextSchema
+    from app.domain.chat.context_schema import ChatContextSchema
 
     ctx = ChatContextSchema(
         session_id=sid,
@@ -117,10 +117,10 @@ class TestLoadAuditState:
 
         with (
             patch(
-                "app.chat.graph.AuditSignalsManager",
+                "app.domain.chat.graph.AuditSignalsManager",
                 return_value=AsyncMock(poll_wait=_mock_poll_wait),
             ),
-            patch("app.chat.graph._pg_crisis_fallback", side_effect=_mock_pg),
+            patch("app.domain.chat.graph._pg_crisis_fallback", side_effect=_mock_pg),
         ):
             return await load_audit_state(state, runtime)
 
@@ -202,7 +202,7 @@ class TestLoadAuditState:
         state = _make_state(turn_number=1)
         runtime = _make_fake_runtime()
         mock_pg = AsyncMock()
-        with patch("app.chat.graph._pg_crisis_fallback", mock_pg):
+        with patch("app.domain.chat.graph._pg_crisis_fallback", mock_pg):
             result = await load_audit_state(state, runtime)
         mock_pg.assert_not_called()  # 首轮不走 PG
         audit = result.get("audit_state", {})

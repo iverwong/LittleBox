@@ -1,4 +1,4 @@
-"""Tests for app.chat.extractors — provider-aware finish_reason / reasoning extraction.
+"""Tests for app.domain.chat.llm_extractors — provider-aware finish_reason / reasoning extraction.
 
 M6 patch 2 (Step 11.2): covers every provider × field location combination.
 """

@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from app.chat.graph import build_main_graph, route_by_risk
+from app.domain.chat.graph import build_main_graph, route_by_risk
 
 
 def test_build_main_graph_returns_compiled():
@@ -21,7 +21,7 @@ def test_route_by_risk_four_branches():
 
     计划 §3 字面 "safe" 判定为计划误差（H2）。
     """
-    from app.chat.state import MainDialogueState
+    from app.domain.chat.state import MainDialogueState
 
     state: MainDialogueState = {
         "messages": [],

@@ -15,7 +15,6 @@ from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
-from app.chat.context_schema import ChatContextSchema
 from app.core.db import get_db
 from app.core.enums import MessageRole, MessageStatus, SessionStatus
 from app.core.locks import (
@@ -29,6 +28,7 @@ from app.core.time import SHANGHAI
 from app.domain.accounts.models import ChildProfile, User
 from app.domain.accounts.schemas import AccountOut, ChildProfileOut, CurrentAccount
 from app.domain.auth.deps import get_current_account, require_child
+from app.domain.chat.context_schema import ChatContextSchema
 from app.domain.chat.models import Message
 from app.domain.chat.models import Session as SessionModel
 from app.domain.chat.pagination import decode_cursor, encode_cursor
@@ -373,7 +373,7 @@ async def chat_stream(
         )
         if child_profile is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "ChildProfileNotFound")
-        from app.chat.prompts import compute_age
+        from app.domain.chat.prompts import compute_age
 
         _age = compute_age(child_profile.birth_date)
         _gender = child_profile.gender.value if child_profile.gender else None
@@ -393,7 +393,7 @@ async def chat_stream(
         # 段一：LLM consumption 独立 bg task；段二：StreamingResponse 帧转发
         rr: RuntimeResources = request.app.state.resources
 
-        from app.chat.state import MainDialogueState
+        from app.domain.chat.state import MainDialogueState
 
         ctx = ChatContextSchema(
             session_id=sid,

@@ -28,13 +28,17 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from sqlalchemy import select
 
-from app.chat.context import (
+from app.core.llm import build_crisis_llm, build_main_llm, build_redline_llm
+from app.core.llm_extractors import extract_finish_reason, extract_reasoning_content, extract_usage
+from app.domain.audit.models import RollingSummary
+from app.domain.audit.signals import AuditSignalsManager
+from app.domain.chat.context import (
     build_crisis_context,
     build_redline_context,
     load_active_history_for_assembly,
 )
-from app.chat.context_schema import ChatContextSchema
-from app.chat.prompts import (
+from app.domain.chat.context_schema import ChatContextSchema
+from app.domain.chat.prompts import (
     build_crisis_system_prompt,
     build_redline_system_prompt,
     build_system_prompt,
@@ -42,11 +46,7 @@ from app.chat.prompts import (
     format_reentry_wrapper_crisis,
     format_reentry_wrapper_redline,
 )
-from app.chat.state import AuditState, MainDialogueState
-from app.core.llm import build_crisis_llm, build_main_llm, build_redline_llm
-from app.core.llm_extractors import extract_finish_reason, extract_reasoning_content, extract_usage
-from app.domain.audit.models import RollingSummary
-from app.domain.audit.signals import AuditSignalsManager
+from app.domain.chat.state import AuditState, MainDialogueState
 
 if TYPE_CHECKING:
     from langgraph.runtime import Runtime
