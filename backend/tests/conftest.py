@@ -314,6 +314,7 @@ def _make_mock_resources(redis_client: FakeRedis):
     mock_rr.settings.compression_provider = "deepseek"
     mock_rr.settings.deepseek_api_key.get_secret_value.return_value = ""
     mock_rr.db_session_factory = MagicMock()
+    mock_rr.db_session_factory.return_value.__aenter__.return_value = MagicMock(spec=AsyncSession)
     mock_rr.audit_redis = redis_client
     mock_rr.arq_pool = AsyncMock()
     mock_rr.arq_pool.close = AsyncMock()
