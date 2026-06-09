@@ -452,6 +452,11 @@ async def chat_stream(
                 state=state,
                 stop_event=stop_event,
                 protected_id=result.protected_id,
+                # 与 ctx.user_input 同源:Row 3/5 用 req.content,Row 6 复用孤儿用 regen_user_input。
+                # 透传原语字符串而非 ORM 对象,避免跨 session 边界 detached 风险。
+                protected_content=(
+                    result.regen_user_input if result.regen_user_input is not None else req.content
+                ),
                 age=_age,
                 gender=_gender,
             ),
