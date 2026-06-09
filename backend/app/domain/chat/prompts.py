@@ -15,10 +15,9 @@
 14 个 prompt 占位 slot 待专人审核后填充。
 """
 
-from datetime import date, datetime
-from zoneinfo import ZoneInfo
-
 from langchain_core.messages import SystemMessage
+
+from app.domain.accounts.schemas import ChildProfileSnapshot
 
 # ---- Stub constants (stable, assertable in tests) ----
 STUB_IDENTITY = "[STUB identity]"
@@ -32,18 +31,7 @@ STUB_GENDER_MALE = "[STUB gender:male]"
 STUB_GENDER_FEMALE = "[STUB gender:female]"
 # Total: 14 prompt slots
 
-
-def compute_age(birth_date: date, tz: str = "Asia/Shanghai") -> int:
-    """Compute age as of today in the given timezone.
-
-    Uses zone-aware date so that UTC midnight vs Asia/Shanghai midnight
-    boundary cases are handled correctly.
-    """
-    today = datetime.now(ZoneInfo(tz)).date()
-    years = today.year - birth_date.year
-    if (today.month, today.day) < (birth_date.month, birth_date.day):
-        years -= 1
-    return years
+# compute_age 已迁至 core/time.py::age_at
 
 
 def _identity_block() -> str:
@@ -84,7 +72,7 @@ def _gender_block(gender: str | None) -> str | None:
     return None
 
 
-def build_system_prompt(age: int, gender: str | None) -> SystemMessage:
+def build_system_prompt(profile: ChildProfileSnapshot) -> SystemMessage:
     """Build the 5-section system prompt.
 
     Section order (cache-optimized, baseline §7.3 L1→L5):
@@ -94,17 +82,17 @@ def build_system_prompt(age: int, gender: str | None) -> SystemMessage:
       4. 关于对方的性别 (gender block; None/unknown → section omitted)
       5. 当前对话上下文 (age literal only here — prefix-cache constraint)
 
-    Signature accepts ONLY (age: int, gender: str | None).
+    Signature accepts ONLY (profile: ChildProfileSnapshot).
     Rejects any extra field at call site (TypeError).
     """
     parts: list[str] = []
     parts.append(f"# 身份与原则\n{_identity_block()}")
     parts.append(f"# 安全底线\n{_safety_block()}")
-    parts.append(f"# 对话风格\n{_tier_block(age)}")
-    g = _gender_block(gender)
+    parts.append(f"# 对话风格\n{_tier_block(profile.age)}")
+    g = _gender_block(profile.gender)
     if g is not None:
         parts.append(f"# 关于对方的性别\n{g}")
-    parts.append(f"# 当前对话上下文\n对方今年 {age} 岁。")
+    parts.append(f"# 当前对话上下文\n对方今年 {profile.age} 岁。")
     return SystemMessage(content="\n\n".join(parts))
 
 
@@ -149,29 +137,29 @@ STUB_GUIDANCE_WRAPPER = (
 )
 
 
-def build_crisis_system_prompt(age: int, gender: str | None) -> SystemMessage:
+def build_crisis_system_prompt(profile: ChildProfileSnapshot) -> SystemMessage:
     """危机接管 system prompt，5 段结构同 build_system_prompt。"""
     parts: list[str] = []
     parts.append(f"# 身份与原则\n{STUB_CRISIS_SYSTEM_PROMPT}")
     parts.append(f"# 安全底线\n{STUB_CRISIS_SYSTEM_PROMPT}")
-    parts.append(f"# 对话风格\n{_tier_block(age)}")
-    g = _gender_block(gender)
+    parts.append(f"# 对话风格\n{_tier_block(profile.age)}")
+    g = _gender_block(profile.gender)
     if g is not None:
         parts.append(f"# 关于对方的性别\n{g}")
-    parts.append(f"# 当前对话上下文\n对方今年 {age} 岁。")
+    parts.append(f"# 当前对话上下文\n对方今年 {profile.age} 岁。")
     return SystemMessage(content="\n\n".join(parts))
 
 
-def build_redline_system_prompt(age: int, gender: str | None) -> SystemMessage:
+def build_redline_system_prompt(profile: ChildProfileSnapshot) -> SystemMessage:
     """红线接管 system prompt，5 段结构同 build_system_prompt。"""
     parts: list[str] = []
     parts.append(f"# 身份与原则\n{STUB_REDLINE_SYSTEM_PROMPT}")
     parts.append(f"# 安全底线\n{STUB_REDLINE_SYSTEM_PROMPT}")
-    parts.append(f"# 对话风格\n{_tier_block(age)}")
-    g = _gender_block(gender)
+    parts.append(f"# 对话风格\n{_tier_block(profile.age)}")
+    g = _gender_block(profile.gender)
     if g is not None:
         parts.append(f"# 关于对方的性别\n{g}")
-    parts.append(f"# 当前对话上下文\n对方今年 {age} 岁。")
+    parts.append(f"# 当前对话上下文\n对方今年 {profile.age} 岁。")
     return SystemMessage(content="\n\n".join(parts))
 
 

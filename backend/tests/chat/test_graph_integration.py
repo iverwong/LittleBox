@@ -17,7 +17,6 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-from app.domain.chat.context_schema import ChatContextSchema
 from app.domain.chat.graph import (
     build_messages_crisis,
     build_messages_main,
@@ -105,16 +104,16 @@ def _make_runtime(
     db_session_factory=None,
 ) -> SimpleNamespace:
     """构造最小 Runtime[ChatContextSchema]，db_session_factory 可传真实 factory。"""
-    ctx = ChatContextSchema(
+    from tests.conftest import make_chat_context, make_child_profile_snapshot
+
+    ctx = make_chat_context(
         session_id=session_id,
-        child_user_id="child-1",
-        child_profile={},
-        age=age,
-        gender=gender,
+        child_user_id="child-1",  # 测试 fixture 用字符串标识符,实际不被读
         user_input=user_input,
         settings=settings or _mock_settings(),
         db_session_factory=db_session_factory or MagicMock(),
         audit_redis=MagicMock(),
+        profile=make_child_profile_snapshot(age=age, gender=gender),
     )
     return SimpleNamespace(context=ctx)
 

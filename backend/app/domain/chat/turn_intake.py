@@ -115,44 +115,41 @@ async def intake_human_message(
         await db.flush()
         hid = human.id
         user_msg = human
-    else:
-        # last_msg.role == MessageRole.human
-        is_orphan = last_msg.role == MessageRole.human
-
-        if is_orphan:
-            # Row 5、6、7
-            if req.regenerate_for is None:
-                # Row 5:孤儿 + null → UPDATE 旧行 discarded + INSERT 新行
-                await db.execute(
-                    update(Message)
-                    .where(Message.id == last_msg.id)
-                    .values(status=MessageStatus.discarded),
-                )
-                new_human = Message(
-                    session_id=sid,
-                    role=MessageRole.human,
-                    status=MessageStatus.active,
-                    content=req.content,
-                    turn_number=turn_number,
-                )
-                db.add(new_human)
-                await db.flush()
-                hid = new_human.id
-                user_msg = new_human
-            elif req.regenerate_for == str(last_msg.id):
-                # Row 6:孤儿 + =hid → 复用孤儿行(不新增行,不更新内容)
-                if req.content != "":
-                    raise HTTPException(status.HTTP_400_BAD_REQUEST, "RegenerateForInvalid")
-                hid = last_msg.id
-                # user_msg 保持 None — 复用已有消息,不新增
-                regen_user_input = last_msg.content  # 喂入 ctx.user_input(见上方注释)
-            else:
-                # Row 7:孤儿 + ≠hid → 400
+    elif last_msg.role == MessageRole.human:
+        # Row 5、6、7
+        if req.regenerate_for is None:
+            # Row 5:孤儿 + null → UPDATE 旧行 discarded + INSERT 新行
+            await db.execute(
+                update(Message)
+                .where(Message.id == last_msg.id)
+                .values(status=MessageStatus.discarded),
+            )
+            new_human = Message(
+                session_id=sid,
+                role=MessageRole.human,
+                status=MessageStatus.active,
+                content=req.content,
+                turn_number=turn_number,
+            )
+            db.add(new_human)
+            await db.flush()
+            hid = new_human.id
+            user_msg = new_human
+        elif req.regenerate_for == str(last_msg.id):
+            # Row 6:孤儿 + =hid → 复用孤儿行(不新增行,不更新内容)
+            if req.content != "":
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "RegenerateForInvalid")
+            hid = last_msg.id
+            # user_msg 保持 None — 复用已有消息,不新增
+            regen_user_input = last_msg.content  # 喂入 ctx.user_input(见上方注释)
         else:
-            # 非孤儿 human 不可能成为末条 active 行(Gate A 闭合论证)。
-            # 此分支不可达——raise 以捕获未来状态空间错误。
-            raise AssertionError("unreachable: non-orphan human cannot be last active row")
+            # Row 7:孤儿 + ≠hid → 400
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "RegenerateForInvalid")
+    else:
+        # 兜底:既不是 None/ai/human 任一预期分支(覆盖未来 MessageRole 扩列
+        # 或 DB 脏值等异常状态空间)。Gate A 闭合论证已保证 human 分支内部
+        # 不存在"非孤儿"次态——见 docstring。
+        raise AssertionError(f"unreachable: unexpected last_msg.role={last_msg.role!r}")
 
     # Row 1 (last_msg is None) 无旧消息可压缩,protected_id 置 None
     protected_id: UUID | None = None

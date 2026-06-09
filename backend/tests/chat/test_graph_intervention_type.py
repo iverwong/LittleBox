@@ -15,9 +15,9 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
-from app.domain.chat.context_schema import ChatContextSchema
 from app.domain.chat.graph import build_main_graph
 from app.domain.chat.state import AuditState, MainDialogueState
+from tests.conftest import make_chat_context, make_child_profile_snapshot
 from app.core.config import settings
 from app.core.enums import UserRole
 from app.domain.accounts.models import Family, FamilyMember, User
@@ -126,11 +126,11 @@ async def test_crisis_emits_crisis(concurrent_db_sessions, engine):
 
     factory = async_sessionmaker(engine, expire_on_commit=False)
     audit = _audit(crisis_locked=True, target_message_id=anchor_id)
-    ctx = ChatContextSchema(
-        session_id=sid, child_user_id=child_uid, child_profile={},
-        age=8, gender="male", user_input="test",
+    ctx = make_chat_context(
+        session_id=sid, child_user_id=child_uid, user_input="test",
         settings=settings, db_session_factory=factory,
         audit_redis=AsyncMock(),
+        profile=make_child_profile_snapshot(age=8, gender="male"),
     )
 
     with (
@@ -179,11 +179,11 @@ async def test_redline_emits_redline(concurrent_db_sessions, engine):
 
     factory = async_sessionmaker(engine, expire_on_commit=False)
     audit = _audit(redline_triggered=True)
-    ctx = ChatContextSchema(
-        session_id=sid, child_user_id=child_uid, child_profile={},
-        age=8, gender="male", user_input="test",
+    ctx = make_chat_context(
+        session_id=sid, child_user_id=child_uid, user_input="test",
         settings=settings, db_session_factory=factory,
         audit_redis=AsyncMock(),
+        profile=make_child_profile_snapshot(age=8, gender="male"),
     )
 
     with (
@@ -235,11 +235,11 @@ async def test_guided_emits_guided(concurrent_db_sessions, engine):
 
     factory = async_sessionmaker(engine, expire_on_commit=False)
     audit = _audit(guidance="be gentle")  # 唯一差异：guidance 非 None
-    ctx = ChatContextSchema(
-        session_id=sid, child_user_id=child_uid, child_profile={},
-        age=8, gender="male", user_input="test",
+    ctx = make_chat_context(
+        session_id=sid, child_user_id=child_uid, user_input="test",
         settings=settings, db_session_factory=factory,
         audit_redis=AsyncMock(),
+        profile=make_child_profile_snapshot(age=8, gender="male"),
     )
 
     with (
@@ -293,11 +293,11 @@ async def test_normal_emits_nothing(concurrent_db_sessions, engine):
 
     factory = async_sessionmaker(engine, expire_on_commit=False)
     audit = _audit(guidance=None)  # 唯一差异：guidance None
-    ctx = ChatContextSchema(
-        session_id=sid, child_user_id=child_uid, child_profile={},
-        age=8, gender="male", user_input="test",
+    ctx = make_chat_context(
+        session_id=sid, child_user_id=child_uid, user_input="test",
         settings=settings, db_session_factory=factory,
         audit_redis=AsyncMock(),
+        profile=make_child_profile_snapshot(age=8, gender="male"),
     )
 
     with (

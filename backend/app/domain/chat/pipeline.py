@@ -14,6 +14,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
+from langchain_core.messages import HumanMessage
 from redis.asyncio import Redis
 from sqlalchemy import select
 
@@ -50,8 +51,7 @@ async def run_llm_pipeline(
     state: ChatStreamState,
     stop_event: asyncio.Event,
     protected_id: UUID | None = None,
-    age: int = 8,
-    gender: str | None = None,
+    protected_content: str | None = None,
 ) -> None:
     """段一:LLM consumption 协程,在独立 asyncio.Task 中运行。
 
@@ -117,6 +117,10 @@ async def run_llm_pipeline(
                                 "this should not happen in production"
                             )
 
+                        # 提到压缩块顶端:仅在 actives_orm 非空时真正赋值,
+                        # 但 L175 复用需要它已在 scope 中,故先 None 声明。
+                        _summary_obj: Message | None = None
+
                         actives_orm = (
                             (
                                 await db.execute(
@@ -148,14 +152,16 @@ async def run_llm_pipeline(
                             summary = extract_compression_summary(raw)
                             for mo in actives_orm:
                                 mo.status = MessageStatus.compressed
-                            db.add(
-                                Message(
-                                    session_id=sid,
-                                    role=MessageRole.summary,
-                                    status=MessageStatus.active,
-                                    content=summary,
-                                )
+                            # 命名 + flush:让 server_default 填充 id / created_at,
+                            # 之后在 initial_state 构造处直接复用本对象,不再回 DB 二次 SELECT
+                            _summary_obj = Message(
+                                session_id=sid,
+                                role=MessageRole.summary,
+                                status=MessageStatus.active,
+                                content=summary,
                             )
+                            db.add(_summary_obj)
+                            await db.flush()
                         else:
                             logger.info(
                                 "compression noop for session %s: no messages to compress", sid
@@ -165,28 +171,17 @@ async def run_llm_pipeline(
                         await db.commit()
 
                         # 手动构造 initial_state["messages"]
-                        _sp = build_system_prompt(age, gender)
-                        _new_hist = []
+                        _sp = build_system_prompt(ctx.child_profile)
+                        _new_hist: list = []
 
-                        if actives_orm:
-                            _summary_msg = (
-                                await db.execute(
-                                    select(Message)
-                                    .where(
-                                        Message.session_id == sid,
-                                        Message.role == MessageRole.summary,
-                                        Message.status == MessageStatus.active,
-                                    )
-                                    .order_by(Message.created_at.desc())
-                                    .limit(1)
-                                )
-                            ).scalar_one()
-                            _new_hist.append(_to_lc_message(_summary_msg))
+                        if _summary_obj is not None:
+                            # 复用上方 flush 后的 _summary_obj,不再二次 SELECT
+                            _new_hist.append(_to_lc_message(_summary_obj))
 
-                        _protected_msg = (
-                            await db.execute(select(Message).where(Message.id == protected_id))
-                        ).scalar_one()
-                        _new_hist.append(_to_lc_message(_protected_msg))
+                        # protected 消息的 content 由 me.py 透传过来(原语字符串),
+                        # 避免跨 session 边界传 ORM 对象(detached / identity map 不同步风险)
+                        if protected_content is not None:
+                            _new_hist.append(HumanMessage(content=protected_content))
 
                         initial_state["messages"] = [_sp, *_new_hist]
 

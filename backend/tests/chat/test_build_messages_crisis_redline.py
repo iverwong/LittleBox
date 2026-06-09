@@ -26,8 +26,10 @@ _STATE: MainDialogueState = {
 
 def _make_fake_ctx():
     from types import SimpleNamespace
+    from tests.conftest import make_child_profile_snapshot
     return SimpleNamespace(
-        session_id="sid", user_input="我很难过", age=10, gender="male",
+        session_id="sid", user_input="我很难过",
+        child_profile=make_child_profile_snapshot(age=10, gender="male"),
         settings=MagicMock(), db_session_factory=MagicMock(),
     )
 

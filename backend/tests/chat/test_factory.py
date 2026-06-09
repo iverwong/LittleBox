@@ -5,7 +5,9 @@ registry dispatch + ChatDeepSeek primary + fallback chain coverage.
 M8-hotfix: adds audit_bailian registry key and audit LLM retry/fallback tests.
 """
 
+import asyncio
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from app.core.llm import (
@@ -260,9 +262,7 @@ class TestChatDeepSeekConstruction:
         monkeypatch.setattr(ChatDeepSeek, "__init__", mock_init)
 
         settings = _FakeSettings()
-        assert settings.audit_model != settings.deepseek_model, (
-            "fixture 同值会让本测试退化为空断言"
-        )
+        assert settings.audit_model != settings.deepseek_model, "fixture 同值会让本测试退化为空断言"
         _PROVIDER_REGISTRY["audit_deepseek"](settings)
 
         assert captured.get("model") == settings.audit_model
@@ -345,6 +345,7 @@ class TestChatDeepSeekThinkingParams:
 
 # ---- T5c: compression factory thinking params ----
 
+
 class TestCompressionFactory:
     """compression_deepseek 的 thinking 配置由 compression_thinking_enabled 控制（默认关闭）。"""
 
@@ -380,7 +381,6 @@ class TestCompressionFactory:
 # ---- T6: get_chat_llm backward compat ----
 
 
-
 # ---- T7: audit LLM retry + fallback fault injection ----
 # 验证 build_audit_llm 的 with_retry / with_fallbacks 在 HTTP 层正确工作。
 # 通过 respx mock HTTP 层，注入瞬态错误确认重试机制生效。
@@ -389,7 +389,19 @@ class TestCompressionFactory:
 class TestAuditLlmRetry:
     """审查 LLM with_retry / with_fallbacks 故障注入测试。"""
 
-    async def test_primary_retry_on_connect_error_then_success(self) -> None:
+    @pytest.fixture
+    def _no_retry_backoff(self, monkeypatch):
+        """把 tenacity 退避入口 asyncio.sleep 置 no-op,使重试真实发生但耗时归零。
+
+        拦截链:build_audit_llm → Runnable.with_retry → tenacity AsyncRetrying →
+        _portable_async_sleep → asyncio.sleep(每次 lazy import,模块层 patch 仍生效)。
+        monkeypatch 在 fixture teardown 时自动还原,作用域限定在该 fixture 挂载的测试。
+        """
+        sleep_mock = AsyncMock()
+        monkeypatch.setattr(asyncio, "sleep", sleep_mock)
+        return sleep_mock
+
+    async def test_primary_retry_on_connect_error_then_success(self, _no_retry_backoff) -> None:
         """主端首次 ConnectError → with_retry 重试 → 第二次成功。"""
         import httpx
         import respx
@@ -406,25 +418,29 @@ class TestAuditLlmRetry:
                     httpx.Response(
                         status_code=200,
                         json={
-                            "choices": [{
-                                "index": 0,
-                                "message": {"role": "assistant", "content": "测试回复"},
-                                "finish_reason": "stop",
-                            }],
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "message": {"role": "assistant", "content": "测试回复"},
+                                    "finish_reason": "stop",
+                                }
+                            ],
                         },
                     ),
                 ],
             )
 
             from app.domain.audit.llm import build_audit_llm
+
             llm = build_audit_llm(settings)
             from langchain_core.messages import HumanMessage
+
             result = await llm.ainvoke([HumanMessage(content="你好")])
             assert result.content is not None
             # 第 1 次失败 + 第 2 次成功 = 2 次 HTTP 调用
             assert len(respx_mock.calls) == 2
 
-    async def test_primary_all_fail_uses_fallback(self) -> None:
+    async def test_primary_all_fail_uses_fallback(self, _no_retry_backoff) -> None:
         """主端持续 ConnectError → with_retry 耗尽 → fallback 百炼返回成功。"""
         import httpx
         import respx
@@ -437,25 +453,27 @@ class TestAuditLlmRetry:
             primary_route = respx_mock.post(primary_url)
             # 主端 3 次全部 ConnectError
             primary_route.mock(
-                side_effect=[
-                    httpx.ConnectError("mock connection refused") for _ in range(3)
-                ],
+                side_effect=[httpx.ConnectError("mock connection refused") for _ in range(3)],
             )
             # 备用端成功
             respx_mock.post(fallback_url).respond(
                 status_code=200,
                 json={
-                    "choices": [{
-                        "index": 0,
-                        "message": {"role": "assistant", "content": "备端回复"},
-                        "finish_reason": "stop",
-                    }],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "备端回复"},
+                            "finish_reason": "stop",
+                        }
+                    ],
                 },
             )
 
             from app.domain.audit.llm import build_audit_llm
+
             llm = build_audit_llm(settings)
             from langchain_core.messages import HumanMessage
+
             result = await llm.ainvoke([HumanMessage(content="你好")])
             assert result.content is not None
 
@@ -466,16 +484,21 @@ class TestAuditLlmRetry:
 
 class _FakeRunnable:
     """最小 Runnable 假实现，仅用于验证注入缝路由是否正确。"""
+
     async def astream(self, input, config=None):  # noqa: A003
         yield self
+
     async def ainvoke(self, input, config=None):
         return self
+
     def bind_tools(self, tools, **kwargs):  # noqa: A003
         """bind_tools 链式方法：build_audit_llm 内部调此包装 with_retry。"""
         return self
+
     def with_retry(self, **kwargs):
         """with_retry 链式方法：build_audit_llm 内部使用。"""
         return self
+
     def with_fallbacks(self, fallbacks, **kwargs):
         """with_fallbacks 链式方法：build_audit_llm 内部使用。"""
         return self
@@ -487,11 +510,13 @@ class TestInjectionSeam:
     def teardown_method(self) -> None:
         """每测试后清理 override，避免跨测试泄漏。"""
         from app.core.llm import clear_test_llm
+
         clear_test_llm()
 
     def test_set_provider_override_returns_fake(self) -> None:
         """set_test_llm("deepseek", fake) → build_provider_llm 返回 fake。"""
         from app.core.llm import build_provider_llm, set_test_llm
+
         fake = _FakeRunnable()
         set_test_llm("deepseek", fake)
         result = build_provider_llm("deepseek", None)
@@ -500,6 +525,7 @@ class TestInjectionSeam:
     def test_audit_provider_override_returns_fake(self) -> None:
         """set_test_llm("audit_deepseek", fake) → build_provider_llm 返回 fake。"""
         from app.core.llm import build_provider_llm, set_test_llm
+
         fake = _FakeRunnable()
         set_test_llm("audit_deepseek", fake)
         result = build_provider_llm("audit_deepseek", None)
@@ -512,6 +538,7 @@ class TestInjectionSeam:
             set_test_llm,
         )
         from langchain_openai import ChatOpenAI
+
         fake = _FakeRunnable()
         set_test_llm("deepseek", fake)
 
@@ -528,6 +555,7 @@ class TestInjectionSeam:
             clear_test_llm,
             set_test_llm,
         )
+
         fake_ds = _FakeRunnable()
         fake_audit = _FakeRunnable()
         set_test_llm("deepseek", fake_ds)
@@ -537,6 +565,7 @@ class TestInjectionSeam:
         # deepseek 恢复 registry，audit_deepseek 仍 override
         result_ds = build_provider_llm("deepseek", _FakeSettings())
         from langchain_deepseek import ChatDeepSeek
+
         assert isinstance(result_ds, ChatDeepSeek)
 
         result_audit = build_provider_llm("audit_deepseek", None)
@@ -549,12 +578,14 @@ class TestInjectionSeam:
             clear_test_llm,
             set_test_llm,
         )
+
         set_test_llm("deepseek", _FakeRunnable())
         set_test_llm("audit_deepseek", _FakeRunnable())
         clear_test_llm()
         # 两个 provider 都恢复 registry
         result_ds = build_provider_llm("deepseek", _FakeSettings())
         from langchain_deepseek import ChatDeepSeek
+
         assert isinstance(result_ds, ChatDeepSeek)
 
         result_audit = build_provider_llm("audit_deepseek", _FakeSettings())
@@ -563,6 +594,7 @@ class TestInjectionSeam:
     def test_build_main_llm_respects_override(self) -> None:
         """build_main_llm 内部调 build_provider_llm("deepseek", ...)，应返回 override。"""
         from app.core.llm import build_main_llm, set_test_llm
+
         fake = _FakeRunnable()
         set_test_llm("deepseek", fake)
         result = build_main_llm(_FakeSettings(enable_fallback=False))
@@ -571,6 +603,7 @@ class TestInjectionSeam:
     def test_build_crisis_llm_respects_override(self) -> None:
         """build_crisis_llm 内部调 build_provider_llm("audit_deepseek", ...)，应返回 override。"""
         from app.core.llm import build_crisis_llm, set_test_llm
+
         fake = _FakeRunnable()
         set_test_llm("audit_deepseek", fake)
         result = build_crisis_llm(_FakeSettings())
@@ -578,8 +611,9 @@ class TestInjectionSeam:
 
     def test_build_audit_llm_respects_override(self) -> None:
         """build_audit_llm 内部调 build_provider_llm("audit_deepseek", ...)，应返回 override。"""
-        from app.domain.audit.llm import build_audit_llm
         from app.core.llm import set_test_llm
+        from app.domain.audit.llm import build_audit_llm
+
         fake = _FakeRunnable()
         set_test_llm("audit_deepseek", fake)
         result = build_audit_llm(_FakeSettings())
@@ -588,4 +622,5 @@ class TestInjectionSeam:
     def test_override_empty_after_teardown(self) -> None:
         """teardown_method 后 _test_llm_overrides 应为空。"""
         from app.core.llm import _test_llm_overrides
+
         assert _test_llm_overrides == {}
