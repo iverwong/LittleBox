@@ -537,6 +537,7 @@ async def test_lock_released_on_non_http_exception_between_commit1_and_create_ta
 
     def _raise_on_chat_llm(coro, *, name="", **kwargs):
         if name and name.startswith("chat-llm-"):
+            coro.close()  # 显式消费未启动协程,避免 GC 阶段触发 never-awaited 警告
             raise RuntimeError("injected crash")
         return _orig_create_task(coro, name=name, **kwargs)
 
