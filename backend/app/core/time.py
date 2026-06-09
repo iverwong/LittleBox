@@ -25,3 +25,16 @@ def logical_day(ts: datetime, boundary_hour: int = 0) -> date:
     if ts.tzinfo is None:
         raise ValueError("ts must be timezone-aware")
     return (ts.astimezone(SHANGHAI) - timedelta(hours=boundary_hour)).date()
+
+
+def age_at(birth_date: date, tz: str = "Asia/Shanghai") -> int:
+    """Compute age as of today in the given timezone.
+
+    行为与原 chat/prompts.py::compute_age 字节等价。从 prompt 模块提到 core
+    是因为「按生日算年龄」是中性时区工具，不属于 prompt 关注点。
+    """
+    today = datetime.now(ZoneInfo(tz)).date()
+    years = today.year - birth_date.year
+    if (today.month, today.day) < (birth_date.month, birth_date.day):
+        years -= 1
+    return years

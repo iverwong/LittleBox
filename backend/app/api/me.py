@@ -25,9 +25,14 @@ from app.core.locks import (
 )
 from app.core.redis import get_redis
 from app.core.runtime import RuntimeResources
-from app.core.time import SHANGHAI
+from app.core.time import SHANGHAI, age_at
 from app.domain.accounts.models import ChildProfile, User
-from app.domain.accounts.schemas import AccountOut, ChildProfileOut, CurrentAccount
+from app.domain.accounts.schemas import (
+    AccountOut,
+    ChildProfileOut,
+    ChildProfileSnapshot,
+    CurrentAccount,
+)
 from app.domain.auth.deps import get_current_account, require_child
 from app.domain.chat.context_schema import ChatContextSchema
 from app.domain.chat.models import Message
@@ -367,7 +372,8 @@ async def chat_stream(
         # ---- 准备 child_profile 数据（无 DB 写入依赖） ----
         # child 与 child_profile 强绑定（M4 创建流程）：profile 缺失是异常状态，
         # 不应静默兜底用默认人设喂 LLM，直接 404 让外层流程修复。
-        # child_profile={} 字段保留作为家长端配置扩展点（实时生效，不缓存）。
+        # me.py 是 chat 域唯一边界：此处构造 ChildProfileSnapshot（frozen dataclass），
+        # 消费侧 prompts 三个 builder + audit graph 节点都从 ctx.child_profile 读取。
         # 按 child_user_id 查（不是 PK id —— ChildProfile.id 是 gen_random_uuid()，
         # 跟 current.id 不同源；用 db.get 按 PK 查永远 miss，会让所有 child 走兜底
         # 或 404 路径，见 f12171b 的隐式 bug 暴露）。
@@ -376,10 +382,14 @@ async def chat_stream(
         )
         if child_profile is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "ChildProfileNotFound")
-        from app.domain.chat.prompts import compute_age
 
-        _age = compute_age(child_profile.birth_date)
-        _gender = child_profile.gender.value if child_profile.gender else None
+        profile_snapshot = ChildProfileSnapshot(
+            child_user_id=child_profile.child_user_id,
+            nickname=child_profile.nickname,
+            gender=child_profile.gender.value,
+            birth_date=child_profile.birth_date,
+            age=age_at(child_profile.birth_date, tz="Asia/Shanghai"),
+        )
 
         # ---- decision matrix O + first-turn / subsequent-turn transaction ----
         # 决策矩阵 7 row 等价重写(Phase 2.4 抽到 domain/chat/turn_intake.py),
@@ -401,9 +411,7 @@ async def chat_stream(
         ctx = ChatContextSchema(
             session_id=sid,
             child_user_id=current.id,
-            child_profile={},
-            age=_age,
-            gender=_gender,
+            child_profile=profile_snapshot,
             user_input=(
                 result.regen_user_input if result.regen_user_input is not None else req.content
             ),
@@ -457,8 +465,6 @@ async def chat_stream(
                 protected_content=(
                     result.regen_user_input if result.regen_user_input is not None else req.content
                 ),
-                age=_age,
-                gender=_gender,
             ),
             name=f"chat-llm-{sid}",
         )

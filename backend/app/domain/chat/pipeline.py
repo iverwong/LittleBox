@@ -52,8 +52,6 @@ async def run_llm_pipeline(
     stop_event: asyncio.Event,
     protected_id: UUID | None = None,
     protected_content: str | None = None,
-    age: int = 8,
-    gender: str | None = None,
 ) -> None:
     """段一:LLM consumption 协程,在独立 asyncio.Task 中运行。
 
@@ -173,7 +171,7 @@ async def run_llm_pipeline(
                         await db.commit()
 
                         # 手动构造 initial_state["messages"]
-                        _sp = build_system_prompt(age, gender)
+                        _sp = build_system_prompt(ctx.child_profile)
                         _new_hist: list = []
 
                         if _summary_obj is not None:

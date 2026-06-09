@@ -33,14 +33,11 @@ def _make_fake_runtime(sid: str = "00000000-0000-0000-0000-000000000001") -> obj
     """
     from types import SimpleNamespace
 
-    from app.domain.chat.context_schema import ChatContextSchema
+    from tests.conftest import make_chat_context, make_child_profile_snapshot
 
-    ctx = ChatContextSchema(
+    ctx = make_chat_context(
         session_id=sid,
         child_user_id="child-1",
-        child_profile={},
-        age=8,
-        gender=None,
         user_input="test",
         settings=SimpleNamespace(
             main_provider="deepseek",
@@ -60,6 +57,7 @@ def _make_fake_runtime(sid: str = "00000000-0000-0000-0000-000000000001") -> obj
         ),
         db_session_factory=AsyncMock(),
         audit_redis=AsyncMock(),
+        profile=make_child_profile_snapshot(age=8, gender=None),
     )
     return SimpleNamespace(context=ctx)
 

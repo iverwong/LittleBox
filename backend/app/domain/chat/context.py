@@ -5,7 +5,7 @@
   [SystemMessage（rolling-summary，M8 可选）, HumanMessage, AIMessage, ...]
   按 created_at 升序排列，返回全量 active 消息（无 LIMIT 截断）。
 - 返回列表**不含**主 system prompt。主 prompt（身份 / 安全 / 分级 / 性别 / 年龄）
-  由 `prompts.build_system_prompt(age, gender)` 独立生成。
+  由 `prompts.build_system_prompt(profile)` 独立生成。
   调用方拼接：[build_system_prompt(...), *build_context(...), HumanMessage(user_content)]
 
 5 项语义约束：
@@ -17,7 +17,7 @@
   5. 未知 role 兜底转为 HumanMessage（防御性）
 
 调用方模式：
-    system = build_system_prompt(age=child.age, gender=child.gender)
+    system = build_system_prompt(profile)
     history = await build_context(session_id, db)
     llm_messages = [system, *history, HumanMessage(content=new_message)]
 """

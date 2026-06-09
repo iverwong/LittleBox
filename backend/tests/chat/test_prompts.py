@@ -1,17 +1,19 @@
 """Tests for prompts.build_system_prompt.
 
 关注点覆盖：
-1. compute_age tz-aware (UTC 0点 vs Shanghai 昨天边界)
+1. age_at tz-aware (UTC 0点 vs Shanghai 昨天边界，core/time 提级)
 2. gender 整段省略：unknown/null → 不含 "# 关于对方的性别" 标题（4章节版）
-3. 签名级字段消费拒绝：传入多余字段 → TypeError（运行时）
 4. tier 10 边界值落档正确：断言 stub 字面值命中
 5. age 字面值仅在末段出现（prefix-cache 硬约束）
 6. TODO(prompts-content) grep 命中 11 处（9 stub 函数 + 2 说明性文字）
+7. PII / prefix-cache 守卫：nickname / child_user_id / birth_date 字段不泄入 prompt 正文
 """
+import uuid
 from datetime import date
 from unittest.mock import patch
 
 import pytest
+from app.core.time import age_at
 from app.domain.chat.prompts import (
     STUB_CRISIS_SYSTEM_PROMPT,
     STUB_GENDER_FEMALE,
@@ -25,63 +27,63 @@ from app.domain.chat.prompts import (
     build_crisis_system_prompt,
     build_redline_system_prompt,
     build_system_prompt,
-    compute_age,
     format_guidance_wrapper,
     format_reentry_wrapper_crisis,
     format_reentry_wrapper_redline,
 )
 from langchain_core.messages import SystemMessage
+from tests.conftest import make_child_profile_snapshot as make_snapshot
 
 
 class TestComputeAge:
-    """关注点 1：tz-aware compute_age"""
+    """关注点 1：tz-aware age_at（core/time 提级）"""
 
     def test_birthday_passed(self) -> None:
         """正常情况：生日已过，age = today.year - birth.year"""
-        with patch("app.domain.chat.prompts.datetime") as mock_dt:
+        with patch("app.core.time.datetime") as mock_dt:
             mock_dt.now.return_value = __import__("datetime").datetime(2025, 6, 15)
             mock_dt.ZoneInfo = __import__("zoneinfo").ZoneInfo
-            assert compute_age(date(2013, 3, 10)) == 12
+            assert age_at(date(2013, 3, 10)) == 12
 
     def test_birthday_not_yet(self) -> None:
         """生日未到，age 减 1"""
-        with patch("app.domain.chat.prompts.datetime") as mock_dt:
+        with patch("app.core.time.datetime") as mock_dt:
             mock_dt.now.return_value = __import__("datetime").datetime(2025, 6, 15)
             mock_dt.ZoneInfo = __import__("zoneinfo").ZoneInfo
-            assert compute_age(date(2013, 7, 20)) == 11
+            assert age_at(date(2013, 7, 20)) == 11
 
     def test_leap_year_birthday_passed(self) -> None:
         """非闰年 2/28：出生 2000-02-28，今天正好生日，age = 25（已满）。"""
         # 出生 2000-02-28；上海时间 2025-02-28
         # today == birth month-day → birthday IS today → age = 25（刚满）
-        with patch("app.domain.chat.prompts.datetime") as mock_dt:
+        with patch("app.core.time.datetime") as mock_dt:
             mock_dt.now.return_value = __import__("datetime").datetime(2025, 2, 28)
             mock_dt.ZoneInfo = __import__("zoneinfo").ZoneInfo
-            assert compute_age(date(2000, 2, 28)) == 25
+            assert age_at(date(2000, 2, 28)) == 25
 
     def test_leap_year_birthday_not_yet(self) -> None:
         """非闰年 2/28：出生 2000-03-01，今天还未到生日，age = 24。"""
         # 出生 2000-03-01；上海时间 2025-02-28
         # today=(2,28) < birth=(3,1) → birthday not yet → age = 25-1 = 24
-        with patch("app.domain.chat.prompts.datetime") as mock_dt:
+        with patch("app.core.time.datetime") as mock_dt:
             mock_dt.now.return_value = __import__("datetime").datetime(2025, 2, 28)
             mock_dt.ZoneInfo = __import__("zoneinfo").ZoneInfo
-            assert compute_age(date(2000, 3, 1)) == 24
+            assert age_at(date(2000, 3, 1)) == 24
 
     def test_utc_midnight_shanghai_still_yesterday(self) -> None:
         """UTC 0:30 但 Shanghai 是 8:30（昨天23:30）—— age 不增一岁。
 
-        验证 compute_age 用 ZoneInfo("Asia/Shanghai") 而非 UTC date.today()。
+        验证 age_at 用 ZoneInfo("Asia/Shanghai") 而非 UTC date.today()。
         若用 UTC，今天=2025-03-01，birth=2000-03-01 → 25岁。
         用 Shanghai，今天=2025-02-28，birth=2000-03-01 → 24岁。
         """
         # 场景：上海时间 2025-02-28 23:30（UTC 2025-03-01 15:30）
         # mock 上海时间 = 2025-02-28
-        with patch("app.domain.chat.prompts.datetime") as mock_dt:
+        with patch("app.core.time.datetime") as mock_dt:
             mock_dt.now.return_value = __import__("datetime").datetime(2025, 2, 28, 23, 30)
             mock_dt.ZoneInfo = __import__("zoneinfo").ZoneInfo
             # 2000-03-01 出生，上海时间 2025-02-28 尚未过生日 → 24岁
-            assert compute_age(date(2000, 3, 1)) == 24
+            assert age_at(date(2000, 3, 1)) == 24
 
 
 class TestBuildSystemPrompt:
@@ -90,50 +92,49 @@ class TestBuildSystemPrompt:
     # ---- 关注点 2：gender 4 状态 ----
 
     def test_gender_male_has_gender_section(self) -> None:
-        content = build_system_prompt(12, "male").content
+        content = build_system_prompt(make_snapshot(age=12, gender="male")).content
         assert "# 关于对方的性别" in content
         assert STUB_GENDER_MALE in content
 
     def test_gender_female_has_gender_section(self) -> None:
-        content = build_system_prompt(12, "female").content
+        content = build_system_prompt(make_snapshot(age=12, gender="female")).content
         assert "# 关于对方的性别" in content
         assert STUB_GENDER_FEMALE in content
 
     def test_gender_unknown_omits_section(self) -> None:
         """unknown → 整段省略，不留空标题。"""
-        content = build_system_prompt(12, "unknown").content
+        content = build_system_prompt(make_snapshot(age=12, gender="unknown")).content
         assert "# 关于对方的性别" not in content
 
     def test_gender_none_omits_section(self) -> None:
         """None → 整段省略，不留空标题。"""
-        content = build_system_prompt(12, None).content
+        content = build_system_prompt(make_snapshot(age=12, gender=None)).content
         assert "# 关于对方的性别" not in content
 
-    # ---- 关注点 3：签名拒绝多余字段 ----
-
-    def test_rejects_extra_field_concerns(self) -> None:
-        with pytest.raises(TypeError):
-            build_system_prompt(12, "male", concerns="test")  # pyright: ignore[reportCallIssue]
-
-    def test_rejects_extra_field_sensitivity(self) -> None:
-        with pytest.raises(TypeError):
-            build_system_prompt(12, "male", sensitivity=0.5)  # pyright: ignore[reportCallIssue]
-
-    def test_rejects_extra_field_custom_redlines(self) -> None:
-        with pytest.raises(TypeError):
-            build_system_prompt(12, "male", custom_redlines=["x"])  # pyright: ignore[reportCallIssue]
-
-    def test_rejects_extra_field_birth_date(self) -> None:
-        with pytest.raises(TypeError):
-            build_system_prompt(12, "male", birth_date=date(2013, 3, 1))  # pyright: ignore[reportCallIssue]
+    # ---- 关注点 7：PII / prefix-cache 守卫 ----
 
     def test_content_rejects_dict_fields(self) -> None:
-        """运行时：content 字符串不包含字段名字面值。"""
-        content = build_system_prompt(12, "male").content
-        assert "concerns" not in content
-        assert "sensitivity" not in content
-        assert "custom_redlines" not in content
-        assert "birth_date" not in content
+        """PII + prefix-cache 守卫：snapshot 字段不泄入 prompt 正文。
+
+        - nickname / child_user_id / birth_date 字面值不应出现在 LLM 看到的 system prompt
+        - 既保护 PII（child_user_id 是 UUID 不应暴露给 LLM），
+          也保护 prefix-cache（前 4 段 L1-L4 应不含动态数据）
+        """
+        profile = make_snapshot(
+            age=12,
+            gender="male",
+            nickname="secret_nickname",
+            birth_date=date(2013, 3, 1),
+            child_user_id=uuid.UUID("12345678-1234-5678-1234-567812345678"),
+        )
+        content = build_system_prompt(profile).content
+        assert "secret_nickname" not in content
+        assert "12345678" not in content  # child_user_id UUID
+        assert "2013" not in content      # birth_date 年份
+        assert str(profile.child_user_id) not in content
+        assert profile.birth_date.isoformat() not in content
+        # 末段仅含 age 字面值
+        assert "12" in content  # age 应出现（在末段）
 
     # ---- 关注点 4：tier 10 边界值落档 ----
 
@@ -156,14 +157,14 @@ class TestBuildSystemPrompt:
         ],
     )
     def test_tier_boundaries(self, age: int, expected_stub: str) -> None:
-        content = build_system_prompt(age, None).content
+        content = build_system_prompt(make_snapshot(age=age, gender=None)).content
         assert expected_stub in content
 
     # ---- 关注点 5：age 字面值仅在末段 ----
 
     def test_age_literal_only_in_last_section(self) -> None:
         """age 字面值不能出现在前 4 个章节（L1→L4 对 prefix cache 不含动态内容）。"""
-        content = str(build_system_prompt(12, "male").content)
+        content = str(build_system_prompt(make_snapshot(age=12, gender="male")).content)
         sections = content.split("# 当前对话上下文")
         assert len(sections) == 2
         prefix = sections[0]
@@ -174,7 +175,7 @@ class TestBuildSystemPrompt:
 
     @pytest.mark.parametrize("age", [3, 5, 9, 13, 18, 19, 21])
     def test_age_literal_only_in_last_section_all_tiers(self, age: int) -> None:
-        content = str(build_system_prompt(age, None).content)
+        content = str(build_system_prompt(make_snapshot(age=age, gender=None)).content)
         sections = content.split("# 当前对话上下文")
         prefix = sections[0]
         last_section = sections[1]
@@ -185,7 +186,7 @@ class TestBuildSystemPrompt:
 
     def test_section_order_5_chapters(self) -> None:
         """male/female → 5 章节严格按序：身份→安全→对话风格→性别→上下文。"""
-        content = str(build_system_prompt(12, "male").content)
+        content = str(build_system_prompt(make_snapshot(age=12, gender="male")).content)
         order = [
             "# 身份与原则",
             "# 安全底线",
@@ -200,7 +201,7 @@ class TestBuildSystemPrompt:
 
     def test_section_order_4_chapters_gender_unknown(self) -> None:
         """unknown/null → 4 章节严格按序：身份→安全→对话风格→上下文。"""
-        content = build_system_prompt(12, "unknown").content
+        content = build_system_prompt(make_snapshot(age=12, gender="unknown")).content
         order = [
             "# 身份与原则",
             "# 安全底线",
@@ -253,7 +254,7 @@ class TestM9InterventionPrompts:
 
     def test_crisis_system_prompt_has_5_sections(self) -> None:
         """Given age=10 gender=male, When build_crisis_system_prompt, Then 5 段标题存在。"""
-        msg = build_crisis_system_prompt(10, "male")
+        msg = build_crisis_system_prompt(make_snapshot(age=10, gender="male"))
         content = msg.content
         assert isinstance(msg, SystemMessage)
         assert "# 身份与原则" in content
@@ -265,7 +266,7 @@ class TestM9InterventionPrompts:
 
     def test_redline_system_prompt_has_5_sections(self) -> None:
         """Given age=10 gender=male, When build_redline_system_prompt, Then 5 段标题存在。"""
-        msg = build_redline_system_prompt(10, "male")
+        msg = build_redline_system_prompt(make_snapshot(age=10, gender="male"))
         content = msg.content
         assert isinstance(msg, SystemMessage)
         assert "# 身份与原则" in content
@@ -277,13 +278,13 @@ class TestM9InterventionPrompts:
 
     def test_crisis_system_prompt_gender_none_omits_section(self) -> None:
         """Given gender=None, When build_crisis_system_prompt, Then 不含性别段。"""
-        content = build_crisis_system_prompt(10, None).content
+        content = build_crisis_system_prompt(make_snapshot(age=10, gender=None)).content
         assert "# 关于对方的性别" not in content
         assert "对方今年 10 岁。" in content
 
     def test_redline_system_prompt_gender_none_omits_section(self) -> None:
         """Given gender=None, When build_redline_system_prompt, Then 不含性别段。"""
-        content = build_redline_system_prompt(10, None).content
+        content = build_redline_system_prompt(make_snapshot(age=10, gender=None)).content
         assert "# 关于对方的性别" not in content
         assert "对方今年 10 岁。" in content
 

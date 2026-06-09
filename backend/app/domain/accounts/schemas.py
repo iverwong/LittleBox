@@ -8,6 +8,7 @@ auth 域 (LoginResponse) 通过 `from app.domain.auth.schemas import AccountOut`
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Literal, Optional
 
@@ -69,3 +70,23 @@ class ChildProfileOut(BaseModel):
     nickname: str
     gender: Literal["male", "female", "unknown"]
     birth_date: date
+
+
+@dataclass(frozen=True)
+class ChildProfileSnapshot:
+    """跨域传输的 child profile 投影（chat / audit 共用）。
+
+    与 ChildProfileOut 的关系：
+    - ChildProfileOut: Pydantic BaseModel，HTTP 响应序列化
+    - ChildProfileSnapshot: frozen dataclass，LangGraph runtime context 内部投影
+
+    字段全非 Optional：与 ChildProfile ORM nullable=False 对齐。
+    - age: 由 birth_date + tz 算得（me.py 边界算一次，所有 consumer 零开销读）
+    - gender: 已是 ORM .value 字符串（与 ChildProfileOut 一致）
+    """
+
+    child_user_id: uuid.UUID
+    nickname: str
+    gender: str
+    birth_date: date
+    age: int

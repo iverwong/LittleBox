@@ -209,7 +209,7 @@ async def build_messages_main(
             state["turn_number"],
             db,
         )
-    system_prompt = build_system_prompt(ctx.age, ctx.gender)
+    system_prompt = build_system_prompt(ctx.child_profile)
 
     audit = state.get("audit_state", {})
     return {
@@ -247,7 +247,7 @@ async def build_messages_crisis(
         )
     return {
         "messages": [
-            build_crisis_system_prompt(ctx.age, ctx.gender),
+            build_crisis_system_prompt(ctx.child_profile),
             anchor_system,
             *after_anchor,
             HumanMessage(content=format_reentry_wrapper_crisis(ctx.user_input)),
@@ -270,7 +270,7 @@ async def build_messages_redline(
         )
     return {
         "messages": [
-            build_redline_system_prompt(ctx.age, ctx.gender),
+            build_redline_system_prompt(ctx.child_profile),
             *summaries_systems,
             *recent_pairs,
             HumanMessage(content=format_reentry_wrapper_redline(ctx.user_input)),

@@ -226,6 +226,7 @@ def _make_stub_runtime():
     from unittest.mock import AsyncMock
 
     from app.core.config import settings as _app_settings
+    from tests.conftest import make_child_profile_snapshot
 
     return SimpleNamespace(
         context=SimpleNamespace(
@@ -233,9 +234,7 @@ def _make_stub_runtime():
             audit_redis=AsyncMock(),
             session_id="test-sid",
             child_user_id="child-uuid",
-            child_profile={},
-            age=8,
-            gender=None,
+            child_profile=make_child_profile_snapshot(age=8, gender=None),
             user_input="test",
             db_session_factory=AsyncMock(),
         ),

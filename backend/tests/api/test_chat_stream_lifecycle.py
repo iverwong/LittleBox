@@ -139,10 +139,10 @@ async def test_client_disconnect_keeps_bg_task_running(lifecycle_ctx):
         yield {"finish_reason": "stop"}
 
     # 准备段一参数
-    from app.domain.chat.context_schema import ChatContextSchema
-    ctx = ChatContextSchema(
-        session_id=sid, child_user_id=child.id, child_profile={},
-        age=8, gender=None, user_input="测试",
+    from tests.conftest import make_chat_context
+    ctx = make_chat_context(
+        session_id=sid, child_user_id=child.id,
+        user_input="测试",
         settings=lifecycle_ctx.rr.settings,
         db_session_factory=lifecycle_ctx.rr.db_session_factory,
         audit_redis=lifecycle_ctx.redis_client,
@@ -164,7 +164,7 @@ async def test_client_disconnect_keeps_bg_task_running(lifecycle_ctx):
             child_user_id=child.id, turn_number=1,
             initial_state={"messages": []}, ctx=ctx,
             queue=queue, state=state, stop_event=stop_event,
-            protected_id=None, age=8, gender=None,
+            protected_id=None,
         ),
         name=f"chat-llm-{sid}",
     )
@@ -223,10 +223,10 @@ async def test_queue_full_triggers_flow_pause_and_headless_continuation(lifecycl
             yield {"delta": f"x{i}"}
         yield {"finish_reason": "stop"}
 
-    from app.domain.chat.context_schema import ChatContextSchema
-    ctx = ChatContextSchema(
-        session_id=sid, child_user_id=child.id, child_profile={},
-        age=8, gender=None, user_input="测试",
+    from tests.conftest import make_chat_context
+    ctx = make_chat_context(
+        session_id=sid, child_user_id=child.id,
+        user_input="测试",
         settings=lifecycle_ctx.rr.settings,
         db_session_factory=lifecycle_ctx.rr.db_session_factory,
         audit_redis=lifecycle_ctx.redis_client,
@@ -245,7 +245,7 @@ async def test_queue_full_triggers_flow_pause_and_headless_continuation(lifecycl
             child_user_id=child.id, turn_number=1,
             initial_state={"messages": []}, ctx=ctx,
             queue=queue, state=state, stop_event=stop_event,
-            protected_id=None, age=8, gender=None,
+            protected_id=None,
         ),
         name=f"chat-llm-{sid}",
     )

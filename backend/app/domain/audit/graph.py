@@ -30,6 +30,7 @@ from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
 from typing_extensions import TypedDict
 
+from app.domain.accounts.schemas import ChildProfileSnapshot
 from app.domain.audit.llm import build_audit_llm
 from app.domain.audit.prompts import build_audit_system_prompt
 from app.domain.audit.schemas import (
@@ -70,7 +71,7 @@ class AuditGraphState(TypedDict):
 
     sid: str
     turn_number: int
-    child_profile: dict | None
+    child_profile: ChildProfileSnapshot | None  # 暂传 None，sensitivity 接入时改真值
     session_notes_working: str
     tool_iter_count: int
     structured_output: AuditOutputSchema | None
