@@ -20,8 +20,20 @@ from typing import Any, get_type_hints
 import pytest
 from app.core.llm import (
     _TRANSPORTS,
+    ProviderNotRegisteredError,
     _adapter_chat_deepseek,
     _build_binding,
+    _test_llm_overrides,
+    build_compression_llm,
+    build_crisis_llm,
+    build_main_llm,
+    build_provider_llm,
+    build_redline_llm,
+    build_role_fallback,
+    build_role_primary,
+    clear_test_llm,
+    set_test_llm,
+    wrap_resilience,
 )
 from app.core.llm_topology import (
     ENDPOINTS,
@@ -38,6 +50,7 @@ from app.core.llm_topology import (
     Transport,
     resolve_profile,
 )
+from langchain_core.runnables import Runnable, RunnableWithFallbacks
 from langchain_deepseek import ChatDeepSeek
 from pydantic import SecretStr
 
@@ -563,3 +576,337 @@ class TestBuildBinding:
         )
         with pytest.raises(ModelProfileNotRegisteredError, match="qwen-vl"):
             _build_binding(bad_binding, s)
+
+
+# ============================================================================
+# 7. Step 3 · role 驱动入口 + 注入缝（关注点 2/3/4 实证）
+# ============================================================================
+# 覆盖:
+# - build_role_primary / build_role_fallback：直接返回裸 ChatModel 实例（未包
+#   retry / fallback）—— 这是 audit/llm.py 后续 .bind_tools() 的前提
+# - 注入缝：set_test_llm(Role.MAIN, fake) 短路 build_role_primary；
+#   build_role_fallback 不读 override（语义「主端 fake / 备端 real」不变）
+# - wrap_resilience 链式形态：primary.with_retry().with_fallbacks([fallback])
+# - _build_role_llm / build_main_llm / build_crisis_llm / build_redline_llm /
+#   build_compression_llm 串联三者,retry 次数取 ROLES[role].retry_attempts
+# - back-compat shim build_provider_llm：路由 deepseek/audit_deepseek 到
+#   build_role_primary、audit_bailian 到 build_role_fallback、openai/
+#   compression_deepseek/未知抛 ProviderNotRegisteredError
+
+
+class _FakeRunnable:
+    """最小 Runnable 假实现：仅暴露 wrap_resilience 链路所需的 with_retry/with_fallbacks。
+
+    用于注入缝测试：build_role_primary / build_provider_llm 短路返回此类。
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[Any] = []
+
+    def with_retry(self, **kwargs: Any) -> Runnable:
+        self.calls.append(("with_retry", kwargs))
+        return self
+
+    def with_fallbacks(self, fallbacks: list, **kwargs: Any) -> Runnable:
+        self.calls.append(("with_fallbacks", fallbacks, kwargs))
+        return self
+
+    def bind_tools(self, tools: list, **kwargs: Any) -> Runnable:
+        self.calls.append(("bind_tools", tools, kwargs))
+        return self
+
+    async def ainvoke(self, *args: Any, **kwargs: Any) -> Any:
+        return self
+
+    async def astream(self, *args: Any, **kwargs: Any):  # noqa: A003
+        yield self
+
+
+class TestBuildRolePrimary:
+    """build_role_primary：返回裸 ChatModel 实例（未包 retry / fallback）。"""
+
+    def test_returns_chat_deepseek(self) -> None:
+        """Given ROLES[MAIN] When build_role_primary(MAIN) Then 返回 ChatDeepSeek 裸实例。"""
+        s = _FakeSettings()
+        llm = build_role_primary(Role.MAIN, s)
+        assert isinstance(llm, ChatDeepSeek)
+        # 关注点 3 实证:不是 RunnableWithFallbacks（裸实例，audit/llm.py 可直接 .bind_tools()）
+        assert not isinstance(llm, RunnableWithFallbacks)
+
+    def test_returns_chat_deepseek_for_compression(self) -> None:
+        """build_role_primary(COMPRESSION) 返回 ChatDeepSeek 裸实例（temperature 走 adapter）。"""
+        s = _FakeSettings()
+        llm = build_role_primary(Role.COMPRESSION, s)
+        assert isinstance(llm, ChatDeepSeek)
+        # 关注点 3 实证：compression 主端也是裸实例
+        assert not isinstance(llm, RunnableWithFallbacks)
+
+
+class TestBuildRoleFallback:
+    """build_role_fallback：返回 ROLES[role].fallback 的裸实例（不查 override）。"""
+
+    def test_main_fallback_uses_bailian(self) -> None:
+        """build_role_fallback(MAIN) 走 bailian 端点（真兜底）。"""
+        s = _FakeSettings()
+        fb = build_role_fallback(Role.MAIN, s)
+        assert fb is not None
+        assert isinstance(fb, ChatDeepSeek)
+        assert fb.api_base == "https://dashscope.aliyuncs.com/compatible-mode/v1"  # type: ignore[attr-defined]
+
+    def test_compression_fallback_uses_bailian(self) -> None:
+        """build_role_fallback(COMPRESSION) 走 bailian 端点。"""
+        s = _FakeSettings()
+        fb = build_role_fallback(Role.COMPRESSION, s)
+        assert fb is not None
+        assert fb.api_base == "https://dashscope.aliyuncs.com/compatible-mode/v1"  # type: ignore[attr-defined]
+
+    def test_fallback_does_not_check_override(self) -> None:
+        """关注点 2 实证：build_role_fallback 不读 _test_llm_overrides（主端 fake / 备端 real）。"""
+        s = _FakeSettings()
+        fake = _FakeRunnable()
+        set_test_llm(Role.AUDIT, fake)
+        try:
+            # 即使 AUDIT role 被 override,build_role_fallback 仍走真 bailian
+            fb = build_role_fallback(Role.AUDIT, s)
+            assert fb is not None
+            assert fb is not fake  # 不是 override
+            assert isinstance(fb, ChatDeepSeek)
+        finally:
+            clear_test_llm()
+
+
+class TestWrapResilience:
+    """wrap_resilience：primary.with_retry(...).with_fallbacks([fallback]) 链式形态。"""
+
+    def test_chains_retry_then_fallback(self) -> None:
+        """Given primary + fallback When wrap_resilience Then with_retry + with_fallbacks 调用。"""
+        primary = _FakeRunnable()
+        fallback = _FakeRunnable()
+        wrap_resilience(primary, fallback, retry_attempts=3)
+        # _FakeRunnable 链式返回 self,关注点 1 实证:链形态正确
+        assert "with_retry" in [c[0] for c in primary.calls]
+        assert "with_fallbacks" in [c[0] for c in primary.calls]
+        # with_fallbacks 接收的 fallbacks 列表含 fallback 实例
+        wf_call = next(c for c in primary.calls if c[0] == "with_fallbacks")
+        assert wf_call[1] == [fallback]
+
+    def test_retry_attempts_1_no_fallback_chain(self) -> None:
+        """retry_attempts=1 仍走 with_fallbacks 链（'1 = 不重试,仍走 fallback',plan 注释）。"""
+        primary = _FakeRunnable()
+        fallback = _FakeRunnable()
+        wrap_resilience(primary, fallback, retry_attempts=1)
+        assert "with_fallbacks" in [c[0] for c in primary.calls]
+
+    def test_no_fallback_returns_retryable_only(self) -> None:
+        """fallback is None → 仅返回 retryable primary,不调 with_fallbacks。"""
+        primary = _FakeRunnable()
+        wrap_resilience(primary, None, retry_attempts=3)
+        assert "with_retry" in [c[0] for c in primary.calls]
+        assert "with_fallbacks" not in [c[0] for c in primary.calls]
+
+
+class TestBuildRoleLlm:
+    """_build_role_llm：primary + retry + fallback 一体化,retry 取 ROLES[role].retry_attempts。"""
+
+    def test_returns_runnable_with_fallbacks(self) -> None:
+        """_build_role_llm(MAIN) 返回 RunnableWithFallbacks（含 retry + 1 fallback）。"""
+
+        s = _FakeSettings()
+        result = _build_role_llm_for_test(Role.MAIN, s)  # 见下 helper
+        # 包装后是 RunnableWithFallbacks（含 1 个 fallback = bailian）
+        assert isinstance(result, RunnableWithFallbacks)
+        assert len(result.fallbacks) == 1  # type: ignore[attr-defined]
+
+    def test_compression_retry_attempts_1(self) -> None:
+        """compression role 的 retry_attempts=1（plan #2 Iver 拍板）。"""
+        assert ROLES[Role.COMPRESSION].retry_attempts == 1
+
+    def test_main_retry_attempts_3(self) -> None:
+        """main role 的 retry_attempts=3（与旧 build_main_llm 一致）。"""
+        assert ROLES[Role.MAIN].retry_attempts == 3
+
+    def test_audit_retry_attempts_3(self) -> None:
+        """audit role 的 retry_attempts=3（与旧 build_audit_llm 一致）。"""
+        assert ROLES[Role.AUDIT].retry_attempts == 3
+
+
+def _build_role_llm_for_test(role, settings):
+    """测试 helper:从 llm 顶层拿 _build_role_llm(避免循环 import)。"""
+    from app.core.llm import _build_role_llm
+
+    return _build_role_llm(role, settings)
+
+
+class TestBuildMainLlm:
+    """build_main_llm：role=MAIN 入口（crisis/redline 也走此）。"""
+
+    def test_returns_runnable_with_fallbacks(self) -> None:
+        """build_main_llm 返回 RunnableWithFallbacks（retry=3 + bailian 兜底）。"""
+        s = _FakeSettings()
+        result = build_main_llm(s)
+        assert isinstance(result, RunnableWithFallbacks)
+        assert len(result.fallbacks) == 1  # type: ignore[attr-defined]
+
+
+class TestBuildCrisisLlm:
+    """build_crisis_llm：role=MAIN 复用（关注点 #6 crisis/redline 重锦到 main）。"""
+
+    def test_uses_main_binding(self) -> None:
+        """build_crisis_llm 与 build_main_llm 行为一致（同 Role.MAIN 绑定）。"""
+        s = _FakeSettings()
+        result = build_crisis_llm(s)
+        assert isinstance(result, RunnableWithFallbacks)
+        # 关注点 #6 实证:crisis 与 main 走同一 fallback 路径
+        assert len(result.fallbacks) == 1  # type: ignore[attr-defined]
+
+
+class TestBuildRedlineLlm:
+    """build_redline_llm：role=MAIN 复用（同 crisis）。"""
+
+    def test_uses_main_binding(self) -> None:
+        """build_redline_llm 与 build_main_llm 行为一致。"""
+        s = _FakeSettings()
+        result = build_redline_llm(s)
+        assert isinstance(result, RunnableWithFallbacks)
+        assert len(result.fallbacks) == 1  # type: ignore[attr-defined]
+
+
+class TestBuildCompressionLlm:
+    """build_compression_llm：role=COMPRESSION 入口（pipeline.py 切换点）。"""
+
+    def test_returns_runnable_with_fallbacks(self) -> None:
+        """build_compression_llm 返回 RunnableWithFallbacks（retry=1 + bailian 兜底）。"""
+        s = _FakeSettings()
+        result = build_compression_llm(s)
+        assert isinstance(result, RunnableWithFallbacks)
+        assert len(result.fallbacks) == 1  # type: ignore[attr-defined]
+
+
+class TestInjectionSeamRoleKey:
+    """注入缝:_test_llm_overrides 改 Role 枚举键;set/clear 接受 Role | str。"""
+
+    def teardown_method(self) -> None:
+        """每测试后清理 override,避免跨测试泄漏。"""
+        clear_test_llm()
+
+    def test_set_role_enum_short_circuits_primary(self) -> None:
+        """set_test_llm(Role.MAIN, fake) → build_role_primary(MAIN) 返回 fake。"""
+        s = _FakeSettings()
+        fake = _FakeRunnable()
+        set_test_llm(Role.MAIN, fake)
+        result = build_role_primary(Role.MAIN, s)
+        assert result is fake
+
+    def test_set_role_string_deepseek_normalizes_to_main(self) -> None:
+        """set_test_llm("deepseek", fake) 字符串归一 Role.MAIN,build_role_primary 返回 fake。"""
+        s = _FakeSettings()
+        fake = _FakeRunnable()
+        set_test_llm("deepseek", fake)
+        result = build_role_primary(Role.MAIN, s)
+        assert result is fake
+
+    def test_set_audit_string_normalizes_to_audit(self) -> None:
+        """set_test_llm("audit_deepseek", fake) 字符串归一到 Role.AUDIT。"""
+        s = _FakeSettings()
+        fake = _FakeRunnable()
+        set_test_llm("audit_deepseek", fake)
+        result = build_role_primary(Role.AUDIT, s)
+        assert result is fake
+
+    def test_set_compression_string_normalizes_to_compression(self) -> None:
+        """set_test_llm("compression_deepseek", fake) 字符串归一到 Role.COMPRESSION。"""
+        s = _FakeSettings()
+        fake = _FakeRunnable()
+        set_test_llm("compression_deepseek", fake)
+        result = build_role_primary(Role.COMPRESSION, s)
+        assert result is fake
+
+    def test_clear_role_enum_removes_only_that_role(self) -> None:
+        """clear_test_llm(Role.MAIN) 只清 Role.MAIN,Role.AUDIT 仍 override。"""
+        s = _FakeSettings()
+        fake_main = _FakeRunnable()
+        fake_audit = _FakeRunnable()
+        set_test_llm(Role.MAIN, fake_main)
+        set_test_llm(Role.AUDIT, fake_audit)
+        clear_test_llm(Role.MAIN)
+        # MAIN 恢复真实装配
+        assert build_role_primary(Role.MAIN, s) is not fake_main
+        # AUDIT 仍 override
+        assert build_role_primary(Role.AUDIT, s) is fake_audit
+
+    def test_clear_all_clears_everything(self) -> None:
+        """clear_test_llm() 不带参 → 清空全部。"""
+        set_test_llm(Role.MAIN, _FakeRunnable())
+        set_test_llm(Role.AUDIT, _FakeRunnable())
+        clear_test_llm()
+        assert _test_llm_overrides == {}
+
+    def test_overrides_dict_uses_role_keys(self) -> None:
+        """关注点 2 实证:_test_llm_overrides 键为 Role 枚举,非字符串。"""
+        set_test_llm("deepseek", _FakeRunnable())
+        set_test_llm("audit_deepseek", _FakeRunnable())
+        try:
+            assert Role.MAIN in _test_llm_overrides
+            assert Role.AUDIT in _test_llm_overrides
+            # 不应有字符串 key
+            assert "deepseek" not in _test_llm_overrides
+            assert "audit_deepseek" not in _test_llm_overrides
+        finally:
+            clear_test_llm()
+
+
+class TestBuildProviderLlmShim:
+    """Back-compat shim:build_provider_llm 路由到 build_role_primary/fallback。"""
+
+    def teardown_method(self) -> None:
+        clear_test_llm()
+
+    def test_deepseek_routes_to_main_primary(self) -> None:
+        """build_provider_llm("deepseek", settings) → build_role_primary(MAIN, settings)。"""
+        s = _FakeSettings()
+        result = build_provider_llm("deepseek", s)
+        assert isinstance(result, ChatDeepSeek)
+        # 关注点 3 实证:返回裸 ChatDeepSeek,不是 RunnableWithFallbacks
+        assert not isinstance(result, RunnableWithFallbacks)
+
+    def test_audit_deepseek_routes_to_audit_primary(self) -> None:
+        """build_provider_llm("audit_deepseek", settings) → build_role_primary(AUDIT, settings)。"""
+        s = _FakeSettings()
+        result = build_provider_llm("audit_deepseek", s)
+        assert isinstance(result, ChatDeepSeek)
+        assert not isinstance(result, RunnableWithFallbacks)
+
+    def test_audit_bailian_routes_to_audit_fallback(self) -> None:
+        """build_provider_llm("audit_bailian", settings) → build_role_fallback(AUDIT, settings)。"""
+        s = _FakeSettings()
+        result = build_provider_llm("audit_bailian", s)
+        assert isinstance(result, ChatDeepSeek)
+        # 关注点 3 实证:audit_bailian 走 bailian 端点
+        assert result.api_base == "https://dashscope.aliyuncs.com/compatible-mode/v1"  # type: ignore[attr-defined]
+
+    def test_openai_raises(self) -> None:
+        """build_provider_llm("openai", ...) 抛 ProviderNotRegisteredError（旧 alias 已删）。"""
+        s = _FakeSettings()
+        with pytest.raises(ProviderNotRegisteredError, match="openai"):
+            build_provider_llm("openai", s)
+
+    def test_compression_deepseek_raises(self) -> None:
+        """build_provider_llm("compression_deepseek", ...) 抛 ProviderNotRegisteredError。"""
+        s = _FakeSettings()
+        with pytest.raises(ProviderNotRegisteredError, match="compression_deepseek"):
+            build_provider_llm("compression_deepseek", s)
+
+    def test_unknown_provider_raises(self) -> None:
+        """build_provider_llm("unknown", ...) 抛 ProviderNotRegisteredError。"""
+        s = _FakeSettings()
+        with pytest.raises(ProviderNotRegisteredError, match="unknown"):
+            build_provider_llm("unknown", s)
+
+    def test_override_via_legacy_string(self) -> None:
+        """set_test_llm("audit_deepseek", fake) → build_provider_llm 返回 fake（裸实例）。"""
+        fake = _FakeRunnable()
+        set_test_llm("audit_deepseek", fake)
+        result = build_provider_llm("audit_deepseek", _FakeSettings())
+        # 关注点 3 实证:shim 命中 override 时也返裸实例（不是 RunnableWithFallbacks）
+        assert result is fake
+        assert not isinstance(result, RunnableWithFallbacks)

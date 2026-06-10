@@ -104,7 +104,7 @@ async def run_llm_pipeline(
                     try:
                         _put(frame_sse_event("compression_start", {}))
 
-                        from app.core.llm import build_provider_llm
+                        from app.core.llm import build_compression_llm
                         from app.domain.chat.compression import (
                             build_compression_prompt,
                             extract_compression_summary,
@@ -141,10 +141,7 @@ async def run_llm_pipeline(
                             c_input = build_compression_prompt(
                                 [_to_lc_message(mo) for mo in actives_orm]
                             )
-                            c_llm = build_provider_llm(
-                                f"compression_{rr.settings.compression_provider}",
-                                rr.settings,
-                            )
+                            c_llm = build_compression_llm(rr.settings)
                             c_result = await c_llm.ainvoke(c_input)
                             raw = (
                                 c_result.content if hasattr(c_result, "content") else str(c_result)
