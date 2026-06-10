@@ -1,21 +1,28 @@
-"""Tests for app.core.llm_topology — 三层正交化拓扑声明（Step 1 单元测试）。
+"""Tests for app.core.llm_topology + Step 2 adapter 层（关注点 2/3 实证）。
 
-覆盖：
+Step 1 覆盖：
 - resolve_profile 命中 / 未命中（最长前缀优先）
 - ENDPOINTS 结构（base_url 纯字符串字面量 + api_key callable）
 - ROLES 结构（main / audit / compression 三个 role 的字段）
 - frozen dataclass 不可变性
 
-本文件是 Step 1 完成报告的主证据（闸门 B 关注点 4）。全量 pytest 仅作
-健康检查，与本文件正确性无直接关系。
+Step 2 覆盖（adapter 层）:
+- _adapter_chat_deepseek 构造入参 spy(关注点 2:不读实例属性,直接断言 kwargs)
+- _TRANSPORTS dispatch 表(仅注册已实现 transport)
+- _build_binding 装配链(关注点 3:不 monkeypatch ENDPOINTS,用 _FakeSettings 喂)
 """
 
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, fields, is_dataclass
-from typing import get_type_hints
+from typing import Any, get_type_hints
 
 import pytest
+from app.core.llm import (
+    _TRANSPORTS,
+    _adapter_chat_deepseek,
+    _build_binding,
+)
 from app.core.llm_topology import (
     ENDPOINTS,
     LLM_REQUEST_TIMEOUT_SECONDS,
@@ -31,6 +38,8 @@ from app.core.llm_topology import (
     Transport,
     resolve_profile,
 )
+from langchain_deepseek import ChatDeepSeek
+from pydantic import SecretStr
 
 # ============================================================================
 # 1. resolve_profile 行为
@@ -407,3 +416,150 @@ class TestModelProfilesRegistry:
         assert p.supports_reasoning is True
         assert p.supports_tools is True
         assert p.multimodal is False
+
+
+# ============================================================================
+# 6. Step 2 · _FakeSettings + adapter 层（关注点 2/3 实证）
+# ============================================================================
+
+
+class _FakeSettings:
+    """最小 settings stub:仅暴露 _build_binding 所需的 deepseek_api_key / bailian_api_key。
+
+    关注点 3:不 monkeypatch 模块级 ENDPOINTS,而是 _FakeSettings 暴露真实
+    SecretStr 字段;ENDPOINTS 的 api_key 是 `lambda s: s.deepseek_api_key` /
+    `lambda s: s.bailian_api_key`,与 _FakeSettings 字段名天然兼容,被测面
+    的真 ENDPOINTS 不动。
+    """
+
+    def __init__(
+        self,
+        *,
+        deepseek_api_key: str = "sk-ds-test",
+        bailian_api_key: str = "sk-bl-test",
+    ) -> None:
+        self.deepseek_api_key = SecretStr(deepseek_api_key)
+        self.bailian_api_key = SecretStr(bailian_api_key)
+
+
+class TestAdapterChatDeepseekKwargs:
+    """_adapter_chat_deepseek 构造入参 spy 测试（关注点 2 实证）。
+
+    关注点 2:不读实例属性(ChatDeepSeek 有默认 temperature,读 llm.temperature
+    分不清「没传」与「传了默认」),改为 monkeypatch __init__ 截 kwargs,断言
+    「main 端 kwargs 不含 temperature」+「compression 端 extra_body 不含
+    reasoning_effort 键」是真断言。
+    """
+
+    def test_main_role_kwargs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Given ROLES[MAIN] When _adapter_chat_deepseek Then kwargs 含 6 字段、无 temperature。"""
+        captured: dict[str, Any] = {}
+
+        def mock_init(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        monkeypatch.setattr(ChatDeepSeek, "__init__", mock_init)
+
+        _adapter_chat_deepseek("sk-ds-test", "https://api.deepseek.com/v1", ROLES[Role.MAIN])
+
+        # 关注点 2 实证:不读实例属性,直接断言构造入参
+        assert "temperature" not in captured, "main role 端不应传 temperature(走服务端默认)"
+        assert captured["api_key"] == "sk-ds-test"
+        assert captured["api_base"] == "https://api.deepseek.com/v1"
+        assert captured["model"] == "deepseek-v4-flash"
+        assert captured["timeout"] == LLM_REQUEST_TIMEOUT_SECONDS
+        assert captured["max_retries"] == 0
+        assert captured["extra_body"] == {
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": "max",
+        }
+
+    def test_compression_role_kwargs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Given ROLES[COMPRESSION] When adapter Then kwargs 含 0.3 温度, extra_body 无 effort。"""
+        captured: dict[str, Any] = {}
+
+        def mock_init(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        monkeypatch.setattr(ChatDeepSeek, "__init__", mock_init)
+
+        _adapter_chat_deepseek("sk-ds-test", "https://api.deepseek.com/v1", ROLES[Role.COMPRESSION])
+
+        assert captured["temperature"] == 0.3
+        # 关注点 2 实证:extra_body 真不含 reasoning_effort(不是读了默认 dict 的伪存在)
+        assert "reasoning_effort" not in captured["extra_body"]
+        assert captured["extra_body"]["thinking"] == {"type": "disabled"}
+        assert captured["model"] == "deepseek-v4-flash"
+
+    def test_reasoning_effort_value_is_str_literally(self) -> None:
+        """Given ROLES[MAIN].reasoning_effort=MAX When extra_body 序列化 Then 是裸字符串 'max'。"""
+        b = ROLES[Role.MAIN]
+        # 关注点 C 子代理核实:StrEnum.value 是裸字符串(不走 str(e) 隐式路径)
+        assert b.reasoning_effort is not None
+        assert b.reasoning_effort.value == "max"
+        assert isinstance(b.reasoning_effort.value, str)
+
+
+class TestTransportsTable:
+    """_TRANSPORTS dispatch 表:键 = Transport 枚举,只注册已实现的。"""
+
+    def test_only_chat_deepseek_registered(self) -> None:
+        """_TRANSPORTS 仅含 CHAT_DEEPSEEK 一个键(未实现 transport 不注册)。"""
+        assert Transport.CHAT_DEEPSEEK in _TRANSPORTS
+        assert len(_TRANSPORTS) == 1
+
+    def test_chat_deepseek_value_is_adapter(self) -> None:
+        """_TRANSPORTS[CHAT_DEEPSEEK] 指向 _adapter_chat_deepseek。"""
+        assert _TRANSPORTS[Transport.CHAT_DEEPSEEK] is _adapter_chat_deepseek
+
+
+class TestBuildBinding:
+    """_build_binding 装配层(关注点 3:不 monkeypatch ENDPOINTS,真拓扑留被测面)。"""
+
+    def test_main_returns_chat_deepseek(self) -> None:
+        """Given ROLES[MAIN] + _FakeSettings When _build_binding Then 返回 ChatDeepSeek 实例。"""
+        s = _FakeSettings()
+        llm = _build_binding(ROLES[Role.MAIN], s)
+        assert isinstance(llm, ChatDeepSeek)
+
+    def test_compression_returns_chat_deepseek(self) -> None:
+        """Given ROLES[COMPRESSION] When _build_binding Then 返回 ChatDeepSeek 实例。"""
+        s = _FakeSettings()
+        llm = _build_binding(ROLES[Role.COMPRESSION], s)
+        assert isinstance(llm, ChatDeepSeek)
+
+    def test_main_uses_deepseek_endpoint(self) -> None:
+        """_build_binding(ROLES[MAIN]) 走 deepseek 端点(api_base 字段)。"""
+        s = _FakeSettings()
+        llm = _build_binding(ROLES[Role.MAIN], s)
+        # ChatDeepSeek.api_base 字段(继承自 BaseChatOpenAI)
+        assert llm.api_base == "https://api.deepseek.com/v1"  # type: ignore[attr-defined]
+
+    def test_main_fallback_uses_bailian_endpoint(self) -> None:
+        """_build_binding(ROLES[MAIN].fallback) 走 bailian 端点(真兜底路径)。"""
+        s = _FakeSettings()
+        fb = ROLES[Role.MAIN].fallback
+        assert fb is not None
+        llm = _build_binding(fb, s)
+        assert llm.api_base == "https://dashscope.aliyuncs.com/compatible-mode/v1"  # type: ignore[attr-defined]
+
+    def test_audit_fallback_uses_bailian_endpoint(self) -> None:
+        """_build_binding(ROLES[AUDIT].fallback) 走 bailian 端点(今日 audit 兜底行为)。"""
+        s = _FakeSettings()
+        fb = ROLES[Role.AUDIT].fallback
+        assert fb is not None
+        llm = _build_binding(fb, s)
+        assert llm.api_base == "https://dashscope.aliyuncs.com/compatible-mode/v1"  # type: ignore[attr-defined]
+
+    def test_unknown_model_raises(self) -> None:
+        """_build_binding 对未注册 model 名抛 ModelProfileNotRegisteredError。"""
+        s = _FakeSettings()
+        bad_binding = RoleBinding(
+            endpoint=EndpointName.DEEPSEEK,
+            model="qwen-vl",
+            thinking=True,
+            reasoning_effort=ReasoningEffort.MAX,
+            temperature=None,
+        )
+        with pytest.raises(ModelProfileNotRegisteredError, match="qwen-vl"):
+            _build_binding(bad_binding, s)

@@ -22,12 +22,24 @@ AIMessage 时保留 reasoning_content,DeepSeek 思考模式下 tool_calls 后续
 from __future__ import annotations
 
 import importlib.metadata as _metadata
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import Runnable
 from langchain_deepseek import ChatDeepSeek
 from langchain_openai import ChatOpenAI
+
+from app.core.llm_topology import (
+    ENDPOINTS,
+    LLM_REQUEST_TIMEOUT_SECONDS,
+    RoleBinding,
+    Transport,
+    resolve_profile,
+)
+
+if TYPE_CHECKING:
+    from app.core.config import Settings
 
 # ---- M8-hotfix: _convert_message_to_dict monkeypatch for reasoning_content ----
 # 背景：langchain-openai 的 _convert_message_to_dict 序列化 AIMessage 时，
@@ -147,6 +159,71 @@ def _build_compression_deepseek(settings: Any) -> ChatDeepSeek:
             },
         },
     )
+
+
+# ============================================================================
+# Step 2 · adapter 层（transport 由模型档分发）
+# ============================================================================
+# 新路径:RoleBinding → 查 ENDPOINTS + resolve_profile → dispatch 到 transport adapter。
+# 与旧 _PROVIDER_REGISTRY 路径并存（旧路径 Step 3 删），今日仅 _build_binding 新增
+# 无调用方消费,Step 3 在 wrap_resilience / build_main_llm 等入口切到新路径。
+#
+# 关键不变量(关注点 1 语义等价):
+# - main / audit 的 thinking=True & reasoning_effort=MAX 与今日 settings 默认值一致
+# - compression 的 thinking=False & temperature=0.3 与今日 _build_compression_deepseek 一致
+
+_TransportBuilder = Callable[[str, str, RoleBinding], BaseChatModel]
+"""transport adapter 签名:取 (api_key, base_url, RoleBinding) 返回 chat model 实例。"""
+
+
+def _adapter_chat_deepseek(
+    api_key: str,
+    base_url: str,
+    b: RoleBinding,
+) -> BaseChatModel:
+    """deepseek-v4 族 adapter:从 RoleBinding 装配 ChatDeepSeek 实例。
+
+    与现 _build_chat_deepseek 区别:reasoning_effort 与 temperature 降为可选。
+    - `reasoning_effort=None` 时不塞 extra_body(compression 角色走此路径)
+    - `temperature=None` 时不传该 kwarg(让 ChatDeepSeek 走服务端默认)
+    """
+    extra_body: dict[str, Any] = {
+        "thinking": {"type": "enabled" if b.thinking else "disabled"},
+    }
+    if b.reasoning_effort is not None:
+        # StrEnum .value 拿裸字符串字面量(不走 str(e) 隐式路径,llm_topology.py L89-91 注释明示)
+        extra_body["reasoning_effort"] = b.reasoning_effort.value
+    kwargs: dict[str, Any] = {
+        "api_key": api_key,
+        "api_base": base_url,
+        "model": b.model,
+        "timeout": LLM_REQUEST_TIMEOUT_SECONDS,
+        "max_retries": 0,  # SDK 内置重试关掉;Step 3 wrap_resilience 统一管
+        "extra_body": extra_body,
+    }
+    if b.temperature is not None:
+        kwargs["temperature"] = b.temperature
+    return ChatDeepSeek(**kwargs)
+
+
+# 键 = Transport 枚举;只注册已实现的 transport。CHAT_OPENAI / CHAT_TONGYI
+# 占位枚举不注册——任何 ModelProfile 引用未实现 transport 会在 _TRANSPORTS[T]
+# 查找中抛 KeyError。新族纪律:写 adapter + 真机探针后再启用。
+_TRANSPORTS: dict[Transport, _TransportBuilder] = {
+    Transport.CHAT_DEEPSEEK: _adapter_chat_deepseek,
+}
+
+
+def _build_binding(b: RoleBinding, settings: Settings) -> BaseChatModel:
+    """RoleBinding → ChatModel 实例的装配入口。
+
+    装配链:role → (endpoint, model) → 模型档给 transport+方言 → 实例化。
+    抛 ModelProfileNotRegisteredError:model 名无模型档(防新族未探针先上线)。
+    """
+    ep = ENDPOINTS[b.endpoint]
+    profile = resolve_profile(b.model)
+    api_key = ep.api_key(settings).get_secret_value()
+    return _TRANSPORTS[profile.transport](api_key, ep.base_url, b)
 
 
 # role 维度配置:(thinking_field, reasoning_effort_field)
