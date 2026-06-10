@@ -18,20 +18,17 @@ logger = logging.getLogger(__name__)
 
 CONTEXT_COMPRESS_THRESHOLD_TOKENS = 500_000  # V4 1M 上下文的 50%
 
-_OUTPUT_CONTRACT = "\n\n请只输出 <summary>…</summary> 包裹的内容，不要其他文字。"
-
 
 def build_compression_prompt(history: list[BaseMessage]) -> list[BaseMessage]:
     """构建压缩调用的 messages。返回 list 长度恒为 2。
 
-    - SystemMessage: 角色定位
-    - HumanMessage: 任务说明 + <history>…</history> 序列化 + 末尾输出契约
+    - SystemMessage: 角色定位及输入输出说明
+    - HumanMessage: 纯 <history>…</history> 序列化
     """
     history_xml = serialize_history_to_xml(history, include_system=False)
-    human_content = f"{COMPRESSION_PROMPT_STUB}\n\n{history_xml}{_OUTPUT_CONTRACT}"
     return [
-        SystemMessage(content="你是对话压缩助手。"),
-        HumanMessage(content=human_content),
+        SystemMessage(content=COMPRESSION_PROMPT_STUB),
+        HumanMessage(content=history_xml),
     ]
 
 
