@@ -424,7 +424,7 @@ def build_main_graph() -> CompiledStateGraph:
     builder.add_node("call_crisis_llm", call_crisis_llm)
     builder.add_node("call_redline_llm", call_redline_llm)
 
-    builder.set_entry_point("load_audit_state")
+    builder.add_edge("__start__", "load_audit_state")
 
     builder.add_conditional_edges(
         "load_audit_state",
