@@ -5,9 +5,9 @@
 
 **分支**：`refactor/llm-provider-orthogonal`（首 Step 建）
 
-**基线（fork 点）** `refactor/backend-audit-phase-1` 当前 HEAD
+**基线（fork 点）**：`refactor/backend-audit-phase-1` 当前 HEAD（不锁定 SHA；由 Iver 在该分支 HEAD 上开新分支执行）
 
-**性质**：`backend/app/core/llm.py` provider 架构正交化重构。无功能新增；唯一运行时行为变化 = main / compression 获得真实百炼兜底。
+**性质**：`backend/app/core/llm.py` provider 架构正交化重构。无功能新增；运行时行为变化集中在兜底/重试：main 由假兜底转真兜底，compression / crisis / redline 由今日裸实例首次获得 bailian 兜底（compression retry=1，main / audit / crisis / redline retry=3）。
 
 **待办来源**：本页「待办记录」第 2 条（[llm.py](http://llm.py) 架构）。
 
@@ -19,7 +19,7 @@
 
 1. **端点表**：`{base_url(进 code), 读哪个密钥}`。
 2. **模型档**（按模型族）：`{transport 类, 是否 reasoning 提取, 工具/多模态能力}`——**transport 归这层，由 model 决定，与端点/role 无关**。
-3. **role 绑定**：`{endpoint, model, thinking, reasoning_effort, temperature, fallback}`。crisis / redline = main 别名（接替对话，需流式+思考、不绑工具，行为同 main 而非 audit）。
+3. **role 绑定**：`{endpoint, model, thinking, reasoning_effort, temperature, fallback, retry_attempts}`。crisis / redline = main 别名（接替对话，需流式+思考、不绑工具，行为同 main 而非 audit）。
 
 构建链：`role → (endpoint, model) → 模型档给 transport+方言 → 实例化`。
 
@@ -36,35 +36,36 @@
 - **不实现** qwen-vl / MiMo 等新模型族的 adapter——仅在模型档注册表留注释位 + 解析报错路径；真要用时「写 adapter + 真机探针」再启用。
 - **不换任何默认模型**：全线仍 `deepseek-v4-flash`。
 - **不重构 streaming fallback 语义**：沿用现有 `with_fallbacks` 行为（中途已出首 token 后的失败不保证干净切换），只改兜底目标。
-- **不调** retry 数值（仍 3 次 + 指数抖动 + 3 类异常）、不动 prompt、不动多模态 content 格式。
+- **retry 数值**：main / audit / crisis / redline 仍 3 次 + 指数抖动 + 3 类异常；**compression 降为 1 次**（Iver 拍板，见发现与建议 #2）。不动 prompt、不动多模态 content 格式。
 - **不动** 非 LLM-provider 的 settings（DB / Redis / 审查编排参数 `audit_wait_timeout_seconds` 等一律保留）。
 - **不动** M8-hotfix 的 `_convert_message_to_dict` monkeypatch 及其版本断言（它服务于未来 ChatOpenAI 路径，保持原样）。
 
 ## 前置条件
 
-- 基线 `39178da1` 上 `pytest tests -q` 全绿（本页记录 Phase 0 已修绿至 `a0c025a`，需确认 HEAD 链路无新漂移）。
+- 基线 = `refactor/backend-audit-phase-1` 当前 HEAD（不锁定 SHA）；开分支当下容器内 `pytest tests -q` 全绿，需确认 HEAD 链路无新漂移。
 - 容器内运行：`docker compose exec api ...`（宿主无 Python / uv）。
 - 运行时 Python 3.14、DeepSeek V4 系列（`deepseek-v4-flash` / `-pro` 为合法枚举，勿用历史 `deepseek-chat`）。
 - 执行 agent 拥有完整仓库上下文；本计划只贴**新增契约**，既有实现（如 `_build_chat_deepseek` 的 `extra_body` 构造、`graph.py` 流式消费体）以自然语言引用。
 
 ## 现状 → 目标映射（自包含速查）
 
-| 现 public key          | _parse_key              | 现 transport                 | 目标落点                                                  |
-| ---------------------- | ----------------------- | ---------------------------- | --------------------------------------------------------- |
-| `deepseek`             | (main, deepseek)        | ChatDeepSeek@deepseek        | ROLES.main 主端                                           |
-| `openai` ⚠️             | (main, openai)          | ChatOpenAI@bailian（丢思考） | 删除；ROLES.main.fallback 改 ChatDeepSeek@bailian         |
-| `audit_deepseek`       | (audit, deepseek)       | ChatDeepSeek@deepseek        | ROLES.audit 主端                                          |
-| `audit_bailian`        | (audit, bailian)        | ChatDeepSeek@bailian         | ROLES.audit.fallback（行为不变）                          |
-| `compression_deepseek` | (compression, deepseek) | 独立 builder                 | ROLES.compression 主端（temperature/effort 降为可选字段） |
+| 现 public key | _parse_key | 现 transport | 目标落点 |
+| --- | --- | --- | --- |
+| `deepseek` | (main, deepseek) | ChatDeepSeek@deepseek | ROLES.main 主端 |
+| `openai` ⚠️ | (main, openai) | ChatOpenAI@bailian（丢思考） | 删除；ROLES.main.fallback 改 ChatDeepSeek@bailian |
+| `audit_deepseek` | (audit, deepseek) | ChatDeepSeek@deepseek | ROLES.audit 主端 |
+| `audit_bailian` | (audit, bailian) | ChatDeepSeek@bailian | ROLES.audit.fallback（行为不变） |
+| `compression_deepseek` | (compression, deepseek) | 独立 builder | ROLES.compression 主端（temperature/effort 降为可选字段） |
 
 ## 执行步骤
 
 ### Step 0 · 建分支 + 基线核实
 
-- [ ]  `git checkout refactor/backend-audit-phase-1 && git pull`
+- [ ]  `git checkout refactor/backend-audit-phase-1 && git pull`，以该分支当前 HEAD 为基线（不锁定具体 SHA）
 - [ ]  `git checkout -b refactor/llm-provider-orthogonal`
 - [ ]  容器内 `pytest tests -q` 全绿；记录基线通过数
-- [ ]  拉 `backend/tests/test_factory.py`，清点针对 `_PROVIDER_REGISTRY` / `_PUBLIC_KEYS` 的断言（约 16+ 处，T0/T1/T5/T5c），列为 Step 7 重写清单
+- [ ]  拉 `backend/tests/chat/test_factory.py`，清点针对 `_PROVIDER_REGISTRY` / `_PUBLIC_KEYS` 的断言（约 16+ 处，T0/T1/T5/T5c），列为 Step 7 重写清单
+- [ ]  拉 `backend/tests/chat/test_extractors.py`，清点 `extract_finish_reason` / `extract_reasoning_content` 的 provider 参数调用（T0/T1/T2，约 20 处，含 `test_unregistered_provider_*` 字符串兜底用例），列为 Step 5 重写清单
 
 **验证**：✅ 分支建立；✅ 基线全绿；✅ 待重写断言清单成形。
 
@@ -153,6 +154,7 @@ class RoleBinding:
     reasoning_effort: ReasoningEffort | None
     temperature: float | None
     fallback: RoleBinding | None = None
+    retry_attempts: int = 3   # 应用层 with_retry 的 stop_after_attempt；1 = 仅 1 次尝试（不重试，仍走 fallback）
 
 _DSV4 = "deepseek-v4-flash"
 ROLES: dict[Role, RoleBinding] = {
@@ -161,7 +163,7 @@ ROLES: dict[Role, RoleBinding] = {
     Role.AUDIT: RoleBinding(EndpointName.DEEPSEEK, _DSV4, True, ReasoningEffort.MAX, None,
         fallback=RoleBinding(EndpointName.BAILIAN, _DSV4, True, ReasoningEffort.MAX, None)),
     Role.COMPRESSION: RoleBinding(EndpointName.DEEPSEEK, _DSV4, False, None, 0.3,
-        fallback=RoleBinding(EndpointName.BAILIAN, _DSV4, False, None, 0.3)),
+        fallback=RoleBinding(EndpointName.BAILIAN, _DSV4, False, None, 0.3), retry_attempts=1),
 }
 # crisis / redline 复用 ROLES[Role.MAIN]（接替对话：流式+思考、不绑工具，行为同 main）
 ```
@@ -208,9 +210,10 @@ def _build_binding(b: RoleBinding, settings: Settings) -> BaseChatModel:
 
 ### Step 3 · role-based build + 删除字符串注册表
 
-- [ ]  新增 `build_role_primary(role, settings)` / `build_role_fallback(role, settings)` / `wrap_resilience(primary, fallback)`（retry+fallback 包装，复用现 `build_main_llm` 的 retry 参数）
+- [ ]  新增 `build_role_primary(role, settings)` / `build_role_fallback(role, settings)` / `wrap_resilience(primary, fallback, *, retry_attempts=3)` / `_build_role_llm(role, settings)`（retry+fallback 包装；retry 次数取 `ROLES[role].retry_attempts`）
 - [ ]  重写 `build_main_llm` = `wrap_resilience(primary, fallback)`（role="main"）
-- [ ]  重写 `build_crisis_llm` / `build_redline_llm` = role="main" 的 `wrap_resilience`（**不** bind_tools，与现行为一致），删除 `f"audit_{main_provider}"` 字符串拼接
+- [ ]  重写 `build_crisis_llm` / `build_redline_llm` = role="main" 的 `_build_role_llm`（**不** bind_tools，与现行为一致；随 main 得 retry=3 + bailian 兜底），删除 `f"audit_{main_provider}"` 字符串拼接
+- [ ]  新增 `build_compression_llm(settings)` = role="compression" 的 `_build_role_llm`（retry_attempts=1）；改 `domain/chat/pipeline.py` 压缩调用点：`build_provider_llm(f"compression_{settings.compression_provider}")` → `build_compression_llm(rr.settings)`（`ainvoke` 与后续 `.content` 读取不变）
 - [ ]  **删除** `_PROVIDER_REGISTRY` / `_PUBLIC_KEYS` / `_parse_key` / `_CLIENT_BUILDER` / `_MODEL_FIELD` / `_ROLE_SETTINGS` / `_build_chat_openai`(暂留给未来或移走) / `_build_compression_deepseek`
 - [ ]  测试注入缝 `_test_llm_overrides` 改为 **按 role 键**：`set_test_llm(role, llm)` / `clear_test_llm`，在各 `build_*_llm` 入口优先返回 override
 
@@ -226,16 +229,23 @@ def build_role_fallback(role: Role, settings: Settings) -> BaseChatModel | None:
     fb = ROLES[role].fallback
     return _build_binding(fb, settings) if fb else None
 
-def wrap_resilience(primary: Runnable, fallback: Runnable | None) -> Runnable:
+def wrap_resilience(primary: Runnable, fallback: Runnable | None, *, retry_attempts: int = 3) -> Runnable:
     from openai import APIConnectionError, APITimeoutError, RateLimitError
     retryable = primary.with_retry(
         retry_if_exception_type=(RateLimitError, APITimeoutError, APIConnectionError),
-        stop_after_attempt=3, wait_exponential_jitter=True)
+        stop_after_attempt=retry_attempts, wait_exponential_jitter=True)  # 1 = 不重试，仍走 fallback
     return retryable.with_fallbacks([fallback]) if fallback else retryable
 
+def _build_role_llm(role: Role, settings: Settings) -> Runnable:
+    return wrap_resilience(build_role_primary(role, settings),
+                          build_role_fallback(role, settings),
+                          retry_attempts=ROLES[role].retry_attempts)
+
 def build_main_llm(settings: Settings) -> Runnable:
-    return wrap_resilience(build_role_primary(Role.MAIN, settings),
-                          build_role_fallback(Role.MAIN, settings))
+    return _build_role_llm(Role.MAIN, settings)
+
+def build_compression_llm(settings: Settings) -> Runnable:
+    return _build_role_llm(Role.COMPRESSION, settings)  # retry_attempts=1，主端失败即兜底 bailian
 ```
 
 <aside>
@@ -249,7 +259,7 @@ def build_main_llm(settings: Settings) -> Runnable:
 
 **Commit**：`refactor(llm): role 驱动构建，移除字符串 provider 注册表`
 
-### Step 4 · config.py 瘦身（LLM 拓扑出 settings）
+### Step 4 · [config.py](http://config.py) 瘦身（LLM 拓扑出 settings）
 
 从 `Settings` **删除**以下 LLM-provider 字段（已迁入 code）：`deepseek_base_url` / `deepseek_model` / `bailian_base_url` / `bailian_model` / `main_provider` / `fallback_provider` / `enable_fallback` / `main_thinking_enabled` / `main_reasoning_effort` / `audit_provider` / `audit_model` / `audit_reasoning_effort` / `audit_thinking_enabled` / `compression_provider` / `compression_model` / `compression_thinking_enabled` / `llm_request_timeout_seconds`。
 
@@ -278,11 +288,13 @@ def extract_reasoning_content(chunk: BaseMessageChunk, profile: ModelProfile) ->
 
 `graph.py` 三处调用点：`call_main_llm` 传 `role_profile(Role.MAIN)`、`call_crisis_llm` / `call_redline_llm` 传 `role_profile(Role.MAIN)`（crisis/redline 复用 main），替换原 `ctx.settings.main_provider`（main）/ `ctx.settings.audit_provider`（crisis/redline）。`_stream_llm_chunks` 的 `provider` 形参改为 `profile`。
 
-**验证**：✅ ruff / basedpyright 0 错；✅ 单测：deepseek-v4 档下 reasoning chunk 提取到 `reasoning_content`；✅ 流式 4 段派发行为不变（reasoning / delta / finish_reason / usage）。
+- [ ]  同步重写 `backend/tests/chat/test_extractors.py`：`extract_finish_reason` 去掉 provider 入参；`extract_reasoning_content` 改传 `ModelProfile`；原 `test_unregistered_provider_*`（provider 字符串兜底）改为 `supports_reasoning` 真/假分支断言
+
+**验证**：✅ ruff / basedpyright 0 错；✅ 单测：deepseek-v4 档下 reasoning chunk 提取到 `reasoning_content`；✅ `test_extractors.py` 全绿；✅ 流式 4 段派发行为不变（reasoning / delta / finish_reason / usage）。
 
 **Commit**：`refactor(llm): reasoning/finish_reason 提取按模型档解耦`
 
-### Step 6 · audit/llm.py 改用 role 绑定
+### Step 6 · audit/[llm.py](http://llm.py) 改用 role 绑定
 
 `build_audit_llm` 改为：取 `build_role_primary("audit")` 与 `build_role_fallback("audit")`，**各自 `bind_tools([AppendNote, ReplaceInNotes, AuditOutputSchema])` 后再** `wrap_resilience`（保留「先 bind_tools 再包 retry/fallback」次序），删除对 `build_provider_llm("audit_deepseek"/"audit_bailian")` 的字符串调用。
 
@@ -292,7 +304,7 @@ def extract_reasoning_content(chunk: BaseMessageChunk, profile: ModelProfile) ->
 
 ### Step 7 · 重写 factory 测试 + 注入缝迁移
 
-- [ ]  删除 `test_factory.py` 中针对 `_PROVIDER_REGISTRY` / `_PUBLIC_KEYS` / `_parse_key` 的旧断言（Step 0 清单），改为断言新结构：
+- [ ]  删除 `backend/tests/chat/test_factory.py` 中针对 `_PROVIDER_REGISTRY` / `_PUBLIC_KEYS` / `_parse_key` 的旧断言（Step 0 清单），改为断言新结构：
     - `resolve_profile` 命中 / 未注册抛错
     - `build_role_primary("main")` → ChatDeepSeek@deepseek、`extra_body` 正确；fallback → @bailian
     - compression 主端 `temperature=0.3` 且无 `reasoning_effort`；有 bailian fallback
@@ -319,22 +331,26 @@ def extract_reasoning_content(chunk: BaseMessageChunk, profile: ModelProfile) ->
 
 ## 验收清单
 
-| 项             | 判据                                                                   | 状态 |
-| -------------- | ---------------------------------------------------------------------- | ---- |
-| 三表落地       | 端点/模型档/role 绑定全在 code，settings 仅余密钥                      | ⏸    |
-| 陷阱① 消除     | transport 仅由模型档决定，无 (role,provider) 二元分发                  | ⏸    |
-| main 真兜底    | deepseek→bailian（ChatDeepSeek，带思考），非 deepseek→deepseek         | ⏸    |
-| 每 role 有兜底 | main / audit / compression 均有 fallback                               | ⏸    |
-| 方言解耦       | extractor 按模型档；[graph.py](http://graph.py) 不再传 provider 字符串 | ⏸    |
-| 测试全绿       | pytest 恢复基线通过数；ruff / basedpyright 0 错                        | ⏸    |
-| 真机探针       | bailian 兜底 200 + 思考 + 多轮无 400                                   | ⏸    |
-| 行为边界       | 默认模型不变、retry 数值不变、streaming fallback 语义不变              | ⏸    |
+| 项 | 判据 | 状态 |
+| --- | --- | --- |
+| 三表落地 | 端点/模型档/role 绑定全在 code，settings 仅余密钥 | ⏸ |
+| 陷阱① 消除 | transport 仅由模型档决定，无 (role,provider) 二元分发 | ⏸ |
+| main 真兜底 | deepseek→bailian（ChatDeepSeek，带思考），非 deepseek→deepseek | ⏸ |
+| 每 role 有兜底 | main / audit / compression 均有 fallback | ⏸ |
+| 方言解耦 | extractor 按模型档；[graph.py](http://graph.py) 不再传 provider 字符串 | ⏸ |
+| 测试全绿 | pytest 恢复基线通过数；ruff / basedpyright 0 错 | ⏸ |
+| 真机探针 | bailian 兜底 200 + 思考 + 多轮无 400 | ⏸ |
+| 行为边界 | 默认模型不变；main / audit / crisis / redline retry=3 不变、compression retry 降为 1；streaming fallback 语义不变 | ⏸ |
 
 ## 发现与建议
 
 1. **main 假兜底是真 bug，不止是架构不洁**：`fallback_provider="deepseek"` 令主对话兜底退化为同端点重试，百炼渠道冗余从未生效。本重构顺带修复，属行为改善而非纯重构——验收时重点回归主对话兜底路径。
-2. **compression 新增 retry**：统一 `wrap_resilience` 后 compression 主端获得 3 次重试（原先无）。判断为有益且低风险；若要严格零行为变化，可在 ROLES 上给 compression 标记跳过 retry——默认不跳。
+2. **compression 兜底 + retry=1（已拍板）**：统一 `wrap_resilience` 后 compression 由今日裸实例获得 bailian 兜底；retry 经 Iver 拍板设为 **1（仅 1 次尝试、不重试，但仍走 fallback）**——避免后台压缩在主端抖动时放大重试，同时保留跨端兜底。已固化为 `ROLES[COMPRESSION].retry_attempts=1`，并新增 `build_compression_llm` 替换 `pipeline.py` 的裸 `build_provider_llm` 调用。
 3. **streaming fallback 语义未改**：`with_fallbacks` 对「首 token 已发后的中途失败」不保证干净切换，这是 LangChain 既有限制，本次不碰。若未来要求主对话流式强一致兜底，需单独立项（缓冲首帧 / 重放）。
 4. **ChatOpenAI 与 monkeypatch 暂时休眠但保留**：当前无 role 走 ChatOpenAI，`_convert_message_to_dict` 补丁不生效但保留就位；待 qwen-vl 等新族落 adapter 时复用。
 5. **新族纪律固化**：`resolve_profile` 对未注册模型名直接抛错——「换已注册族的模型=改 ROLES + 过验证」「加新族=写 adapter + 真机探针（思考方言 / reasoning 多轮 / 工具 / 流式 / 多模态各验）后再注册」。
-6. **crisis/redline 重锦到 main（非 audit）**：它们是接替主对话的流式干预（需思考、不绑工具），行为本就同 main 而非 note-writer 的 audit；原先落在 `audit_{main_provider}` 是历史巧合。今日 main/audit 绑定恰好等价，故此改**运行时零行为变化**，但纠正了语义锦点——日后 main 换模型/参数时 crisis/redline 自动跟随，不会误随 audit。
+6. **crisis/redline 重锦到 main（非 audit）**：它们是接替主对话的流式干预（需思考、不绑工具），行为本就同 main 而非 note-writer 的 audit；原先落在 `audit_{main_provider}` 是历史巧合。今日 main/audit 的模型/参数绑定恰好等价，故**happy-path 调用零行为变化**；但今日 crisis/redline 是 `build_provider_llm("audit_deepseek")` 的裸实例（既无 retry 也无 fallback），改用 main 的 `_build_role_llm` 后**首次获得 retry=3 + bailian 兜底**（错误路径有增益，与 compression 同类）——验收须实测 crisis/redline 兜底真生效，勿假设零变化。语义上也纠正了锦点：日后 main 换模型/参数时 crisis/redline 自动跟随，不会误随 audit。
+
+---
+
+面向 Iver：计划已按「全进 code、仅密钥留 env、无 dev/prod」落定，分支 `refactor/llm-provider-orthogonal` 从 `refactor/backend-audit-phase-1` 当前 HEAD 切（不锁 SHA）。三处诉求已编码——main 真兜底、每 role 兜底（compression / crisis / redline 补上）、compression retry=1。另校准两处文档（顶部「性质」+ 发现与建议 #6）：crisis/redline 今日是裸实例、重构后才首次获得 retry+兜底，并非「零行为变化」，验收须实测其兜底。执行交给 step-execute；你按惯例最后看重构后源码拍板。
