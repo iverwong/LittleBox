@@ -30,6 +30,7 @@ from sqlalchemy import select
 
 from app.core.llm import build_crisis_llm, build_main_llm, build_redline_llm
 from app.core.llm_extractors import extract_finish_reason, extract_reasoning_content, extract_usage
+from app.core.llm_topology import ROLES, Role
 from app.domain.audit.models import RollingSummary
 from app.domain.audit.signals import AuditSignalsManager
 from app.domain.chat.context import (
@@ -366,7 +367,10 @@ async def call_main_llm(
         state,
         ctx,
         llm=build_main_llm(ctx.settings),
-        provider=ctx.settings.main_provider,
+        # 字节等价于旧 main 端点默认值 "deepseek"(关注点 1 要求零兜底依赖);
+        # Step 5 把 _stream_llm_chunks 形参 provider:str 改为 profile:ModelProfile
+        # 后,本处同步切到 role_profile(Role.MAIN)。
+        provider=ROLES[Role.MAIN].endpoint.value,
         intervention_type="guided" if guidance is not None else None,
     )
 
@@ -384,7 +388,8 @@ async def call_crisis_llm(
         state,
         ctx,
         llm=build_crisis_llm(ctx.settings),
-        provider=ctx.settings.audit_provider,
+        # crisis 复用 main 绑定（Step 3 收口），provider 沿用 main 端点。
+        provider=ROLES[Role.MAIN].endpoint.value,
         intervention_type="crisis",
     )
 
@@ -402,7 +407,8 @@ async def call_redline_llm(
         state,
         ctx,
         llm=build_redline_llm(ctx.settings),
-        provider=ctx.settings.audit_provider,
+        # redline 复用 main 绑定（Step 3 收口），provider 沿用 main 端点。
+        provider=ROLES[Role.MAIN].endpoint.value,
         intervention_type="redline",
     )
 

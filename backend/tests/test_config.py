@@ -1,14 +1,10 @@
-"""M8 audit settings 默认值验证。"""
+"""M8 audit / arq settings 默认值验证（Step 4 后只验非 LLM 字段）。"""
 from app.core.config import Settings
 
 
 def test_audit_settings_defaults():
-    """8 个 audit / arq settings 可读取默认值。"""
+    """4 个 audit / arq 非 LLM settings 可读取默认值（其余 LLM 字段已迁 llm_topology）。"""
     s = Settings()
-    assert s.audit_provider == "deepseek"
-    assert s.audit_model == "deepseek-v4-flash"
-    assert s.audit_reasoning_effort == "max"
-    assert s.audit_thinking_enabled is True
     assert s.audit_wait_timeout_seconds == 30
     assert s.audit_redis_ttl_seconds == 86400
     assert s.arq_redis_db == 1

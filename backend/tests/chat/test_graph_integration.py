@@ -42,23 +42,13 @@ pytestmark = [
 
 
 def _mock_settings(**overrides: dict) -> SimpleNamespace:
-    """Return minimal settings mock with crisis/redline tuning params."""
+    """Return minimal settings mock with crisis/redline tuning params.
+
+    Step 4 后:LLM 拓扑字段已迁 llm_topology,本 fixture 只承载非 LLM 字段。
+    """
     defaults = dict(
-        main_provider="deepseek",
         deepseek_api_key="",
-        deepseek_base_url="https://api.deepseek.com/v1",
-        deepseek_model="deepseek-v4-flash",
-        main_thinking_enabled=True,
-        main_reasoning_effort="max",
         bailian_api_key="",
-        bailian_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        bailian_model="deepseek-v4-flash",
-        audit_thinking_enabled=True,
-        audit_reasoning_effort="max",
-        audit_provider="deepseek",
-        llm_request_timeout_seconds=60.0,
-        enable_fallback=False,
-        fallback_provider=None,
         audit_redis_ttl_seconds=86400,
         audit_wait_timeout_seconds=30,
         crisis_context_recent_turns=5,
