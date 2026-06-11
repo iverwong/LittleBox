@@ -1,4 +1,4 @@
-"""LLM provider 装配：role 驱动入口 + 三层正交拓扑（Step 3 重构后）。
+"""LLM provider 装配：role 驱动入口 + 三层正交拓扑（Step 3 重构,Step 7 收口）。
 
 Step 3 删除的旧符号：
   - `_PROVIDER_REGISTRY` / `_PUBLIC_KEYS` / `_parse_key` /
@@ -7,6 +7,13 @@ Step 3 删除的旧符号：
   - 历史偶然的 `f"audit_{main_provider}"` 字符串拼接
     （crisis / redline 复用 Role.MAIN 绑定，不另走 audit）
   - 旧 `_test_llm_overrides: dict[str, Runnable]` 字符串键
+
+Step 7 删除的 shim / 占位:
+  - `build_provider_llm` back-compat shim(Step 3 引入,Step 7 收口删)
+  - `ProviderNotRegisteredError` 异常类(仅 shim 内部使用,随 shim 删)
+  - `_legacy_provider_to_role` 字符串归一 helper(仅 shim 内部使用)
+  - `_PROVIDER_REGISTRY: dict = {}` 空 dict 占位(Step 7 整体重写 test_factory
+    后无引用,占位本身失去意义,删)
 
 Step 3 新增的入口（皆经 `_build_binding` = Step 2 装配链）：
   - `build_role_primary(role, settings)` / `build_role_fallback(role, settings)`
@@ -17,25 +24,21 @@ Step 3 新增的入口（皆经 `_build_binding` = Step 2 装配链）：
     全部经 `_build_role_llm(Role.MAIN, ...)`,crisis/redline 复用 main 绑定
     （流式+思考、不绑工具,行为本同 main 而非 audit）
 
-注入缝：
-  - `_test_llm_overrides: dict[Role, Runnable]` 改 Role 枚举键
-  - `set_test_llm(role: Role | str, llm)` / `clear_test_llm(role=None)`
-    接受 `Role` 或旧字符串（旧字符串经 `_legacy_provider_to_role`
-    归一到 Role;`build_role_fallback` 不查 override,保持「主端 fake / 备端
-    real」语义不变）—— Step 7 删字符串分支
+注入缝（Step 7 收紧 Role 签名 + isinstance 守卫）：
+  - `_test_llm_overrides: dict[Role, BaseChatModel]` 键为 Role 枚举
+  - `set_test_llm(role: Role, llm)` / `clear_test_llm(role: Role | None)`
+    仅接受 Role 枚举（旧字符串 provider key 立即抛 TypeError,防止
+    「漏改字符串调用 → 静默 override 失效 → 回落真 LLM 难诊断」暗坑）
 
-shim 留存:
-  - `build_provider_llm(provider, settings)` 降级为 back-compat shim,路由
-    "deepseek" / "audit_deepseek" 到 `build_role_primary`、"audit_bailian"
-    到 `build_role_fallback`,「openai」/「compression_deepseek」抛
-    `ProviderNotRegisteredError`。Step 6 重写 `audit/llm.py` 时同步删 shim。
-  - `_build_chat_openai` 按计划「暂留给未来或移走」取暂留分支,无生产调用方。
+暂留分支（按 plan 一致保留,不在 Step 7 范围）:
+  - `_build_chat_openai` 无生产调用方,留给未来 qwen-vl / tongyi 等 OpenAI
+    兼容族落 adapter 时直接复用。配套 `from langchain_openai import ChatOpenAI`
+    顶 import 因此保留(ruff F401 豁免)
+  - monkeypatch 段(M8-hotfix):langchain-openai `_convert_message_to_dict` 补
+    reasoning_content 序列化(DeepSeek 思考模式 tool_calls 多轮 400 防回)
+  - 上述两者需「全留」或「全清」整组决策,独立 scoped PR 处理,不在本步范围
 
 构建链:`role → (endpoint, model) → 模型档给 transport+方言 → 实例化`。
-
-monkeypatch 段(M8-hotfix):langchain-openai _convert_message_to_dict 序列化
-AIMessage 时保留 reasoning_content,DeepSeek 思考模式下 tool_calls 后续请求
-不会因 400 报错。详见 LLM Provider 探针 补4。Step 3 逐字未动。
 """
 
 from __future__ import annotations
@@ -108,10 +111,6 @@ def _patched_convert(message, *args, **kwargs):
 
 _lcoai._convert_message_to_dict = _patched_convert
 # ---- end monkeypatch ----
-
-
-class ProviderNotRegisteredError(LookupError):
-    """Provider 名未注册时抛出（仅 back-compat shim 内部使用）。"""
 
 
 # ============================================================================
@@ -312,19 +311,6 @@ def build_compression_llm(settings: Settings) -> Runnable:
 _test_llm_overrides: dict[Role, BaseChatModel] = {}
 
 
-def _legacy_provider_to_role(provider: str) -> Role:
-    """旧公开 key 字符串 → Role 枚举归一(Step 7 Commit B 删 shim 时同步删)。
-
-    仅服务 back-compat shim `build_provider_llm`(Step 7 Commit A 阶段 shim 仍在,
-    旧 API patch 仍可能走 shim 入口;Commit B 删 shim 时本 helper 同步删)。
-    """
-    if provider == "audit" or provider.startswith("audit_"):
-        return Role.AUDIT
-    if provider == "compression" or provider.startswith("compression_"):
-        return Role.COMPRESSION
-    return Role.MAIN
-
-
 def set_test_llm(role: Role, llm: BaseChatModel) -> None:
     """设置指定 role 的测试用 LLM 实例(注入缝)。
 
@@ -368,71 +354,6 @@ def clear_test_llm(role: Role | None = None) -> None:
 
 
 # ============================================================================
-# Back-compat shim:build_provider_llm(Step 6 留 → Step 7 测试重写时删)
-# ============================================================================
-# Step 3 引入时唯一生产调用方是 `app/domain/audit/llm.py::build_audit_llm`
-# (走 "audit_deepseek" / "audit_bailian" 字符串)。Step 6 重写 audit/llm.py
-# 移除该调用,但 shim 因以下消费方仍在,保留到 Step 7:
-# - tests/chat/test_factory.py(T1 / T5c / T8 共 30+ 用例)
-# - tests/core/test_llm_topology.py(T6 路由 shim 用例,共 6+)
-# - tests/api/test_chat_stream_graph.py(6 个 mock patch)
-# - tests/api/test_patch3_accumulate.py(2 个 mock patch)
-# - tests/integration/conftest.py / tests/integration/chat/test_compression.py
-#   (注入缝与 provider key 用例)
-# Step 7 整体重写 test_factory.py / test_llm_topology.py 时同步删本 shim。
-#
-# 旧公开 key 字符串路由:
-#   "deepseek" / "audit_deepseek" → build_role_primary(role)
-#   "audit_bailian"               → build_role_fallback(Role.AUDIT)
-#   "openai" / "compression_deepseek" / 未知 → 抛 ProviderNotRegisteredError
-# 注入缝(字符串)经 `_legacy_provider_to_role` 归一后查 _test_llm_overrides,
-# 命中则直接返回(对应 build_role_primary 的入口短路)。
-# 关键约束:shim **不**走 `_build_role_llm` — 必须返回裸实例以让
-# 历史 audit/llm.py 走 `.bind_tools(...)` 路径(Step 6 已不需;RunnableWithFallbacks
-# 无 bind_tools,会 AttributeError;见 plan 关注点 3)。
-
-
-def build_provider_llm(provider: str, settings: Any) -> BaseChatModel:
-    """Back-compat shim:旧公开 key 字符串 → 裸 ChatModel 实例(未包 retry / fallback)。
-
-    仅供 `app/domain/audit/llm.py:35-36` 现消费使用,Step 6 重写 audit/llm.py
-    时同步删除。**不**走 `_build_role_llm`(后者返回 RunnableWithFallbacks,
-    `audit/llm.py` 后续 `bind_tools` 会 AttributeError)。
-
-    接受:"deepseek" / "audit_deepseek" / "audit_bailian"(配合 set_test_llm 注入缝)
-    拒绝:"openai" / "compression_deepseek" / 未知(抛 ProviderNotRegisteredError)
-
-    Raises:
-        ProviderNotRegisteredError: provider 不在受支持集合。
-    """
-    # 注入缝:旧字符串归一后查 _test_llm_overrides
-    role = _legacy_provider_to_role(provider)
-    if role in _test_llm_overrides:
-        return _test_llm_overrides[role]
-
-    if provider == "audit_bailian":
-        # audit_bailian 在旧字符串表里是 AUDIT role 的 fallback(不是 primary)
-        fallback = build_role_fallback(Role.AUDIT, settings)
-        if fallback is None:
-            msg = f"Provider '{provider}' 无可用 fallback"
-            raise ProviderNotRegisteredError(msg)
-        return fallback
-
-    if provider in ("deepseek", "audit_deepseek"):
-        return build_role_primary(role, settings)
-
-    # 旧 "openai"(ChatOpenAI 走 bailian 端点)与 "compression_deepseek"
-    # 在新结构已删除 — 主对话 / 审查 / 压缩改走 build_main_llm /
-    # build_audit_llm / build_compression_llm 入口
-    msg = (
-        f"Provider '{provider}' 不再受 build_provider_llm 支持；"
-        f"主对话用 build_main_llm(settings) / 审查用 build_audit_llm / "
-        f"压缩用 build_compression_llm(settings)。"
-    )
-    raise ProviderNotRegisteredError(msg)
-
-
-# ============================================================================
 # 旧 _build_chat_openai(计划「暂留给未来或移走」取暂留分支)
 # ============================================================================
 # 无生产调用方,ChatOpenAI 走 bailian 端点的旧路径今日无 role 绑定使用;
@@ -454,16 +375,3 @@ def _build_chat_openai(
         timeout=timeout,
         max_retries=0,
     )
-
-
-# ============================================================================
-# Step 7 收口 stub:`_PROVIDER_REGISTRY` 空 dict 占位
-# ============================================================================
-# test_factory.py 顶部 `from app.core.llm import _PROVIDER_REGISTRY` 仍存在,
-# 删除该符号会触发 ImportError 阻断 pytest 收集。最简兼容:提供空 dict 占位,
-# test_factory.py 顶部 import 通过,内部断言(`_PROVIDER_REGISTRY["deepseek"]`)
-# KeyError → 标记为"Step 7 整体重写 test_factory.py 时删本 stub"。
-
-_PROVIDER_REGISTRY: dict[str, Any] = {}
-"""Step 7 删:旧 _PROVIDER_REGISTRY 已由 `build_provider_llm` shim 取代,
-本空 dict 占位仅为兼容 test_factory.py 顶部 import,不允许新代码引用。"""

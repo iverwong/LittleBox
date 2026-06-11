@@ -18,8 +18,9 @@
 - `retry_attempts` 显式读 `ROLES[Role.AUDIT].retry_attempts`（今日 = 3）单一真相源，
   改 `ROLES` 即跟随——避免走 `wrap_resilience` 默认值 3 静默脱钩
 - 不再走 `build_provider_llm` 字符串拼接（Step 6 同步移除唯一生产调用方）
-- shim `build_provider_llm` 在 `app/core/llm.py` 保留到 Step 7（因 30+ 测试用例
-  与集成测试注入缝仍在引用，Step 7 整体收口时删）
+- `build_provider_llm` shim + `ProviderNotRegisteredError` + `_legacy_provider_to_role`
+  + `_PROVIDER_REGISTRY` 空占位已在 Step 7 Commit B 删除(生产无引用、测试已
+  全 Role 化,grep 兜底 0 调用方)
 """
 
 from __future__ import annotations
