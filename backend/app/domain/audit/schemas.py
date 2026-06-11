@@ -110,6 +110,10 @@ class AppendNote(BaseModel):
     """在 `session_notes` 末尾追加一段文本。
 
     每次调用返回当前完整 notes 全文。LLM 不自推导 notes 现态。
+
+    批量调用约定：与 `ReplaceInNotes` 同帧调用时，仅"最后一条 note 工具的成功响应"
+    或"任何 note 工具的失败响应"在 ToolMessage payload 中返回 `current_notes`，
+    中间成功的 note 工具响应不返回，便于 LLM 节省注意力在末态上。
     """
 
     text: str = Field(
@@ -127,6 +131,9 @@ class ReplaceInNotes(BaseModel):
     - 1 命中 → 替换并返 `{"ok": true, "current_notes": "..."}`
     - ≥2 命中 → 不修改，返 `{"ok": false, "error": "old_str matches N times"}`
     LLM 收到 ≥2 命中错误后应扩写 old_str 缩小范围后重试。
+
+    批量调用约定：与 `AppendNote` 同帧调用时，仅"最后一条 note 工具的成功响应"
+    或"任何 note 工具的失败响应"在 ToolMessage payload 中返回 `current_notes`。
     """
 
     old_str: str = Field(min_length=1, description="待替换的原文片段，必须精确匹配")
