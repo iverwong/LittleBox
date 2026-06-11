@@ -11,7 +11,8 @@ import logging
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from .history_xml import extract_wrapped_output, serialize_history_to_xml
+from app.core.history_xml import extract_wrapped_output, serialize_history_to_xml
+
 from .prompts import COMPRESSION_PROMPT_STUB
 
 logger = logging.getLogger(__name__)

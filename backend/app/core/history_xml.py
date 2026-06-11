@@ -1,6 +1,6 @@
 """LangChain message → XML 序列化与输出提取工具。
 
-M8 上下文压缩、M9 危机 / 红线干预 LLM 调用共用本模块。
+M8 上下文压缩、M9 危机 / 红线干预 LLM 调用、M10 audit history XML 包装共用本模块。
 将多轮 history 包装为 XML 字符串而非真实 HumanMessage/AIMessage 序列，
 避免 chat template 把待压缩的 assistant 末帧视为 generation prefix 触发续写。
 
