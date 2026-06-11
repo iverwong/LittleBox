@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import END, StateGraph
@@ -59,7 +59,7 @@ def _has_audit_output(response: AIMessage) -> bool:
     return any(tc["name"] == TOOL_NAME_OUTPUT for tc in (response.tool_calls or []))
 
 
-def _find_last_output_tool_call(messages: list[BaseMessage]) -> dict | None:
+def _find_last_output_tool_call(messages: list[BaseMessage]) -> Any:
     """从 messages 历史反向查找最近的 AuditOutputSchema tool_call。
 
     用于 max_iter 兜底：从历史中拿 LLM 给过的最后一份 OUTPUT args 构造
@@ -227,7 +227,7 @@ async def load_context(
     ctx = runtime.context
     sid = str(ctx.session_id)
     history = await _load_messages_from_pg(sid, ctx.db_session_factory, limit=8)
-    prior_turns = history[:-2]   # 前 3 轮 = 6 条消息
+    prior_turns = history[:-2]  # 前 3 轮 = 6 条消息
     current_turn = history[-2:]  # 当前 1 轮 = 2 条消息
     session_notes = await _load_session_notes_from_pg(sid, ctx.db_session_factory)
     prior_xml = serialize_history_to_xml(prior_turns, include_system=False)
@@ -235,11 +235,13 @@ async def load_context(
     return {
         "messages": [
             SystemMessage(content=build_audit_system_prompt()),
-            HumanMessage(content=(
-                f"以下是该会话最近 3 轮历史对话：\n{prior_xml}\n\n"
-                f"以下是当前轮次对话：\n{current_xml}\n\n"
-                f"当前 session_notes：\n{session_notes}"
-            )),
+            HumanMessage(
+                content=(
+                    f"以下是该会话最近 3 轮历史对话：\n{prior_xml}\n\n"
+                    f"以下是当前轮次对话：\n{current_xml}\n\n"
+                    f"当前 session_notes：\n{session_notes}"
+                )
+            ),
         ],
         "session_notes_working": session_notes,
         "max_iter": ctx.max_iter,  # D-patch0-7：路由函数妥协
@@ -298,7 +300,7 @@ async def audit_llm_call(
             }
 
     # ---- OUTPUT 解析：仅当恰好单 OUTPUT 时 ----
-    result = {"messages": [response]}
+    result: dict[str, Any] = {"messages": [response]}
     if (
         response.tool_calls
         and len(response.tool_calls) == 1
@@ -369,8 +371,7 @@ async def audit_tools(
     new_notes = state["session_notes_working"]
 
     note_tcs = [
-        tc for tc in last_ai.tool_calls
-        if tc["name"] in (TOOL_NAME_APPEND, TOOL_NAME_REPLACE)
+        tc for tc in last_ai.tool_calls if tc["name"] in (TOOL_NAME_APPEND, TOOL_NAME_REPLACE)
     ]
     last_note_tc = note_tcs[-1] if note_tcs else None
 
@@ -379,14 +380,13 @@ async def audit_tools(
         if name == TOOL_NAME_OUTPUT:
             # 混调 / 多 OUTPUT 违规：发 error ToolMessage，不解析
             payload = {
-                "error": "请单独调用一次 audit_output 给出最终结论，"
-                         "不要与笔记工具混调或重复调用"
+                "error": "请单独调用一次 audit_output 给出最终结论，不要与笔记工具混调或重复调用"
             }
             tool_messages.append(
                 ToolMessage(content=json.dumps(payload, ensure_ascii=False), tool_call_id=tid),
             )
             continue
-        is_last_note = (tc is last_note_tc)
+        is_last_note = tc is last_note_tc
         if name == TOOL_NAME_APPEND:
             new_notes = new_notes + ("\n" if new_notes else "") + args["text"]
             payload: dict = {"ok": True}
@@ -397,10 +397,7 @@ async def audit_tools(
                 payload = {"error": "old_str not found"}
             elif count >= 2:
                 payload = {
-                    "error": (
-                        f"old_str matches {count} times, "
-                        "extend context to make it unique"
-                    )
+                    "error": (f"old_str matches {count} times, extend context to make it unique")
                 }
             else:
                 new_notes = new_notes.replace(old, new, 1)
@@ -445,7 +442,8 @@ async def audit_tools(
             except ValidationError as exc:
                 logger.warning(
                     "audit.max_iter_salvage_validation_failed turn=%s err=%s",
-                    state["turn_number"], exc,
+                    state["turn_number"],
+                    exc,
                 )
                 structured = _build_audit_output_default()
             else:

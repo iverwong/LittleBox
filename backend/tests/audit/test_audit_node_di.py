@@ -4,6 +4,7 @@
 - load_context：验证 _load_messages_from_pg 被调用时第二个参数 == runtime.context.db_session_factory
 - audit_llm_call：验证 build_audit_llm 被调用时参数 == runtime.context.settings
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -61,8 +62,13 @@ def _tc(name: str, args: dict, call_id: str | None = None) -> dict:
 
 
 _EMPTY_SCORES = {
-    "emotional": 0, "social": 0, "romance": 0, "values": 0,
-    "boundaries": 0, "academic": 0, "lifestyle": 0,
+    "emotional": 0,
+    "social": 0,
+    "romance": 0,
+    "values": 0,
+    "boundaries": 0,
+    "academic": 0,
+    "lifestyle": 0,
 }
 
 _AUDIT_OUTPUT_ARGS = {
@@ -151,16 +157,29 @@ async def test_audit_llm_call_passes_settings():
         # 第二次 ainvoke 返回 audit_output
         second_ai = AIMessage(
             content="",
-            tool_calls=[{
-                "name": "AuditOutputSchema", "args": {
-                    "dimension_scores": {"emotional": 0, "social": 0, "romance": 0,
-                                          "values": 0, "boundaries": 0,
-                                          "academic": 0, "lifestyle": 0},
-                    "crisis_detected": False, "crisis_topic": None,
-                    "redline_triggered": False, "redline_detail": None,
-                    "guidance_injection": "ok", "turn_summary": "ok",
-                }, "id": "call-2",
-            }],
+            tool_calls=[
+                {
+                    "name": "AuditOutputSchema",
+                    "args": {
+                        "dimension_scores": {
+                            "emotional": 0,
+                            "social": 0,
+                            "romance": 0,
+                            "values": 0,
+                            "boundaries": 0,
+                            "academic": 0,
+                            "lifestyle": 0,
+                        },
+                        "crisis_detected": False,
+                        "crisis_topic": None,
+                        "redline_triggered": False,
+                        "redline_detail": None,
+                        "guidance_injection": "ok",
+                        "turn_summary": "ok",
+                    },
+                    "id": "call-2",
+                }
+            ],
         )
 
         mock_llm = MagicMock()
@@ -388,6 +407,7 @@ class TestAuditToolsOutputViolation:
         # APPEND 是最后 note → 含 current_notes
         append_msg = next(m for m in tool_messages if m.tool_call_id == "call-AppendNote")
         import json as _json
+
         append_payload = _json.loads(append_msg.content)
         assert append_payload["ok"] is True
         assert "current_notes" in append_payload
@@ -419,6 +439,7 @@ class TestAuditToolsOutputViolation:
         tool_messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
         assert len(tool_messages) == 2
         import json as _json
+
         for m in tool_messages:
             payload = _json.loads(m.content)
             assert "error" in payload
@@ -448,6 +469,7 @@ class TestAuditToolsLastNotePayload:
         result = await audit_tools(state, runtime)
 
         import json as _json
+
         tool_messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
         assert len(tool_messages) == 2
         first_payload = _json.loads(tool_messages[0].content)
@@ -484,6 +506,7 @@ class TestAuditToolsLastNotePayload:
         result = await audit_tools(state, runtime)
 
         import json as _json
+
         tool_messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
         assert len(tool_messages) == 2
         first_payload = _json.loads(tool_messages[0].content)
@@ -688,10 +711,7 @@ class TestMaxIterTailFallback:
         # 校验失败 → default fallback
         assert result["structured_output"].turn_summary == "审查超时降级"
         # warning log
-        assert any(
-            "max_iter_salvage_validation_failed" in r.message
-            for r in caplog.records
-        )
+        assert any("max_iter_salvage_validation_failed" in r.message for r in caplog.records)
 
 
 class TestRouteAfterToolsShortCircuit:

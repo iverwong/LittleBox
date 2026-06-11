@@ -1,4 +1,5 @@
 """history_xml.py 单元测试：XML 序列化与输出提取。"""
+
 from __future__ import annotations
 
 from app.core.history_xml import (
@@ -61,10 +62,12 @@ class TestSerializeHistoryPair:
     """user + assistant 配对。"""
 
     def test_user_assistant_share_idx(self):
-        result = serialize_history_to_xml([
-            HumanMessage(content="你好"),
-            AIMessage(content="你好呀"),
-        ])
+        result = serialize_history_to_xml(
+            [
+                HumanMessage(content="你好"),
+                AIMessage(content="你好呀"),
+            ]
+        )
         assert (
             result
             == '<history><turn idx="1" role="user">你好</turn><turn idx="1" role="assistant">你好呀</turn></history>'
@@ -75,12 +78,14 @@ class TestSerializeHistoryTwoRounds:
     """两轮完整对话。"""
 
     def test_two_rounds(self):
-        result = serialize_history_to_xml([
-            HumanMessage(content="第一轮"),
-            AIMessage(content="回复一"),
-            HumanMessage(content="第二轮"),
-            AIMessage(content="回复二"),
-        ])
+        result = serialize_history_to_xml(
+            [
+                HumanMessage(content="第一轮"),
+                AIMessage(content="回复一"),
+                HumanMessage(content="第二轮"),
+                AIMessage(content="回复二"),
+            ]
+        )
         assert (
             result
             == '<history><turn idx="1" role="user">第一轮</turn><turn idx="1" role="assistant">回复一</turn><turn idx="2" role="user">第二轮</turn><turn idx="2" role="assistant">回复二</turn></history>'
@@ -91,11 +96,13 @@ class TestSerializeHistoryOrphanUser:
     """末尾孤立 user 无 assistant 对应。"""
 
     def test_orphan_user(self):
-        result = serialize_history_to_xml([
-            HumanMessage(content="第一轮"),
-            AIMessage(content="回复"),
-            HumanMessage(content="第二轮（未回复）"),
-        ])
+        result = serialize_history_to_xml(
+            [
+                HumanMessage(content="第一轮"),
+                AIMessage(content="回复"),
+                HumanMessage(content="第二轮（未回复）"),
+            ]
+        )
         assert (
             result
             == '<history><turn idx="1" role="user">第一轮</turn><turn idx="1" role="assistant">回复</turn><turn idx="2" role="user">第二轮（未回复）</turn></history>'
@@ -106,11 +113,13 @@ class TestSerializeHistoryConsecutiveAi:
     """连续 AIMessage 复用同一 idx。"""
 
     def test_consecutive_ai(self):
-        result = serialize_history_to_xml([
-            HumanMessage(content="问题"),
-            AIMessage(content="回复一"),
-            AIMessage(content="补充回复"),
-        ])
+        result = serialize_history_to_xml(
+            [
+                HumanMessage(content="问题"),
+                AIMessage(content="回复一"),
+                AIMessage(content="补充回复"),
+            ]
+        )
         # 两条 AI 共享 idx="1"
         parts = [
             '<turn idx="1" role="user">问题</turn>',
@@ -121,9 +130,11 @@ class TestSerializeHistoryConsecutiveAi:
 
     def test_ai_only_history(self):
         """防御：以 AIMessage 开头的 history（不应发生但兜底）。"""
-        result = serialize_history_to_xml([
-            AIMessage(content="孤立助手消息"),
-        ])
+        result = serialize_history_to_xml(
+            [
+                AIMessage(content="孤立助手消息"),
+            ]
+        )
         # 兜底 current_idx = 1
         assert result == '<history><turn idx="1" role="assistant">孤立助手消息</turn></history>'
 
@@ -157,20 +168,25 @@ class TestSerializeHistorySystem:
     """SystemMessage 处理。"""
 
     def test_system_skipped_by_default(self):
-        result = serialize_history_to_xml([
-            SystemMessage(content="你是助手"),
-            HumanMessage(content="你好"),
-            AIMessage(content="嗨"),
-        ])
+        result = serialize_history_to_xml(
+            [
+                SystemMessage(content="你是助手"),
+                HumanMessage(content="你好"),
+                AIMessage(content="嗨"),
+            ]
+        )
         # SystemMessage 被跳过
         assert '<turn idx="sys"' not in result
         assert '<turn idx="1" role="user">你好</turn>' in result
 
     def test_system_included(self):
-        result = serialize_history_to_xml([
-            SystemMessage(content="你是助手"),
-            HumanMessage(content="你好"),
-        ], include_system=True)
+        result = serialize_history_to_xml(
+            [
+                SystemMessage(content="你是助手"),
+                HumanMessage(content="你好"),
+            ],
+            include_system=True,
+        )
         assert '<turn idx="sys" role="system">你是助手</turn>' in result
         assert '<turn idx="1" role="user">你好</turn>' in result
 
@@ -183,13 +199,11 @@ class TestExtractWrappedOutput:
         assert result == "这是摘要内容"
 
     def test_with_whitespace(self):
-        result = extract_wrapped_output(
-            "  <summary>  带空白的内容  </summary>  ", "summary"
-        )
+        result = extract_wrapped_output("  <summary>  带空白的内容  </summary>  ", "summary")
         assert result == "带空白的内容"
 
     def test_with_code_fence(self):
-        raw = '```xml\n<summary>摘要在 fence 中</summary>\n```'
+        raw = "```xml\n<summary>摘要在 fence 中</summary>\n```"
         result = extract_wrapped_output(raw, "summary")
         assert result == "摘要在 fence 中"
 
