@@ -1,32 +1,43 @@
-"""Provider-aware extractors for finish_reason and reasoning_content.
+"""按模型档解耦的 finish_reason / reasoning_content 提取器。
 
-M8-hotfix (Step 1): finish_reason 取值路径修正。
-修正依据见 LLM Provider 探针 F1 实证：
-  - `chunk.additional_kwargs` 在末 chunk 恒为 {}，取值恒 None
-  - 真路径为 `chunk.response_metadata["finish_reason"]`（LangChain 标准属性）
+Step 5 重构：消除 provider 字符串入参，改由 `ModelProfile` 字段判定
+行为差异。`extract_finish_reason` 与 provider 完全无关（白名单透传路径
+两 provider 早已统一），`extract_reasoning_content` 改由
+`ModelProfile.supports_reasoning` 判定——今日 deepseek-v4 档
+`supports_reasoning=True`，未来加非推理族时翻 False 即可。
 
-Provider field path reference (verified from probe 2026-05-19):
-  deepseek / openai:
-    finish_reason → chunk.response_metadata["finish_reason"]
-    (直接属性，非 additional_kwargs 内嵌)
-  deepseek:
-    reasoning_content → chunk.additional_kwargs.reasoning_content
-    (ChatDeepSeek 在 _convert_chunk_to_generation_chunk 中提取)
-  openai:
-    reasoning_content → None  (ChatOpenAI 丢弃第三方 reasoning 字段)
+字段路径参考（M8-hotfix 探针 2026-05-19 实证）：
+  - finish_reason → `chunk.response_metadata["finish_reason"]`
+    （直接属性，非 `additional_kwargs["response_metadata"]` 内嵌；
+    探针实证末 5 chunk 中 `additional_kwargs` 恒为 {}）
+  - reasoning_content → `chunk.additional_kwargs["reasoning_content"]`
+    （ChatDeepSeek 在 `_convert_chunk_to_generation_chunk` 中提取；
+    非推理档 `ModelProfile.supports_reasoning=False` 时直接返回 None）
 """
 
 from langchain_core.messages import AIMessageChunk
 
+from app.core.llm_topology import ROLES, ModelProfile, Role, resolve_profile
+
 ALLOWED_FINISH_REASONS = frozenset({"stop", "length", "content_filter"})
 
 
-def extract_finish_reason(chunk: AIMessageChunk, provider: str) -> str | None:
-    """从 chunk.response_metadata 提取 finish_reason。
+def role_profile(role: Role) -> ModelProfile:
+    """role → ModelProfile 解析。
 
-    M8-hotfix 修正：真路径是 chunk.response_metadata["finish_reason"] 直接属性，
-    而非 additional_kwargs["response_metadata"]["finish_reason"]。
-    探针实证末 5 chunk 中 additional_kwargs 恒为 {}。
+    即 `resolve_profile(ROLES[role].model)` 的语义化封装，
+    让 `extract_reasoning_content` 等 extractor 无需直接耦合
+    `ROLES` / `resolve_profile` 两个名字（仍依赖 `ModelProfile` 注解，
+    该依赖由 `extract_reasoning_content` 签名强制带入，与本函数无关）。
+
+    Raises:
+        ModelProfileNotRegisteredError: `ROLES[role].model` 无对应模型档。
+    """
+    return resolve_profile(ROLES[role].model)
+
+
+def extract_finish_reason(chunk: AIMessageChunk) -> str | None:
+    """从 chunk.response_metadata 提取白名单内的 finish_reason。
 
     白名单（ALLOWED_FINISH_REASONS）：
       stop / length / content_filter — 透传
@@ -34,7 +45,6 @@ def extract_finish_reason(chunk: AIMessageChunk, provider: str) -> str | None:
 
     Args:
         chunk: LLM 输出 chunk
-        provider: provider 名（仅用于签名兼容，两 provider 路径已一致）
 
     Returns:
         白名单内的 finish_reason 值，或 None
@@ -64,19 +74,23 @@ def extract_usage(chunk: AIMessageChunk) -> dict | None:
     }
 
 
-def extract_reasoning_content(chunk: AIMessageChunk, provider: str) -> str | None:
-    """Extract reasoning content (thinking text) by provider. None if absent.
+def extract_reasoning_content(chunk: AIMessageChunk, profile: ModelProfile) -> str | None:
+    """按模型档提取 reasoning_content（思考文本），无则返回 None。
+
+    模型档判定取代旧 provider 字符串判定：
+      - `profile.supports_reasoning=True`（如 deepseek-v4）：走
+        `chunk.additional_kwargs["reasoning_content"]`（ChatDeepSeek
+        在 `_convert_chunk_to_generation_chunk` 中提取）
+      - `profile.supports_reasoning=False`（如未来纯非推理族）：直接 None
 
     Args:
         chunk: LLM 输出 chunk
-        provider: provider 名
-          - deepseek: 走 additional_kwargs.reasoning_content（ChatDeepSeek 已提取）
-          - openai: 恒返回 None（ChatOpenAI 丢弃第三方 reasoning 字段）
+        profile: 模型档（决定是否走 reasoning 提取路径）
 
     Returns:
-        reasoning_content 字符串，或 None
+        reasoning_content 字符串，或 None（不支持 / 字段缺失）
     """
-    if provider == "deepseek":
-        ak = chunk.additional_kwargs or {}
-        return ak.get("reasoning_content")
-    return None
+    if not profile.supports_reasoning:
+        return None
+    ak = chunk.additional_kwargs or {}
+    return ak.get("reasoning_content")
