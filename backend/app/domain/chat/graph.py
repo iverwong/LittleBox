@@ -29,7 +29,13 @@ from langgraph.graph.state import CompiledStateGraph
 from sqlalchemy import select
 
 from app.core.llm import build_crisis_llm, build_main_llm, build_redline_llm
-from app.core.llm_extractors import extract_finish_reason, extract_reasoning_content, extract_usage
+from app.core.llm_extractors import (
+    extract_finish_reason,
+    extract_reasoning_content,
+    extract_usage,
+    role_profile,
+)
+from app.core.llm_topology import ModelProfile, Role
 from app.domain.audit.models import RollingSummary
 from app.domain.audit.signals import AuditSignalsManager
 from app.domain.chat.context import (
@@ -287,7 +293,7 @@ async def _stream_llm_chunks(
     state: MainDialogueState,
     ctx: ChatContextSchema,
     llm: Runnable,
-    provider: str,
+    profile: ModelProfile,
     intervention_type: str | None,
 ) -> dict:
     """3 个 call_*_llm 公共 LLM 流式消费 + chunk 信号派发(G3-1 落点)。
@@ -303,7 +309,8 @@ async def _stream_llm_chunks(
     - 4 段 chunk 派发:reasoning → delta text → finish_reason → usage_metadata
     - return AIMessage 拼接完整内容
 
-    差异由参数注入:llm 工厂 / provider key / intervention_type 字符串。
+    差异由参数注入:llm 工厂 / 模型档(决定 reasoning 提取路径)/
+    intervention_type 字符串。
     """
     writer = get_stream_writer()
     parts: list[str] = []
@@ -317,7 +324,7 @@ async def _stream_llm_chunks(
         _chunk_typed: AIMessageChunk = chunk  # type: ignore[assignment]
 
         # reasoning passthrough (signal only, no text, baseline §3.2)
-        if extract_reasoning_content(_chunk_typed, provider):
+        if extract_reasoning_content(_chunk_typed, profile):
             writer({"reasoning": True})
 
         text = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
@@ -326,7 +333,7 @@ async def _stream_llm_chunks(
             parts.append(text)
 
         # finish_reason passthrough (whitelist only, helper dispatch)
-        fr = extract_finish_reason(_chunk_typed, provider)
+        fr = extract_finish_reason(_chunk_typed)
         if fr:
             writer({"finish_reason": fr})
 
@@ -366,7 +373,9 @@ async def call_main_llm(
         state,
         ctx,
         llm=build_main_llm(ctx.settings),
-        provider=ctx.settings.main_provider,
+        # 字节等价于旧 main 端点默认值 "deepseek"(关注点 1 要求零兜底依赖):
+        # 由 Role.MAIN 解析模型档,与原 provider 字符串路径同语义。
+        profile=role_profile(Role.MAIN),
         intervention_type="guided" if guidance is not None else None,
     )
 
@@ -384,7 +393,8 @@ async def call_crisis_llm(
         state,
         ctx,
         llm=build_crisis_llm(ctx.settings),
-        provider=ctx.settings.audit_provider,
+        # crisis 复用 main 绑定(Step 3 收口),模型档同步沿用 main。
+        profile=role_profile(Role.MAIN),
         intervention_type="crisis",
     )
 
@@ -402,7 +412,8 @@ async def call_redline_llm(
         state,
         ctx,
         llm=build_redline_llm(ctx.settings),
-        provider=ctx.settings.audit_provider,
+        # redline 复用 main 绑定(Step 3 收口),模型档同步沿用 main。
+        profile=role_profile(Role.MAIN),
         intervention_type="redline",
     )
 
@@ -424,7 +435,7 @@ def build_main_graph() -> CompiledStateGraph:
     builder.add_node("call_crisis_llm", call_crisis_llm)
     builder.add_node("call_redline_llm", call_redline_llm)
 
-    builder.set_entry_point("load_audit_state")
+    builder.add_edge("__start__", "load_audit_state")
 
     builder.add_conditional_edges(
         "load_audit_state",

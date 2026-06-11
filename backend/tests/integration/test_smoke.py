@@ -96,11 +96,12 @@ class TestInfrastructureSmoke:
           3. redis_pool 与 enqueue 端同源（同一 integration_runtime.arq_pool）
           4. 审计图 write_results 正常落库（需 DB 中有 family + user + session）
         """
-        from app.domain.audit.worker import WORKER_SETTINGS
         from app.core.enums import SessionStatus, UserRole
         from app.core.llm import clear_test_llm, set_test_llm
+        from app.core.llm_topology import Role
         from app.domain.accounts.models import Family, User
         from app.domain.audit.signals import AuditSignalsManager
+        from app.domain.audit.worker import WORKER_SETTINGS
         from app.domain.chat.models import Session as SessionModel
         from app.domain.chat.usecase import enqueue_audit
         from arq import Worker
@@ -148,7 +149,7 @@ class TestInfrastructureSmoke:
         )
 
         try:
-            set_test_llm("audit_deepseek", _SmokeAuditLLM())
+            set_test_llm(Role.AUDIT, _SmokeAuditLLM())
 
             async with rr.db_session_factory() as db:
                 await enqueue_audit(

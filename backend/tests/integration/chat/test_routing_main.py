@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 from app.core.llm import clear_test_llm, set_test_llm
+from app.core.llm_topology import Role
 
 from ._helpers import (
     FakeAuditLLM,
@@ -55,7 +56,7 @@ class TestMainRoutingGreen:
         main 路由作为默认分支，即使审计信号不就绪仍应正常产字。
         """
         child, headers = await seed_integration_child(integration_runtime)
-        set_test_llm("deepseek", FakeMainLLM())
+        set_test_llm(Role.MAIN, FakeMainLLM())
         try:
             async with api_client.stream(
                 "POST",
@@ -86,8 +87,8 @@ class TestMainRoutingGreen:
         加上 FakeAuditLLM（默认全关），worker 处理审计后返回 1。
         """
         child, headers = await seed_integration_child(integration_runtime)
-        set_test_llm("deepseek", FakeMainLLM())
-        set_test_llm("audit_deepseek", FakeAuditLLM(
+        set_test_llm(Role.MAIN, FakeMainLLM())
+        set_test_llm(Role.AUDIT, FakeAuditLLM(
             tool_calls=make_audit_tool_call(),
         ))
         try:

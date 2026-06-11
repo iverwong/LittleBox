@@ -12,8 +12,8 @@
      → 调 compression LLM 做摘要 → 写 summary 行 + 旧消息 compressed 标记
      → 重建 initial_state["messages"] → 发 compression_end → 正常出字
 
-注意：compression LLM 使用 provider key "compression_deepseek"（build_provider_llm 调），
-因此也需要 set_test_llm("compression_deepseek", fake_compression_llm)。
+注意：compression LLM 走 build_compression_llm → _build_role_llm(Role.COMPRESSION)，
+注入缝键为 Role.COMPRESSION。
 
 RED 可能点：
   - needs_compression 在 commit② 中被设置但下一轮未触发压缩
@@ -31,6 +31,7 @@ from typing import Any
 import pytest
 from app.core.enums import MessageRole, MessageStatus
 from app.core.llm import clear_test_llm, set_test_llm
+from app.core.llm_topology import Role
 from app.domain.chat.models import Message
 from sqlalchemy import select
 
@@ -45,8 +46,10 @@ pytestmark = [
 class _FakeCompressionLLM:
     """极简 compression FakeLLM：返回一段摘要文本。
 
-    compression 流程的 build_provider_llm("compression_deepseek", settings)
-    调 ainvoke(c_input) 返回 AIMessage，extract_compression_summary 解析 content。
+    compression 流程的 build_compression_llm(settings) 内部走
+    _build_role_llm(Role.COMPRESSION),build_role_primary 命中 Role.COMPRESSION
+    注入缝,返本 FakeLLM。ainvoke 返 AIMessage,extract_compression_summary 解
+    析 content。
     """
 
     async def ainvoke(self, messages, **kwargs):
@@ -76,7 +79,7 @@ class TestCompressionRed:
         child, headers = await seed_integration_child(integration_runtime)
         # 第 1 轮 LLM 报告超大 usage → 翻 needs_compression
         set_test_llm(
-            "deepseek",
+            Role.MAIN,
             FakeMainLLM(
                 chunks=["第一轮回复"],
                 usage_metadata={
@@ -86,7 +89,7 @@ class TestCompressionRed:
                 },
             ),
         )
-        set_test_llm("compression_deepseek", _FakeCompressionLLM())
+        set_test_llm(Role.COMPRESSION, _FakeCompressionLLM())
 
         sid: str | None = None
 
@@ -114,7 +117,7 @@ class TestCompressionRed:
 
             # ---- Round 2 应触发 compression ----
             set_test_llm(
-                "deepseek",
+                Role.MAIN,
                 FakeMainLLM(
                     chunks=["第二轮回复，这是压缩后的新对话。"],
                 ),

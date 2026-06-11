@@ -258,7 +258,7 @@ async def integration_runtime(
     """用集成 settings 构建真 RuntimeResources。
 
     关注点 4（注入缝生效时机 vs 缓存）：
-      LLM 实例在图节点执行时才调 build_provider_llm 构建，
+      LLM 实例在图节点执行时才调 build_role_primary 构建，
       build_runtime 不缓存 LLM。因此 set_test_llm 可在 runtime
       构建之后再调用，仍能生效。
 
@@ -353,14 +353,14 @@ async def arq_worker(integration_runtime: Any) -> AsyncGenerator[Callable[[], in
       run_audit 从 ctx["resources"] 取出 rr 后：
         - db_session_factory → 连 littlebox_integration
         - audit_redis → 连 db 15
-        - audit_graph → 走 build_provider_llm → 受 _test_llm_overrides 控制
+        - audit_graph → 走 build_role_primary(Role.AUDIT) → 受 _test_llm_overrides 控制
 
     约束（计划 §4）：
       functions=WORKER_SETTINGS["functions"] 使用字符串路径
       ["app.domain.audit.worker.run_audit"]，禁止写成 [run_audit]。
     """
-    from app.domain.audit.worker import WORKER_SETTINGS
     from app.domain.audit.signals import AuditSignalsManager
+    from app.domain.audit.worker import WORKER_SETTINGS
     from arq import Worker
 
     rr = integration_runtime

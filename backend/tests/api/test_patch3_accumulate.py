@@ -310,7 +310,7 @@ async def test_compression_progress_fired_when_flag_true(lifecycle_ctx):
 
     lifecycle_ctx.rr.main_graph.astream = fake_astream
     with (
-        patch("app.core.llm.build_provider_llm", return_value=mock_llm),
+        patch("app.core.llm.build_compression_llm", return_value=mock_llm),
     ):
         body = make_payload(content="新消息", session_id=str(sid))
         resp = await client.post("/api/v1/me/chat/stream", json=body, headers=headers)
@@ -365,7 +365,7 @@ async def test_compression_failure_keeps_flag(api_client, auth_headers_child, db
 
     app.state.resources.main_graph.astream = fake_astream
     with (
-        patch("app.core.llm.build_provider_llm", return_value=mock_llm),
+        patch("app.core.llm.build_compression_llm", return_value=mock_llm),
     ):
         body = make_payload(content="新消息", session_id=str(sid))
         resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)

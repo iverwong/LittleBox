@@ -20,6 +20,11 @@ import EventSource from 'react-native-sse';
 import { useAuthStore } from '@/stores/auth';
 import { BASE_URL, handle401 } from '@/services/api/client';
 
+// TODO(child-ui): 服务端会发 `intervention_type` SSE 帧
+// (crisis / redline / guided) — 见后端 chat/pipeline.py:245-249。
+// 当前无 listener,事件被静默丢弃;持久化真相在 `messages.intervention_type` 列。
+// 当子端 UI 需要按干预类型做差异化时,补 union 成员 + handler:
+//   | { type: 'intervention_type'; type: 'crisis' | 'redline' | 'guided' }
 export type SseEvent =
   | { type: 'session_meta'; session_id: string; hid: string }
   | { type: 'compression_start' }

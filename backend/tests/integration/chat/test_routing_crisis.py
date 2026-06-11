@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 from app.core.llm import clear_test_llm, set_test_llm
+from app.core.llm_topology import Role
 
 from ._helpers import (
     FakeAuditLLM,
@@ -58,9 +59,9 @@ class TestCrisisRoutingGreen:
           - Round 2：load_audit_state 读到 crisis → route_by_risk → crisis 分支
         """
         child, headers = await seed_integration_child(integration_runtime)
-        set_test_llm("deepseek", FakeMainLLM())
+        set_test_llm(Role.MAIN, FakeMainLLM())
         set_test_llm(
-            "audit_deepseek",
+            Role.AUDIT,
             FakeAuditLLM(tool_calls=make_audit_tool_call(
                 crisis_detected=True,
                 crisis_topic="self-harm risk",
