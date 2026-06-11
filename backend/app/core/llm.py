@@ -301,24 +301,22 @@ def build_compression_llm(settings: Settings) -> Runnable:
 
 
 # ============================================================================
-# 集成测试注入缝（Step 3 改 Role 键）
+# 集成测试注入缝（Step 3 改 Role 键 + Step 7 收紧 Role 签名）
 # ============================================================================
-# 旧 key 字符串经 `_legacy_provider_to_role` 归一到 Role 枚举后写入;
-# build_role_primary 优先返回 override,build_role_fallback 不查(语义不变)。
-# Step 7 删 `_legacy_provider_to_role` 字符串分支,全量改 Role 枚举键。
+# `_test_llm_overrides` 键为 Role 枚举;build_role_primary 优先返回 override,
+# build_role_fallback 不查(语义「主端 fake / 备端 real」不变)。
+# Step 7 起 set_test_llm / clear_test_llm 仅接受 Role 枚举,旧字符串 provider key
+# ("deepseek"/"audit_deepseek"/"compression_deepseek" 等)被显式 isinstance 守卫
+# 拒绝,防止「漏改字符串调用 → 静默 override 失效 → 回落真 LLM 难诊断」暗坑。
 
 _test_llm_overrides: dict[Role, BaseChatModel] = {}
 
 
 def _legacy_provider_to_role(provider: str) -> Role:
-    """旧公开 key 字符串 → Role 枚举归一(Step 7 删)。
+    """旧公开 key 字符串 → Role 枚举归一(Step 7 Commit B 删 shim 时同步删)。
 
-    - "deepseek" / "openai" → Role.MAIN(openai 今日是 bailian 端点的主别名,新结构已删)
-    - "audit" / "audit_*" → Role.AUDIT
-    - "compression" / "compression_*" → Role.COMPRESSION
-
-    ⚠️ Role 是 StrEnum 子类,`isinstance(Role.MAIN, str) is True` —— 入口归一
-    路径要正确处理「裸 role value」与「带前缀旧 key」两类输入。
+    仅服务 back-compat shim `build_provider_llm`(Step 7 Commit A 阶段 shim 仍在,
+    旧 API patch 仍可能走 shim 入口;Commit B 删 shim 时本 helper 同步删)。
     """
     if provider == "audit" or provider.startswith("audit_"):
         return Role.AUDIT
@@ -327,11 +325,14 @@ def _legacy_provider_to_role(provider: str) -> Role:
     return Role.MAIN
 
 
-def set_test_llm(role: Role | str, llm: BaseChatModel) -> None:
+def set_test_llm(role: Role, llm: BaseChatModel) -> None:
     """设置指定 role 的测试用 LLM 实例(注入缝)。
 
-    `role` 接受 `Role` 枚举或旧公开 key 字符串(经 `_legacy_provider_to_role`
-    归一);设入后 `build_role_primary(role, ...)` 返回此实例(短路 _build_binding)。
+    仅接受 `Role` 枚举(运行时不依赖 type annotation,显式 isinstance 守卫)。
+    旧字符串 provider key 已废:`set_test_llm("deepseek", x)` 立即抛 `TypeError`,
+    防止「漏改字符串调用 → 静默 override 失效 → 回落真 LLM 难诊断」暗坑。
+
+    设入后 `build_role_primary(role, ...)` 返回此实例(短路 _build_binding);
     `build_role_fallback` 不读此 override(语义「主端 fake / 备端 real」)。
     调用 `clear_test_llm()` 恢复生产行为。
 
@@ -339,20 +340,31 @@ def set_test_llm(role: Role | str, llm: BaseChatModel) -> None:
         llm 必须是 `BaseChatModel` 实例(与生产路径 `_build_binding` 返回类型
             一致),允许测试用 mock `__init__` 桩造的 ChatDeepSeek。
     """
-    normalized = _legacy_provider_to_role(role) if isinstance(role, str) else role
-    _test_llm_overrides[normalized] = llm
+    if not isinstance(role, Role):
+        raise TypeError(
+            f"set_test_llm 仅接受 Role 枚举,实得 {type(role).__name__}={role!r};"
+            "旧字符串 provider key(\"deepseek\"/\"audit_deepseek\"/"
+            "\"compression_deepseek\")已废,请用 Role.MAIN / "
+            "Role.AUDIT / Role.COMPRESSION"
+        )
+    _test_llm_overrides[role] = llm
 
 
-def clear_test_llm(role: Role | str | None = None) -> None:
+def clear_test_llm(role: Role | None = None) -> None:
     """清除测试 LLM override。
 
-    `role=None` 时清除全部;否则仅清除指定 role(字符串经归一)。
+    仅接受 `Role` 枚举或 `None`;字符串输入立即抛 TypeError(与 set_test_llm 对称)。
+    `role=None` 时清除全部;否则仅清除指定 role。
     """
+    if role is not None and not isinstance(role, Role):
+        raise TypeError(
+            f"clear_test_llm 仅接受 Role 枚举或 None,实得 {type(role).__name__}={role!r};"
+            "请用 Role.MAIN / Role.AUDIT / Role.COMPRESSION"
+        )
     if role is None:
         _test_llm_overrides.clear()
         return
-    normalized = _legacy_provider_to_role(role) if isinstance(role, str) else role
-    _test_llm_overrides.pop(normalized, None)
+    _test_llm_overrides.pop(role, None)
 
 
 # ============================================================================

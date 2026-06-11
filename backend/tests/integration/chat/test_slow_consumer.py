@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 from app.core.enums import MessageRole
 from app.core.llm import clear_test_llm, set_test_llm
+from app.core.llm_topology import Role
 from app.domain.chat.models import Message
 from sqlalchemy import select
 
@@ -48,7 +49,7 @@ class TestSlowConsumerRed:
         """
         child, headers = await seed_integration_child(integration_runtime)
         set_test_llm(
-            "deepseek",
+            Role.MAIN,
             FakeMainLLM(
                 chunks=["Hello ", "world, ", "this ", "is ", "a ", "test."],
             ),

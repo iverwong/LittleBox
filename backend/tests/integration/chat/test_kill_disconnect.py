@@ -25,6 +25,7 @@ from typing import Any
 
 import pytest
 from app.core.llm import clear_test_llm, set_test_llm
+from app.core.llm_topology import Role
 
 from ._helpers import FakeMainLLM, seed_integration_child
 
@@ -54,7 +55,7 @@ class TestKillDisconnectRed:
         """
         child, headers = await seed_integration_child(integration_runtime)
         set_test_llm(
-            "deepseek",
+            Role.MAIN,
             FakeMainLLM(
                 chunks=["你好，", "我是一", "个测试", "AI助手。"],
             ),

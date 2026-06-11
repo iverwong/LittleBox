@@ -20,14 +20,12 @@ from typing import Any, get_type_hints
 import pytest
 from app.core.llm import (
     _TRANSPORTS,
-    ProviderNotRegisteredError,
     _adapter_chat_deepseek,
     _build_binding,
     _test_llm_overrides,
     build_compression_llm,
     build_crisis_llm,
     build_main_llm,
-    build_provider_llm,
     build_redline_llm,
     build_role_fallback,
     build_role_primary,
@@ -589,15 +587,12 @@ class TestBuildBinding:
 # - wrap_resilience 链式形态：primary.with_retry().with_fallbacks([fallback])
 # - _build_role_llm / build_main_llm / build_crisis_llm / build_redline_llm /
 #   build_compression_llm 串联三者,retry 次数取 ROLES[role].retry_attempts
-# - back-compat shim build_provider_llm：路由 deepseek/audit_deepseek 到
-#   build_role_primary、audit_bailian 到 build_role_fallback、openai/
-#   compression_deepseek/未知抛 ProviderNotRegisteredError
 
 
 class _FakeRunnable:
     """最小 Runnable 假实现：仅暴露 wrap_resilience 链路所需的 with_retry/with_fallbacks。
 
-    用于注入缝测试：build_role_primary / build_provider_llm 短路返回此类。
+    用于注入缝测试：build_role_primary 短路返回此类。
     """
 
     def __init__(self) -> None:
@@ -783,7 +778,7 @@ class TestBuildCompressionLlm:
 
 
 class TestInjectionSeamRoleKey:
-    """注入缝:_test_llm_overrides 改 Role 枚举键;set/clear 接受 Role | str。"""
+    """注入缝:_test_llm_overrides 键为 Role 枚举;set/clear 仅接受 Role。"""
 
     def teardown_method(self) -> None:
         """每测试后清理 override,避免跨测试泄漏。"""
@@ -797,29 +792,21 @@ class TestInjectionSeamRoleKey:
         result = build_role_primary(Role.MAIN, s)
         assert result is fake
 
-    def test_set_role_string_deepseek_normalizes_to_main(self) -> None:
-        """set_test_llm("deepseek", fake) 字符串归一 Role.MAIN,build_role_primary 返回 fake。"""
-        s = _FakeSettings()
-        fake = _FakeRunnable()
-        set_test_llm("deepseek", fake)
-        result = build_role_primary(Role.MAIN, s)
-        assert result is fake
+    def test_set_role_string_raises_type_error(self) -> None:
+        """set_test_llm("字符串", fake) 抛 TypeError(运行时不依赖注解,isinstance 显式守卫)。
 
-    def test_set_audit_string_normalizes_to_audit(self) -> None:
-        """set_test_llm("audit_deepseek", fake) 字符串归一到 Role.AUDIT。"""
-        s = _FakeSettings()
-        fake = _FakeRunnable()
-        set_test_llm("audit_deepseek", fake)
-        result = build_role_primary(Role.AUDIT, s)
-        assert result is fake
+        关注点 1:Python 注解运行时不强制,且 tests/ 不在 basedpyright 范围——
+        漏改字符串调用不会自动报错,而是 _test_llm_overrides["字符串"] 静默不命中
+        (override 失效、回落真 LLM,难诊断)。显式 isinstance 守卫在 setup 阶段立即
+        抛出,任何漏改立即可见。
+        """
+        with pytest.raises(TypeError, match="仅接受 Role"):
+            set_test_llm("deepseek", _FakeRunnable())  # type: ignore[arg-type]
 
-    def test_set_compression_string_normalizes_to_compression(self) -> None:
-        """set_test_llm("compression_deepseek", fake) 字符串归一到 Role.COMPRESSION。"""
-        s = _FakeSettings()
-        fake = _FakeRunnable()
-        set_test_llm("compression_deepseek", fake)
-        result = build_role_primary(Role.COMPRESSION, s)
-        assert result is fake
+    def test_clear_role_string_raises_type_error(self) -> None:
+        """clear_test_llm("字符串") 抛 TypeError(对称守卫)。"""
+        with pytest.raises(TypeError, match="仅接受 Role"):
+            clear_test_llm("audit_deepseek")  # type: ignore[arg-type]
 
     def test_clear_role_enum_removes_only_that_role(self) -> None:
         """clear_test_llm(Role.MAIN) 只清 Role.MAIN,Role.AUDIT 仍 override。"""
@@ -842,9 +829,9 @@ class TestInjectionSeamRoleKey:
         assert _test_llm_overrides == {}
 
     def test_overrides_dict_uses_role_keys(self) -> None:
-        """关注点 2 实证:_test_llm_overrides 键为 Role 枚举,非字符串。"""
-        set_test_llm("deepseek", _FakeRunnable())
-        set_test_llm("audit_deepseek", _FakeRunnable())
+        """_test_llm_overrides 键为 Role 枚举,非字符串(关注点 2 实证)。"""
+        set_test_llm(Role.MAIN, _FakeRunnable())
+        set_test_llm(Role.AUDIT, _FakeRunnable())
         try:
             assert Role.MAIN in _test_llm_overrides
             assert Role.AUDIT in _test_llm_overrides
@@ -853,60 +840,3 @@ class TestInjectionSeamRoleKey:
             assert "audit_deepseek" not in _test_llm_overrides
         finally:
             clear_test_llm()
-
-
-class TestBuildProviderLlmShim:
-    """Back-compat shim:build_provider_llm 路由到 build_role_primary/fallback。"""
-
-    def teardown_method(self) -> None:
-        clear_test_llm()
-
-    def test_deepseek_routes_to_main_primary(self) -> None:
-        """build_provider_llm("deepseek", settings) → build_role_primary(MAIN, settings)。"""
-        s = _FakeSettings()
-        result = build_provider_llm("deepseek", s)
-        assert isinstance(result, ChatDeepSeek)
-        # 关注点 3 实证:返回裸 ChatDeepSeek,不是 RunnableWithFallbacks
-        assert not isinstance(result, RunnableWithFallbacks)
-
-    def test_audit_deepseek_routes_to_audit_primary(self) -> None:
-        """build_provider_llm("audit_deepseek", settings) → build_role_primary(AUDIT, settings)。"""
-        s = _FakeSettings()
-        result = build_provider_llm("audit_deepseek", s)
-        assert isinstance(result, ChatDeepSeek)
-        assert not isinstance(result, RunnableWithFallbacks)
-
-    def test_audit_bailian_routes_to_audit_fallback(self) -> None:
-        """build_provider_llm("audit_bailian", settings) → build_role_fallback(AUDIT, settings)。"""
-        s = _FakeSettings()
-        result = build_provider_llm("audit_bailian", s)
-        assert isinstance(result, ChatDeepSeek)
-        # 关注点 3 实证:audit_bailian 走 bailian 端点
-        assert result.api_base == "https://dashscope.aliyuncs.com/compatible-mode/v1"  # type: ignore[attr-defined]
-
-    def test_openai_raises(self) -> None:
-        """build_provider_llm("openai", ...) 抛 ProviderNotRegisteredError（旧 alias 已删）。"""
-        s = _FakeSettings()
-        with pytest.raises(ProviderNotRegisteredError, match="openai"):
-            build_provider_llm("openai", s)
-
-    def test_compression_deepseek_raises(self) -> None:
-        """build_provider_llm("compression_deepseek", ...) 抛 ProviderNotRegisteredError。"""
-        s = _FakeSettings()
-        with pytest.raises(ProviderNotRegisteredError, match="compression_deepseek"):
-            build_provider_llm("compression_deepseek", s)
-
-    def test_unknown_provider_raises(self) -> None:
-        """build_provider_llm("unknown", ...) 抛 ProviderNotRegisteredError。"""
-        s = _FakeSettings()
-        with pytest.raises(ProviderNotRegisteredError, match="unknown"):
-            build_provider_llm("unknown", s)
-
-    def test_override_via_legacy_string(self) -> None:
-        """set_test_llm("audit_deepseek", fake) → build_provider_llm 返回 fake（裸实例）。"""
-        fake = _FakeRunnable()
-        set_test_llm("audit_deepseek", fake)
-        result = build_provider_llm("audit_deepseek", _FakeSettings())
-        # 关注点 3 实证:shim 命中 override 时也返裸实例（不是 RunnableWithFallbacks）
-        assert result is fake
-        assert not isinstance(result, RunnableWithFallbacks)

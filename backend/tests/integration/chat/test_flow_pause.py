@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 from app.core.enums import MessageRole
 from app.core.llm import clear_test_llm, set_test_llm
+from app.core.llm_topology import Role
 from app.domain.chat.models import Message
 from sqlalchemy import select
 
@@ -55,7 +56,7 @@ class TestFlowPauseRed:
         # 用大量 chunks 填满 queue
         many_chunks = [f"块{i}" for i in range(200)]
         set_test_llm(
-            "deepseek",
+            Role.MAIN,
             FakeMainLLM(chunks=many_chunks),
         )
 
