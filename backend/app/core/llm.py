@@ -356,8 +356,19 @@ def clear_test_llm(role: Role | str | None = None) -> None:
 
 
 # ============================================================================
-# Back-compat shim:build_provider_llm(Step 6 重写 audit/llm.py 时删)
+# Back-compat shim:build_provider_llm(Step 6 留 → Step 7 测试重写时删)
 # ============================================================================
+# Step 3 引入时唯一生产调用方是 `app/domain/audit/llm.py::build_audit_llm`
+# (走 "audit_deepseek" / "audit_bailian" 字符串)。Step 6 重写 audit/llm.py
+# 移除该调用,但 shim 因以下消费方仍在,保留到 Step 7:
+# - tests/chat/test_factory.py(T1 / T5c / T8 共 30+ 用例)
+# - tests/core/test_llm_topology.py(T6 路由 shim 用例,共 6+)
+# - tests/api/test_chat_stream_graph.py(6 个 mock patch)
+# - tests/api/test_patch3_accumulate.py(2 个 mock patch)
+# - tests/integration/conftest.py / tests/integration/chat/test_compression.py
+#   (注入缝与 provider key 用例)
+# Step 7 整体重写 test_factory.py / test_llm_topology.py 时同步删本 shim。
+#
 # 旧公开 key 字符串路由:
 #   "deepseek" / "audit_deepseek" → build_role_primary(role)
 #   "audit_bailian"               → build_role_fallback(Role.AUDIT)
@@ -365,8 +376,8 @@ def clear_test_llm(role: Role | str | None = None) -> None:
 # 注入缝(字符串)经 `_legacy_provider_to_role` 归一后查 _test_llm_overrides,
 # 命中则直接返回(对应 build_role_primary 的入口短路)。
 # 关键约束:shim **不**走 `_build_role_llm` — 必须返回裸实例以让
-# `audit/llm.py` 继续 `.bind_tools(...)`(RunnableWithFallbacks 无 bind_tools,
-# 会 AttributeError;见 plan 关注点 3)。
+# 历史 audit/llm.py 走 `.bind_tools(...)` 路径(Step 6 已不需;RunnableWithFallbacks
+# 无 bind_tools,会 AttributeError;见 plan 关注点 3)。
 
 
 def build_provider_llm(provider: str, settings: Any) -> BaseChatModel:
