@@ -41,7 +41,8 @@ from app.domain.audit.signals import AuditSignalsManager
 from app.domain.chat.context import (
     build_crisis_context,
     build_redline_context,
-    load_active_history_for_assembly,
+    load_active_messages_with_summary,
+    to_lc_message,
 )
 from app.domain.chat.context_schema import ChatContextSchema
 from app.domain.chat.prompts import (
@@ -191,43 +192,51 @@ async def build_messages_main(
     state: MainDialogueState,
     runtime: Runtime[ChatContextSchema],
 ) -> dict:
-    """W1 wrapper 模式：load_active_history_for_assembly + 末位 wrapped HumanMessage。
+    """W1 wrapper 模式:system_prompt + active (h,a) + 末位 wrapped HumanMessage。
 
     装配顺序：
-      [system_prompt, *summaries(前缀), *active_messages(不含本轮),
+      [system_prompt(含 # 历史会话摘要(压缩) 段), *active_messages(不含本轮,不含 summary),
        HumanMessage(content=format_guidance_wrapper(ctx.user_input, audit.guidance))]
 
     职责边界：
-    - history 不含本轮 human（由 load_active_history_for_assembly 的 until_turn 过滤）
-    - wrapper 仅作用于 LLM 输入装配层，不回写 messages 表
-    - compression 路径（[app/domain/chat/pipeline.py]）时本节点跳过装配
-    - build_context（audit 路径用）保留不删
+    - history 不含本轮 human(load_active_messages 的 until_turn 边界过滤)
+    - history 不含 summary 行(避免与 system prompt 段双写)
+    - active summary 走 load_active_messages_with_summary 注入 build_system_prompt 的
+      # 历史会话摘要(压缩) 段
+    - wrapper 仅作用于 LLM 输入装配层,不回写 messages 表
+    - compression 路径([app/domain/chat/pipeline.py])时 messages 已预装
+      [sp, *history](不含本轮 human),本节点只 append 末位 wrapped human
+      —— add_messages reducer 是 append-only,不能返整列表,否则会重复
+    - build_context(audit 路径用)保留不删
     """
     ctx = runtime.context
+    audit = state.get("audit_state", {})
+    guidance = audit.get("guidance")
 
-    # compression 路径：[app/domain/chat/pipeline.py] 已预装 initial_state['messages']，跳过 DB 重装
+    # compression 路径:[app/domain/chat/pipeline.py] 已预装 initial_state['messages']
+    # 只追加末位 wrapped human,由 add_messages reducer 接到已预装列表末尾
     if state.get("messages"):
-        return {}
+        return {
+            "messages": [HumanMessage(content=format_guidance_wrapper(ctx.user_input, guidance))]
+        }
 
     async with ctx.db_session_factory() as db:
-        history = await load_active_history_for_assembly(
-            ctx.session_id,
-            state["turn_number"],
-            db,
+        # 不含本轮 human(until_turn=current_turn 边界过滤) + 不含 summary 行
+        # summary 由 load_active_messages_with_summary 拆分返回
+        history_rows, summary = await load_active_messages_with_summary(
+            ctx.session_id, db, until_turn=state["turn_number"]
         )
-    system_prompt = build_system_prompt(ctx.child_profile)
+        history = [to_lc_message(m) for m in history_rows]
+    system_prompt = build_system_prompt(
+        ctx.child_profile,
+        summary.content if summary is not None else None,
+    )
 
-    audit = state.get("audit_state", {})
     return {
         "messages": [
             system_prompt,
             *history,
-            HumanMessage(
-                content=format_guidance_wrapper(
-                    ctx.user_input,
-                    audit.get("guidance"),
-                )
-            ),
+            HumanMessage(content=format_guidance_wrapper(ctx.user_input, guidance)),
         ]
     }
 

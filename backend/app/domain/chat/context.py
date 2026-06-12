@@ -31,42 +31,84 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.enums import MessageRole
+from app.core.enums import MessageRole, MessageStatus
 from app.domain.audit.models import RollingSummary
 from app.domain.chat.models import Message
 from app.domain.chat.prompts import ANCHOR_WINDOW_PREFIX, SUMMARY_PREFIX
 
 
-async def _load_active_messages(
+async def load_active_messages(
     sid: UUID,
     db: AsyncSession,
     *,
     until_turn: int | None = None,
 ) -> list[Message]:
-    """底层共享 helper：查询 session 中 status='active' 的消息。
+    """底层共享 helper:查询 session 中 status='active' 的 human/ai 消息。
+
+    主动过滤掉 role=summary 的消息(压缩产物行),由 load_active_messages_with_summary
+    单独取 summary 供 main W1 wrapper 注入 build_system_prompt —— 避免 summary
+    同时出现在 history 与 system prompt 两处的双写。
 
     Args:
         until_turn: 非 None 时只返回 turn_number < until_turn 的行
-                    （用于 main W1 装配链，排除本轮 human）
+                    (用于 main W1 装配链,排除本轮 human)
     """
-    stmt = select(Message).where(Message.session_id == sid, Message.status == "active")
+    stmt = select(Message).where(
+        Message.session_id == sid,
+        Message.status == "active",
+        Message.role != MessageRole.summary,
+    )
     if until_turn is not None:
         stmt = stmt.where(Message.turn_number < until_turn)
     stmt = stmt.order_by(Message.created_at.asc(), Message.id.asc())
     return list((await db.execute(stmt)).scalars())
 
 
+async def load_active_messages_with_summary(
+    sid: UUID, db: AsyncSession, *, until_turn: int | None = None
+) -> tuple[list[Message], Message | None]:
+    """取 sid 当前 active 的 summary 消息(0 或 1 条)。
+
+    M8 压缩产物:每次压缩在 messages 表插入一条 role=summary, status=active 的行,
+    旧的 active summary 在新一轮压缩时被标 compressed —— 故任何时刻 active summary
+    至多 1 条。该消息专供 main W1 wrapper 注入 build_system_prompt 用,
+    不进 history(避免双写,见 compression 路径注释)。
+    """
+    stmt = select(Message).where(
+        Message.session_id == sid,
+        Message.status == MessageStatus.active,
+    )
+    if until_turn is not None:
+        stmt = stmt.where(Message.turn_number < until_turn)
+    stmt = stmt.order_by(Message.created_at.asc(), Message.id.asc())
+    rows = list((await db.execute(stmt)).scalars())
+    messages: list[Message] = []
+    summary: Message | None = None
+    for m in rows:
+        if m.role == MessageRole.summary:
+            summary = m
+        else:
+            messages.append(m)
+    return messages, summary
+
+
+# TODO(日终审查 agent): 此函数当前在 main W1 装配链由 build_messages_main 调用,
+#   后续做日中审查 agent 时复用其 rolling_summaries 注入逻辑。
+#   现行调用点(见 app/domain/chat/graph.py::build_messages_main)正切到
+#   load_active_messages_with_summary 拿 messages 表的 active summary,绕开此处。
 async def load_active_history_for_assembly(
     sid: UUID,
     current_turn: int,
     db: AsyncSession,
 ) -> list[BaseMessage]:
-    """main W1 wrapper 装配链专用：返回不含本轮 human 的历史 + turn_summaries 前缀。
+    """main W1 wrapper 装配链专用:返回不含本轮 human 的历史 + turn_summaries 前缀。
 
-    与 build_context 的职责边界：
-    - build_context: audit 路径专用，含本轮 human，不注入 turn_summaries
-    - load_active_history_for_assembly: main W1 装配链专用，不含本轮 human，
-      前缀含 turn_summaries SystemMessage 列表
+    与 build_context / load_active_messages_with_summary 的职责边界:
+    - build_context: audit 路径专用,含本轮 human,不注入 summary
+    - load_active_messages_with_summary: 取当前 active (h,a) + summary 消息
+      (0 或 1 条 summary)供 build_system_prompt / history 用
+    - load_active_history_for_assembly: main W1 装配链专用,不含本轮 human,
+      前缀含 turn_summaries SystemMessage 列表(从 rolling_summaries 注入)
     """
     rs = await db.scalar(select(RollingSummary).where(RollingSummary.session_id == sid).limit(1))
     summaries: list[SystemMessage] = []
@@ -75,8 +117,8 @@ async def load_active_history_for_assembly(
             text = f"Turn {s.get('turn_number', '?')}: {s.get('summary', '')}"
             summaries.append(SystemMessage(content=text))
 
-    rows = await _load_active_messages(sid, db, until_turn=current_turn)
-    return [*summaries, *(_to_lc_message(m) for m in rows)]
+    rows = await load_active_messages(sid, db, until_turn=current_turn)
+    return [*summaries, *(to_lc_message(m) for m in rows)]
 
 
 async def build_context(sid: UUID, db: AsyncSession) -> list[BaseMessage]:
@@ -88,8 +130,8 @@ async def build_context(sid: UUID, db: AsyncSession) -> list[BaseMessage]:
       将 SystemMessage 注入列表首位
     - session_notes：永不注入主 LLM
     """
-    rows = await _load_active_messages(sid, db)
-    messages: list[BaseMessage] = [_to_lc_message(m) for m in rows]
+    rows = await load_active_messages(sid, db)
+    messages: list[BaseMessage] = [to_lc_message(m) for m in rows]
 
     # rolling_summaries：M6 只读路径，始终 fall through
     # （M8 review worker 写入后改由非空 turn_summaries 触发注入）
@@ -127,7 +169,7 @@ async def load_recent_active_pairs(
                 .where(
                     Message.session_id == sid,
                     Message.turn_number < current_turn,
-                    Message.status == "active",
+                    Message.status == "active",  # CHECK 按理说这里应该只限制 role in (human, ai)
                 )
                 .order_by(Message.turn_number.desc())
                 .limit(n * 2)
@@ -136,7 +178,7 @@ async def load_recent_active_pairs(
         .scalars()
         .all()
     )
-    return [_to_lc_message(m) for m in reversed(rows)]
+    return [to_lc_message(m) for m in reversed(rows)]
 
 
 async def build_crisis_context(
@@ -198,7 +240,7 @@ async def build_crisis_context(
         .scalars()
         .all()
     )
-    return anchor_system, [_to_lc_message(m) for m in after_rows]
+    return anchor_system, [to_lc_message(m) for m in after_rows]
 
 
 async def build_redline_context(
@@ -234,7 +276,7 @@ async def build_redline_context(
 # ---- LangChain 消息转换 ----
 
 
-def _to_lc_message(m: Message) -> BaseMessage:
+def to_lc_message(m: Message) -> BaseMessage:
     """将 Message ORM 对象转换为 LangChain 消息。"""
     if m.role == MessageRole.human:
         return HumanMessage(content=m.content)

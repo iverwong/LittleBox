@@ -14,7 +14,6 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from langchain_core.messages import HumanMessage
 from redis.asyncio import Redis
 from sqlalchemy import select
 
@@ -129,7 +128,7 @@ async def run_llm_pipeline(
                                     select(Message)
                                     .where(
                                         Message.session_id == sid,
-                                        Message.status == "active",
+                                        Message.status == MessageStatus.active,
                                         Message.id != protected_id,
                                     )
                                     .order_by(Message.created_at.asc(), Message.id.asc())
@@ -183,6 +182,10 @@ async def run_llm_pipeline(
                         await db.commit()
 
                         # 手动构造 initial_state["messages"]
+                        # 注意:本轮 protected human 不在这里 append——
+                        # build_messages_main 节点会通过 add_messages reducer
+                        # 把它(以及可能的 guidance 包装)接到末尾,避免 reducer
+                        # 把本节点返回的整列表再 append 一遍导致重复。
                         _sp = build_system_prompt(ctx.child_profile, summary)
                         _new_hist: list = []
 
@@ -190,11 +193,6 @@ async def run_llm_pipeline(
                         # 顺序: created_at ASC → 自然接在 summary 之后
                         for mo in to_keep_orm:
                             _new_hist.append(to_lc_message(mo))
-
-                        # protected 消息的 content 由 me.py 透传过来(原语字符串),
-                        # 避免跨 session 边界传 ORM 对象(detached / identity map 不同步风险)
-                        if protected_content is not None:
-                            _new_hist.append(HumanMessage(content=protected_content))
 
                         initial_state["messages"] = [_sp, *_new_hist]
 
