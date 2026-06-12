@@ -52,7 +52,7 @@ async def _load_active_messages(
     stmt = select(Message).where(Message.session_id == sid, Message.status == "active")
     if until_turn is not None:
         stmt = stmt.where(Message.turn_number < until_turn)
-    stmt = stmt.order_by(Message.created_at.asc())
+    stmt = stmt.order_by(Message.created_at.asc(), Message.id.asc())
     return list((await db.execute(stmt)).scalars())
 
 
@@ -192,7 +192,7 @@ async def build_crisis_context(
                     Message.created_at > anchor.created_at,
                     Message.status == "active",
                 )
-                .order_by(Message.created_at.asc())
+                .order_by(Message.created_at.asc(), Message.id.asc())
             )
         )
         .scalars()

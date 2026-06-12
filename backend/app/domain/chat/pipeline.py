@@ -130,7 +130,7 @@ async def run_llm_pipeline(
                                         Message.status == "active",
                                         Message.id != protected_id,
                                     )
-                                    .order_by(Message.created_at.asc())
+                                    .order_by(Message.created_at.asc(), Message.id.asc())
                                 )
                             )
                             .scalars()
