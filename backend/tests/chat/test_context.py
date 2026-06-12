@@ -18,12 +18,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-
-from app.chat.prompts import ANCHOR_WINDOW_PREFIX
-
-from app.chat.context import (
+from app.domain.chat.context import (
     _to_lc_message,
     build_context,
     build_crisis_context,
@@ -31,9 +26,11 @@ from app.chat.context import (
     load_active_history_for_assembly,
     load_recent_active_pairs,
 )
-from app.models.audit import RollingSummary
-from app.models.chat import Message, Session
-from app.models.enums import MessageRole, MessageStatus
+from app.domain.chat.prompts import ANCHOR_WINDOW_PREFIX
+from app.core.enums import MessageRole, MessageStatus
+from app.domain.audit.models import RollingSummary
+from app.domain.chat.models import Message, Session
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 
 async def _seed_session(db_session, child_user_id: uuid.UUID) -> uuid.UUID:
@@ -571,7 +568,7 @@ class TestBuildRedlineContext:
     async def test_redline_summaries_window_limits(self, db_session, child_user) -> None:
         """Given turn_summaries 含 80 条, When build_redline_context, Then summaries 取最近 50 条。
         Given/When/Then: D17 window=50。"""
-        from app.config import settings
+        from app.core.config import settings
 
         sid = await _seed_session(db_session, child_user.id)
         await _seed_messages(db_session, sid, 2)

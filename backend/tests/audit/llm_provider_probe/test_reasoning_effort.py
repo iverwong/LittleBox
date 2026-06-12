@@ -12,14 +12,13 @@ import time
 
 import pytest
 
-from .conftest import ArtifactBuilder, USER_MESSAGE
+from .conftest import ArtifactBuilder
 
 pytestmark = [pytest.mark.live, pytest.mark.asyncio]
 
 
 async def _run_reffort(cfg: dict, effort: str, builder: ArtifactBuilder) -> None:
     """发一次非流式 chat，记录 response。"""
-    import httpx
 
     client = builder.make_http_client()
     headers = {"Authorization": f"Bearer {cfg['api_key']}"}

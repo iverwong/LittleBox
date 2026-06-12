@@ -13,10 +13,9 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-from app.audit.worker import MAX_TRIES, run_audit
-from app.runtime import RuntimeResources
-from app.schemas.audit import AuditDimensionScores, AuditOutputSchema
+from app.domain.audit.worker import MAX_TRIES, run_audit
+from app.core.runtime import RuntimeResources
+from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
 
 pytestmark = pytest.mark.audit
 
@@ -70,7 +69,7 @@ def _make_ctx(
     turn: int = 1,
 ) -> dict:
     """构造模拟 ARQ ctx，含 RuntimeResources + signals_manager。"""
-    from app.state.audit_signals import AuditSignalsManager
+    from app.domain.audit.signals import AuditSignalsManager
     from fakeredis.aioredis import FakeRedis
 
     redis = FakeRedis(decode_responses=True)
@@ -172,7 +171,7 @@ class TestWorkerSettings:
     """WorkerSettings 结构正确性。"""
 
     def test_worker_settings_has_required_keys(self) -> None:
-        from app.audit.worker import WORKER_SETTINGS
+        from app.domain.audit.worker import WORKER_SETTINGS
 
         assert "functions" in WORKER_SETTINGS
         assert "redis_settings" in WORKER_SETTINGS

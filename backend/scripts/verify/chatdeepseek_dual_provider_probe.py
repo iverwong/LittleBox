@@ -1,7 +1,8 @@
 """M6 收尾补丁 · 探针 D · ChatDeepSeek 双端 reasoning_content 真机验证。
 
 用法: python -m backend.scripts.verify.chatdeepseek_dual_provider_probe
-依赖: settings 已加载 .env，含 DeepSeek 原生 base_url + 百炼 base_url + 双端 api_key + model
+依赖: settings 已加载 .env（含 DeepSeek 原生 + 百炼 api_key），base_url / model
+      取自 app/core/llm_topology.py 的 ENDPOINTS / ROLES 单一真相源。
 输出: stdout JSON {"d1": {...}, "d2": {...}, "verdict": "pass|fail"}
 闸门: d1.reasoning_chunks > 0 AND d2.reasoning_chunks > 0 → pass
 """
@@ -9,9 +10,9 @@
 import asyncio
 import json
 
+from app.core.config import settings
+from app.core.llm_topology import ENDPOINTS, ROLES, EndpointName, Role
 from langchain_deepseek import ChatDeepSeek
-
-from app.config import settings
 
 PROBE_PROMPT = "3 + 5 等于多少？请仔细思考后回答。"
 
@@ -53,15 +54,15 @@ async def probe(label: str, base_url: str, api_key: str, model: str) -> dict:
 async def main() -> None:
     d1 = await probe(
         "deepseek-native",
-        settings.deepseek_base_url,
-        settings.deepseek_api_key.get_secret_value(),
-        settings.deepseek_model,
+        ENDPOINTS[EndpointName.DEEPSEEK].base_url,
+        ENDPOINTS[EndpointName.DEEPSEEK].api_key(settings).get_secret_value(),
+        ROLES[Role.MAIN].model,
     )
     d2 = await probe(
         "bailian-compat",
-        settings.bailian_base_url,
-        settings.bailian_api_key.get_secret_value(),
-        settings.bailian_model,
+        ENDPOINTS[EndpointName.BAILIAN].base_url,
+        ENDPOINTS[EndpointName.BAILIAN].api_key(settings).get_secret_value(),
+        ROLES[Role.MAIN].model,
     )
     verdict = "pass" if d1["reasoning_chunks"] > 0 and d2["reasoning_chunks"] > 0 else "fail"
     result = {"d1": d1, "d2": d2, "verdict": verdict}

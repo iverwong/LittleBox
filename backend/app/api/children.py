@@ -1,27 +1,33 @@
 """children 路由：创建 child / 吊销 child tokens / 列表查询 / 删除 child。"""
+
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from redis.asyncio import Redis
-from sqlalchemy import exists, func, select
+from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.deps import require_parent
-from app.auth.redis_client import get_redis
-from app.auth.redis_ops import commit_with_redis
-from app.auth.tokens import revoke_all_active_tokens
-from app.config import settings
-from app.db import get_db
-from app.models.accounts import AuthToken, ChildProfile, Family, FamilyMember, User
-from app.models.enums import UserRole
-from app.schemas.accounts import CurrentAccount
-from app.schemas.children import ChildSummary, CreateChildRequest, ListChildrenResponse
-from app.services.age_converter import age_to_birth_date
-from app.services.child_deletion import hard_delete_child
+from app.core.db import get_db
+from app.core.enums import UserRole
+from app.core.redis import commit_with_redis, get_redis
+from app.domain.accounts.models import AuthToken, ChildProfile, User
+from app.domain.accounts.schemas import (
+    ChildSummary,
+    CreateChildRequest,
+    CurrentAccount,
+    ListChildrenResponse,
+)
+from app.domain.accounts.service import (
+    create_child as create_child_service,
+)
+from app.domain.accounts.service import (
+    hard_delete_child,
+)
+from app.domain.auth.deps import require_parent
+from app.domain.auth.tokens import revoke_all_active_tokens
 
 router = APIRouter(prefix="/api/v1/children", tags=["children"])
 
@@ -33,61 +39,8 @@ async def create_child(
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> ChildSummary:
-    """父账号创建一个子账号：users(role=child) + child_profiles + family_members。"""
-    # M5 hotfix: family child count limit — SELECT FOR UPDATE + COUNT within same tx
-    # Acquire row-level lock on the family row before counting
-    await db.execute(
-        select(Family)
-        .where(Family.id == parent.family_id)
-        .with_for_update()
-    )
-    child_count = (
-        await db.execute(
-            select(func.count())
-            .select_from(User)
-            .where(
-                User.family_id == parent.family_id,
-                User.role == UserRole.child,
-            )
-        )
-    ).scalar_one()
-    if child_count >= settings.max_children_per_family:
-        raise HTTPException(status_code=409, detail="ChildLimitReached")
-
-    child = User(
-        family_id=parent.family_id,
-        role=UserRole.child,
-        phone=None,
-        is_active=True,
-    )
-    db.add(child)
-    await db.flush()
-
-    birth_date = age_to_birth_date(payload.age)  # ref 默认为 today()
-
-    db.add(ChildProfile(
-        child_user_id=child.id,
-        created_by=parent.id,
-        birth_date=birth_date,
-        gender=payload.gender,
-        nickname=payload.nickname,
-    ))
-
-    db.add(FamilyMember(
-        family_id=parent.family_id,
-        user_id=child.id,
-        role=UserRole.child,
-        joined_at=datetime.now(timezone.utc),
-    ))
-
-    await commit_with_redis(db, redis)
-    return ChildSummary(
-        id=child.id,
-        nickname=payload.nickname,
-        birth_date=birth_date,
-        gender=payload.gender,
-        is_bound=False,  # 硬编码：刚创建的 child 必然无 AuthToken
-    )
+    """委托 accounts.service.create_child,业务编排(行级锁 / 计数 / 跨表写入)在 service 层。"""
+    return await create_child_service(db, redis, parent=parent, payload=payload)
 
 
 @router.get("", response_model=ListChildrenResponse)
@@ -148,7 +101,7 @@ async def revoke_child_tokens(
     )
     child = (await db.execute(stmt)).scalar_one_or_none()
     if child is None:
-        raise HTTPException(404, "child not found in family")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "child not found in family")
     await revoke_all_active_tokens(db, child.id)
     await commit_with_redis(db, redis)
 
@@ -176,7 +129,7 @@ async def delete_child(
     )
     child = (await db.execute(stmt)).scalar_one_or_none()
     if child is None:
-        raise HTTPException(404, "child not found in family")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "child not found in family")
 
     await hard_delete_child(db, child_user_id=child_user_id, requested_by=parent.id)
     await commit_with_redis(db, redis)

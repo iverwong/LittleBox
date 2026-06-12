@@ -12,22 +12,20 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 import pytest
-
-from app.audit.graph import _load_messages_from_pg
-from app.models.chat import Message
-from app.models.enums import MessageRole, MessageStatus
+from app.domain.audit.graph import _load_messages_from_pg
+from app.core.enums import MessageRole, MessageStatus
+from app.domain.chat.models import Message
 
 
 @pytest.mark.asyncio
 async def test_load_messages_from_pg_no_status_filter(db_session):
     """ORM 改造不过滤 status：混入非 active 行仍全部返回（C1 D-patch0-11）。"""
     import uuid
-
     from datetime import datetime, timezone
 
-    from app.models.accounts import Family, User
-    from app.models.chat import Session as SessionModel
-    from app.models.enums import UserRole
+    from app.core.enums import UserRole
+    from app.domain.accounts.models import Family, User
+    from app.domain.chat.models import Session as SessionModel
 
     # 创建 FK 链：user → session → messages
     fam = Family()
@@ -91,12 +89,11 @@ async def test_load_messages_from_pg_no_status_filter(db_session):
 async def test_load_messages_from_pg_limit_works(db_session):
     """limit 生效：超限行被截断。"""
     import uuid
-
     from datetime import datetime, timezone
 
-    from app.models.accounts import Family, User
-    from app.models.chat import Session as SessionModel
-    from app.models.enums import UserRole
+    from app.core.enums import UserRole
+    from app.domain.accounts.models import Family, User
+    from app.domain.chat.models import Session as SessionModel
 
     fam = Family()
     db_session.add(fam)

@@ -5,35 +5,33 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.deps import require_parent
-from app.auth.password import verify_password
-from app.auth.redis_client import get_redis
-from app.auth.redis_ops import RedisOp, commit_with_redis, stage_redis_op
-from app.auth.tokens import (
+from app.core.db import get_db
+from app.core.enums import UserRole
+from app.core.redis import RedisOp, commit_with_redis, get_redis, stage_redis_op
+from app.domain.accounts.models import User
+from app.domain.accounts.rate_limit import (
+    LOGIN_FAIL_IP_KEY_PREFIX,
+    LOGIN_FAIL_PHONE_KEY_PREFIX,
+    check_login_limit,
+    incr_login_fail,
+)
+from app.domain.accounts.schemas import AccountOut, CurrentAccount
+from app.domain.auth.deps import require_parent
+from app.domain.auth.password import verify_password
+from app.domain.auth.schemas import LoginRequest, LoginResponse
+from app.domain.auth.tokens import (
     issue_token,
     revoke_all_active_tokens,
     revoke_token,
 )
-from app.db import get_db
-from app.models.accounts import User
-from app.models.enums import UserRole
-from app.schemas.accounts import (
-    AccountOut,
-    LoginRequest,
-    LoginResponse,
-)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
-
-LOGIN_PHONE_LIMIT = 5
-LOGIN_IP_LIMIT = 20
-LOGIN_WINDOW_SECONDS = 60
 
 
 def _get_client_ip(request: Request) -> str | None:
@@ -64,36 +62,6 @@ def _get_client_ip(request: Request) -> str | None:
     return None
 
 
-async def _check_login_limit(redis: Redis, phone: str, ip: str | None) -> None:
-    """检查是否已达限流阈值，是则 raise 429。
-
-    IP 维度降级: 当 ip=None (解析不到可信客户端 IP) 时, 跳过 IP 桶检查,
-    避免把所有"未知 IP"请求合并到同一个共享桶而触发误伤式 DoS。
-    phone 桶始终参与, 保留单账号爆破的硬上限。
-    """
-    phone_count = int(await redis.get(f"login_fail:phone:{phone}") or 0)
-    if phone_count >= LOGIN_PHONE_LIMIT:
-        raise HTTPException(429, "too many attempts; try again later")
-    if ip is not None:
-        ip_count = int(await redis.get(f"login_fail:ip:{ip}") or 0)
-        if ip_count >= LOGIN_IP_LIMIT:
-            raise HTTPException(429, "too many attempts; try again later")
-
-
-async def _incr_login_fail(redis: Redis, phone: str, ip: str | None) -> None:
-    """失败一次，递增 phone 桶 (ip=None 时跳过 IP 桶)。
-
-    同样地, IP 不可信时不递增 IP 计数 —— 不让 "unknown" 共享桶被建立。
-    """
-    async with redis.pipeline(transaction=False) as pipe:
-        pipe.incr(f"login_fail:phone:{phone}")
-        pipe.expire(f"login_fail:phone:{phone}", LOGIN_WINDOW_SECONDS, nx=True)
-        if ip is not None:
-            pipe.incr(f"login_fail:ip:{ip}")
-            pipe.expire(f"login_fail:ip:{ip}", LOGIN_WINDOW_SECONDS, nx=True)
-        await pipe.execute()
-
-
 @router.post("/login", response_model=LoginResponse)
 async def login(
     request: Request,
@@ -112,7 +80,7 @@ async def login(
             request.url.path,
             request.headers.get("user-agent"),
         )
-    await _check_login_limit(redis, payload.phone, client_ip)
+    await check_login_limit(redis, payload.phone, client_ip)
 
     # 统一 401，不区分账号不存在 / 密码错（防枚举）
     stmt = select(User).where(
@@ -121,17 +89,20 @@ async def login(
         User.is_active.is_(True),
     )
     user = (await db.execute(stmt)).scalar_one_or_none()
-    if user is None or user.password_hash is None:
-        await _incr_login_fail(redis, payload.phone, client_ip)
+    if (
+        user is None or user.password_hash is None
+    ):  # TODO 两个作用，一个是 verify_password 接非空字符串；
+        # 二个是做防御性兜底；后期转统一认证后该验证剔除
+        await incr_login_fail(redis, payload.phone, client_ip)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
     if not verify_password(user.password_hash, payload.password):
-        await _incr_login_fail(redis, payload.phone, client_ip)
+        await incr_login_fail(redis, payload.phone, client_ip)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
 
     # 成功：清零两个计数器 (走 staging, 随 commit_with_redis 一起 flush)
-    stage_redis_op(db, RedisOp(kind="delete", key=f"login_fail:phone:{payload.phone}"))
+    stage_redis_op(db, RedisOp(kind="delete", key=f"{LOGIN_FAIL_PHONE_KEY_PREFIX}{payload.phone}"))
     if client_ip is not None:
-        stage_redis_op(db, RedisOp(kind="delete", key=f"login_fail:ip:{client_ip}"))
+        stage_redis_op(db, RedisOp(kind="delete", key=f"{LOGIN_FAIL_IP_KEY_PREFIX}{client_ip}"))
 
     # 新设备登录吊销该 parent 所有活跃 token
     await revoke_all_active_tokens(db, user.id)
@@ -156,14 +127,18 @@ async def login(
     )
 
 
-@router.post("/logout", status_code=204)
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(
-    authorization: Annotated[str, Header()],
-    current: Annotated[User, Depends(require_parent)],
+    request: Request,
+    current: Annotated[CurrentAccount, Depends(require_parent)],
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> None:
-    """主动下线当前父账号 token。限 parent。"""
-    token = authorization.split(" ", 1)[1].strip()
-    await revoke_token(db, token)
+    """主动下线当前父账号 token。限 parent。
+
+    token 从 `request.state.token` 取 (get_current_account 已 stash),
+    不再二次 split Authorization header —— 避免前次审查发现的
+    "Authorization: Bearer / Token xxx" 静默 no-op 漏洞。
+    """
+    await revoke_token(db, request.state.token)
     await commit_with_redis(db, redis)

@@ -12,9 +12,10 @@ import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
 pytestmark = pytest.mark.asyncio(loop_scope="function")
 
-from app.runtime import RuntimeResources
+from app.core.runtime import RuntimeResources
 
 
 @pytest.fixture
@@ -79,7 +80,7 @@ async def test_register_chat_task_logs_unhandled_exception(
 
     assert sid not in runtime_resources._chat_tasks
     assert any(
-        r.name == "app.runtime"
+        r.name == "app.core.runtime"
         and getattr(r, "sid", None) == sid
         and "chat task crashed unhandled" in r.message
         for r in caplog.records

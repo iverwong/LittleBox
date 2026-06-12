@@ -20,8 +20,8 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
-from app.chat.factory import clear_test_llm, set_test_llm
+from app.core.llm import clear_test_llm, set_test_llm
+from app.core.llm_topology import Role
 
 from ._helpers import FakeMainLLM, parse_sse_events, seed_integration_child
 
@@ -50,7 +50,7 @@ class TestAuditDegradeGreen:
         本测试不关心 drain 结果，只验证降级路径能兜住。
         """
         child, headers = await seed_integration_child(integration_runtime)
-        set_test_llm("deepseek", FakeMainLLM())
+        set_test_llm(Role.MAIN, FakeMainLLM())
         try:
             async with api_client.stream(
                 "POST",
@@ -95,7 +95,7 @@ class TestAuditDegradeGreen:
           第 2 轮路由仍为 main（无干预帧），降级路径在连续轮次中稳定。
         """
         child, headers = await seed_integration_child(integration_runtime)
-        set_test_llm("deepseek", FakeMainLLM())
+        set_test_llm(Role.MAIN, FakeMainLLM())
         try:
             # ---- Round 1 ----
             async with api_client.stream(

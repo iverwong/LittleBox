@@ -17,22 +17,19 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-import pytest_asyncio
-from langchain_core.messages import HumanMessage, SystemMessage
-from sqlalchemy import text
-
-from app.chat.context_schema import ChatContextSchema
-from app.chat.graph import (
+from app.domain.chat.graph import (
     build_messages_crisis,
     build_messages_main,
     build_messages_redline,
     load_audit_state,
     route_by_risk,
 )
-from app.chat.state import MainDialogueState
-from app.models.accounts import Family, User
-from app.models.chat import Message
-from app.models.enums import MessageRole, MessageStatus, UserRole
+from app.domain.chat.state import MainDialogueState
+from app.core.enums import MessageRole, MessageStatus, UserRole
+from app.domain.accounts.models import Family, User
+from app.domain.chat.models import Message
+from langchain_core.messages import HumanMessage, SystemMessage
+from sqlalchemy import text
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -45,23 +42,13 @@ pytestmark = [
 
 
 def _mock_settings(**overrides: dict) -> SimpleNamespace:
-    """Return minimal settings mock with crisis/redline tuning params."""
+    """Return minimal settings mock with crisis/redline tuning params.
+
+    Step 4 后:LLM 拓扑字段已迁 llm_topology,本 fixture 只承载非 LLM 字段。
+    """
     defaults = dict(
-        main_provider="deepseek",
         deepseek_api_key="",
-        deepseek_base_url="https://api.deepseek.com/v1",
-        deepseek_model="deepseek-v4-flash",
-        main_thinking_enabled=True,
-        main_reasoning_effort="max",
         bailian_api_key="",
-        bailian_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        bailian_model="deepseek-v4-flash",
-        audit_thinking_enabled=True,
-        audit_reasoning_effort="max",
-        audit_provider="deepseek",
-        llm_request_timeout_seconds=60.0,
-        enable_fallback=False,
-        fallback_provider=None,
         audit_redis_ttl_seconds=86400,
         audit_wait_timeout_seconds=30,
         crisis_context_recent_turns=5,
@@ -107,16 +94,16 @@ def _make_runtime(
     db_session_factory=None,
 ) -> SimpleNamespace:
     """构造最小 Runtime[ChatContextSchema]，db_session_factory 可传真实 factory。"""
-    ctx = ChatContextSchema(
+    from tests.conftest import make_chat_context, make_child_profile_snapshot
+
+    ctx = make_chat_context(
         session_id=session_id,
-        child_user_id="child-1",
-        child_profile={},
-        age=age,
-        gender=gender,
+        child_user_id="child-1",  # 测试 fixture 用字符串标识符,实际不被读
         user_input=user_input,
         settings=settings or _mock_settings(),
         db_session_factory=db_session_factory or MagicMock(),
         audit_redis=MagicMock(),
+        profile=make_child_profile_snapshot(age=age, gender=gender),
     )
     return SimpleNamespace(context=ctx)
 
@@ -152,7 +139,7 @@ class TestMainPath:
         fake_history = [HumanMessage(content="历史消息")]
 
         with patch(
-            "app.chat.graph.load_active_history_for_assembly",
+            "app.domain.chat.graph.load_active_history_for_assembly",
             return_value=fake_history,
         ):
             result = await build_messages_main(state, runtime)
@@ -281,9 +268,9 @@ class TestCrisisStickyPath:
         # build_crisis_context 会查真库 — mock 掉
         fake_anchor = SystemMessage(content="[anchor 窗口]\nmock")
         with (
-            patch("app.chat.graph.build_crisis_context",
+            patch("app.domain.chat.graph.build_crisis_context",
                   return_value=(fake_anchor, [HumanMessage(content="mock after")])),
-            patch("app.chat.graph.build_crisis_system_prompt",
+            patch("app.domain.chat.graph.build_crisis_system_prompt",
                   return_value=SystemMessage(content="[crisis system]")),
         ):
             result = await build_messages_crisis(state, runtime)
@@ -330,7 +317,7 @@ class TestRedlinePath:
         )
 
         # rolling_summaries（含 turn_summaries）
-        from app.models.audit import RollingSummary
+        from app.domain.audit.models import RollingSummary
         rs = RollingSummary(
             session_id=sid, last_turn=2,
             turn_summaries=[
@@ -413,7 +400,7 @@ class TestGuidancePath:
         fake_history = [HumanMessage(content="之前的消息")]
 
         with patch(
-            "app.chat.graph.load_active_history_for_assembly",
+            "app.domain.chat.graph.load_active_history_for_assembly",
             return_value=fake_history,
         ):
             result = await build_messages_main(state, runtime)
@@ -475,9 +462,8 @@ class TestAuditStateCascade:
         """共享逻辑：mock poll_wait ready → load_audit_state"""
         from unittest.mock import AsyncMock, patch
 
-        from app.chat.graph import _pg_crisis_fallback
-        from app.schemas.audit import AuditDimensionScores, AuditOutputSchema
-        from app.state.audit_signals import AuditWaitResult
+        from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
+        from app.domain.audit.signals import AuditWaitResult
 
         # AuditOutputSchema validation: guidance 必填 string；crisis_topic/redline_detail
         # 在对应 trigger=True 时必须非空。
@@ -505,9 +491,9 @@ class TestAuditStateCascade:
 
         with (
             patch(
-                "app.chat.graph.AuditSignalsManager",
+                "app.domain.chat.graph.AuditSignalsManager",
                 return_value=AsyncMock(poll_wait=_mock_poll),
             ),
-            patch("app.chat.graph._pg_crisis_fallback", side_effect=_mock_pg),
+            patch("app.domain.chat.graph._pg_crisis_fallback", side_effect=_mock_pg),
         ):
             return await load_audit_state(state, runtime)

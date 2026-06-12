@@ -11,11 +11,10 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-
+from app.domain.chat.graph import build_messages_main
+from app.domain.chat.state import MainDialogueState
 from langchain_core.messages import HumanMessage, SystemMessage
-
-from app.chat.graph import build_messages_main
-from app.chat.state import MainDialogueState
+from tests.conftest import make_chat_context
 
 pytestmark = pytest.mark.asyncio
 
@@ -32,14 +31,9 @@ async def test_build_messages_main_assembles_system_and_history():
     """Given guidance=None, When W1 wrapper, Then 末位 HumanMessage.content == user_input（透传）。"""
     from types import SimpleNamespace
 
-    from app.chat.context_schema import ChatContextSchema
-
-    ctx = ChatContextSchema(
+    ctx = make_chat_context(
         session_id="00000000-0000-0000-0000-000000000001",
         child_user_id="00000000-0000-0000-0000-000000000002",
-        child_profile={},
-        age=8,
-        gender="male",
         user_input="我今天很开心",
         settings=MagicMock(),
         db_session_factory=MagicMock(),
@@ -56,7 +50,7 @@ async def test_build_messages_main_assembles_system_and_history():
     }
     runtime = SimpleNamespace(context=ctx)
 
-    with patch("app.chat.graph.load_active_history_for_assembly", return_value=_history()):
+    with patch("app.domain.chat.graph.load_active_history_for_assembly", return_value=_history()):
         result = await build_messages_main(state, runtime)
 
     msgs = result["messages"]
@@ -77,14 +71,9 @@ async def test_build_messages_main_with_guidance():
     """Given guidance 非空, When W1 wrapper, Then 末位 HumanMessage.content 含 guidance 标记 + user_input。"""
     from types import SimpleNamespace
 
-    from app.chat.context_schema import ChatContextSchema
-
-    ctx = ChatContextSchema(
+    ctx = make_chat_context(
         session_id="00000000-0000-0000-0000-000000000001",
         child_user_id="00000000-0000-0000-0000-000000000002",
-        child_profile={},
-        age=8,
-        gender="male",
         user_input="我想玩游戏",
         settings=MagicMock(),
         db_session_factory=MagicMock(),
@@ -101,7 +90,7 @@ async def test_build_messages_main_with_guidance():
     }
     runtime = SimpleNamespace(context=ctx)
 
-    with patch("app.chat.graph.load_active_history_for_assembly", return_value=_history()):
+    with patch("app.domain.chat.graph.load_active_history_for_assembly", return_value=_history()):
         result = await build_messages_main(state, runtime)
 
     msgs = result["messages"]

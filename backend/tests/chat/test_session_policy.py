@@ -8,9 +8,8 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
-
-from app.chat.session_policy import (
-    SHANGHAI,
+from app.core.time import SHANGHAI
+from app.domain.chat.session_policy import (
     SESSION_HARD_BOUNDARY_HOUR,
     SESSION_IDLE_THRESHOLD_MINUTES,
     SESSION_IDLE_WINDOW,

@@ -19,10 +19,9 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
+from app.api.auth import _get_client_ip
 from fastapi import Request
 from httpx import ASGITransport, AsyncClient
-
-from app.api.auth import _get_client_ip
 
 # ---- helpers ----
 

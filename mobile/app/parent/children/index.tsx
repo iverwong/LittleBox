@@ -37,6 +37,7 @@ import { ListItem } from '@/components/ui/ListItem'
 import { toast } from '@/components/ui/Toast'
 import { useTheme } from '@/theme'
 import { api } from '@/services/api/client'
+import { Endpoints } from '@/constants/endpoints'
 import { GenderAvatar } from '@/components/business/GenderAvatar'
 import { birthDateToAge } from '@/lib/birthDateUtils'
 import { Mascot } from '@/components/mascot/Mascot'
@@ -96,7 +97,7 @@ function ChildCard({ child, onChildStateChanged: onChildStateChanged }: ChildCar
   const handleConfirmOffline = useCallback(async () => {
     setOfflineModalVisible(false)
     setRevoking(true)
-    const res = await api.post<void>(`/children/${child.id}/revoke-tokens`, {})
+    const res = await api.post<void>(Endpoints.childRevokeTokens(child.id), {})
     setRevoking(false)
     if (!res.ok) {
       toast.show({ message: '下线失败,请稍后重试', variant: 'error', duration: 3000 })
@@ -117,7 +118,7 @@ function ChildCard({ child, onChildStateChanged: onChildStateChanged }: ChildCar
   const handleConfirmDelete = useCallback(async () => {
     setDeleteModalVisible(false)
     setDeleting(true)
-    const res = await api.delete<void>(`/children/${child.id}`)
+    const res = await api.delete<void>(Endpoints.child(child.id))
     setDeleting(false)
     if (!res.ok) {
       toast.show({
@@ -222,7 +223,7 @@ export default function ChildrenIndexScreen() {
     const controller = new AbortController()
     abortRef.current = controller
 
-    const res = await api.get<{ children: ChildSummary[] }>('/children')
+    const res = await api.get<{ children: ChildSummary[] }>(Endpoints.children)
     if (!res.ok) {
       if (!controller.signal.aborted) {
         if (isInitialLoadRef.current) {

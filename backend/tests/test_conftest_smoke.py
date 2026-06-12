@@ -7,7 +7,7 @@ pytestmark = pytest.mark.asyncio
 
 async def test_db_session_round_trip(db_session):
     """能建表入数，commit 足够企业用但不落盘。"""
-    from app.models.accounts import Family
+    from app.domain.accounts.models import Family
 
     fam = Family()
     db_session.add(fam)
@@ -17,7 +17,7 @@ async def test_db_session_round_trip(db_session):
 
 
 async def test_db_isolation_across_tests_1(db_session):
-    from app.models.accounts import Family
+    from app.domain.accounts.models import Family
 
     db_session.add(Family())
     await db_session.commit()
@@ -47,7 +47,7 @@ class TestProdDbGuard:
         When: session 结束
         Then: guard 不报错（测试库写入不污染真库 baseline）
         """
-        from app.models.accounts import Family
+        from app.domain.accounts.models import Family
 
         db_session.add(Family())
         await db_session.commit()

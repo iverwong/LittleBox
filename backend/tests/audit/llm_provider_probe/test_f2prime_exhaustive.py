@@ -10,13 +10,12 @@ from __future__ import annotations
 import copy
 import json
 
-import httpx
 import pytest
 
 from .conftest import (
-    ArtifactBuilder,
     SHARED_TOOLS,
     USER_MESSAGE,
+    ArtifactBuilder,
 )
 
 pytestmark = [pytest.mark.live, pytest.mark.asyncio]

@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, KeyboardAvoidingView, Platform, ScrollView } fr
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { api } from '@/services/api/client'
 import { useAuthStore } from '@/stores/auth'
+import { Endpoints } from '@/constants/endpoints'
 import { toast } from '@/components/ui/Toast/toastStore'
 import { Button } from '@/components/ui/Button/Button'
 import { Input } from '@/components/ui/Input/Input'
@@ -55,7 +56,7 @@ export default function LoginScreen() {
     setIsPending(true)
     let resp
     try {
-      resp = await api.post<LoginResponse>('/auth/login', {
+      resp = await api.post<LoginResponse>(Endpoints.authLogin, {
         phone: trimmedPhone,
         password,
         device_id: deviceId,

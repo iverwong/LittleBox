@@ -1,16 +1,14 @@
 """compression.py 单元测试：阈值常量 + build_compression_prompt + extract_compression_summary。"""
 from __future__ import annotations
 
-import pytest
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
-
-from app.chat.compression import (
+from app.domain.chat.compression import (
     CONTEXT_COMPRESS_THRESHOLD_TOKENS,
     build_compression_prompt,
     extract_compression_summary,
 )
-from app.chat.extractors import extract_usage
-from app.chat.prompts import COMPRESSION_PROMPT_STUB
+from app.domain.chat.prompts import COMPRESSION_PROMPT_STUB
+from app.core.llm_extractors import extract_usage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 
 
 def _make_chunk(usage: dict | None = None) -> AIMessageChunk:
@@ -63,9 +61,10 @@ class TestCompressionPrompt:
         result = build_compression_prompt([])
         assert result[1].type == "human"
 
-    def test_human_contains_stub(self):
+    def test_system_contains_stub(self):
+        """SystemMessage content 包含 COMPRESSION_PROMPT_STUB（任务 + 输出契约）。"""
         result = build_compression_prompt([])
-        assert COMPRESSION_PROMPT_STUB in result[1].content
+        assert COMPRESSION_PROMPT_STUB in result[0].content
 
     def test_human_contains_history_xml(self):
         """HumanMessage content 包含 <history> 序列化。"""
@@ -78,10 +77,10 @@ class TestCompressionPrompt:
         assert '<turn idx="1" role="assistant">嗨</turn>' in result[1].content
         assert "</history>" in result[1].content
 
-    def test_human_contains_output_contract(self):
-        """HumanMessage content 包含 <summary> 输出契约。"""
+    def test_system_contains_output_contract(self):
+        """SystemMessage content 包含 <summary> 输出契约（与任务一同收口到 STUB）。"""
         result = build_compression_prompt([])
-        assert "<summary>" in result[1].content
+        assert "<summary>" in result[0].content
 
     def test_last_turn_ai_not_leaked_to_system(self):
         """末条为 AIMessage 时，它嵌入在 <history> 中而非裸露在 SystemMessage 后。"""

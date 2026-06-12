@@ -221,7 +221,6 @@ class CreateChildRequest(BaseModel):
 
 class BindTokenResponse(BaseModel):
     bind_token: str = Field(description="5 分钟 TTL，一次性使用")
-    expires_in_seconds: Literal[300] = 300
 
 class RedeemBindTokenRequest(BaseModel):
     bind_token: str

@@ -14,11 +14,10 @@ import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
-from app.chat.graph import load_audit_state
-from app.chat.state import MainDialogueState
-from app.schemas.audit import AuditDimensionScores, AuditOutputSchema
-from app.state.audit_signals import AuditWaitResult
+from app.domain.chat.graph import load_audit_state
+from app.domain.chat.state import MainDialogueState
+from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
+from app.domain.audit.signals import AuditWaitResult
 
 pytestmark = [
     pytest.mark.audit,
@@ -34,33 +33,22 @@ def _make_fake_runtime(sid: str = "00000000-0000-0000-0000-000000000001") -> obj
     """
     from types import SimpleNamespace
 
-    from app.chat.context_schema import ChatContextSchema
+    from tests.conftest import make_chat_context, make_child_profile_snapshot
 
-    ctx = ChatContextSchema(
+    ctx = make_chat_context(
         session_id=sid,
         child_user_id="child-1",
-        child_profile={},
-        age=8,
-        gender=None,
         user_input="test",
+        # Step 4 后:LLM 拓扑字段已迁 llm_topology,本 stub 只承载非 LLM 字段。
         settings=SimpleNamespace(
-            main_provider="deepseek",
             deepseek_api_key="",
-            deepseek_base_url="https://api.deepseek.com/v1",
-            deepseek_model="deepseek-v4-flash",
-            main_thinking_enabled=True,
-            main_reasoning_effort="max",
             bailian_api_key="",
-            bailian_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-            bailian_model="deepseek-v4-flash",
-            llm_request_timeout_seconds=60.0,
-            enable_fallback=False,
-            fallback_provider=None,
             audit_redis_ttl_seconds=86400,
             audit_wait_timeout_seconds=30,
         ),
         db_session_factory=AsyncMock(),
         audit_redis=AsyncMock(),
+        profile=make_child_profile_snapshot(age=8, gender=None),
     )
     return SimpleNamespace(context=ctx)
 
@@ -118,10 +106,10 @@ class TestLoadAuditState:
 
         with (
             patch(
-                "app.chat.graph.AuditSignalsManager",
+                "app.domain.chat.graph.AuditSignalsManager",
                 return_value=AsyncMock(poll_wait=_mock_poll_wait),
             ),
-            patch("app.chat.graph._pg_crisis_fallback", side_effect=_mock_pg),
+            patch("app.domain.chat.graph._pg_crisis_fallback", side_effect=_mock_pg),
         ):
             return await load_audit_state(state, runtime)
 
@@ -203,7 +191,7 @@ class TestLoadAuditState:
         state = _make_state(turn_number=1)
         runtime = _make_fake_runtime()
         mock_pg = AsyncMock()
-        with patch("app.chat.graph._pg_crisis_fallback", mock_pg):
+        with patch("app.domain.chat.graph._pg_crisis_fallback", mock_pg):
             result = await load_audit_state(state, runtime)
         mock_pg.assert_not_called()  # 首轮不走 PG
         audit = result.get("audit_state", {})

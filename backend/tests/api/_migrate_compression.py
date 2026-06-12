@@ -46,14 +46,14 @@ for old, new in replacements:
 # These are UNIQUE strings within the compression tests section
 body_replacements = [
     # app_with_eval.state.resources -> lifecycle_ctx.rr
-    ('app_with_eval.state.resources.main_graph.astream = fake_astream\n\n    with patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):\n        body = make_payload(content="继续聊聊", session_id=str(sid))\n        resp = await api_client_with_eval.post(',
-     'lifecycle_ctx.rr.main_graph.astream = fake_astream\n\n    with patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):\n        body = make_payload(content="继续聊聊", session_id=str(sid))\n        resp = await client.post('),
+    ('app_with_eval.state.resources.main_graph.astream = fake_astream\n\n    with patch("app.domain.chat.factory.build_provider_llm", return_value=fake_c_llm):\n        body = make_payload(content="继续聊聊", session_id=str(sid))\n        resp = await api_client_with_eval.post(',
+     'lifecycle_ctx.rr.main_graph.astream = fake_astream\n\n    with patch("app.domain.chat.factory.build_provider_llm", return_value=fake_c_llm):\n        body = make_payload(content="继续聊聊", session_id=str(sid))\n        resp = await client.post('),
     # row84 regression - app_with_eval + api_client_with_eval
-    ('app_with_eval.state.resources.main_graph.astream = _fake_astream_84\n\n    with patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):\n        body = make_payload(content="继续聊聊", session_id=str(sid))\n        resp = await api_client_with_eval.post(',
-     'lifecycle_ctx.rr.main_graph.astream = _fake_astream_84\n\n    with patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):\n        body = make_payload(content="继续聊聊", session_id=str(sid))\n        resp = await client.post('),
+    ('app_with_eval.state.resources.main_graph.astream = _fake_astream_84\n\n    with patch("app.domain.chat.factory.build_provider_llm", return_value=fake_c_llm):\n        body = make_payload(content="继续聊聊", session_id=str(sid))\n        resp = await api_client_with_eval.post(',
+     'lifecycle_ctx.rr.main_graph.astream = _fake_astream_84\n\n    with patch("app.domain.chat.factory.build_provider_llm", return_value=fake_c_llm):\n        body = make_payload(content="继续聊聊", session_id=str(sid))\n        resp = await client.post('),
     # messages_order - app_with_eval + api_client_with_eval
-    ('app_with_eval.state.resources.main_graph.astream = spy_astream\n\n    with _patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):\n        body = make_payload(content="继续聊聊", session_id=str(sid))\n        resp = await api_client_with_eval.post(',
-     'lifecycle_ctx.rr.main_graph.astream = spy_astream\n\n    with _patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):\n        body = make_payload(content="继续聊聊", session_id=str(sid))\n        resp = await client.post('),
+    ('app_with_eval.state.resources.main_graph.astream = spy_astream\n\n    with _patch("app.domain.chat.factory.build_provider_llm", return_value=fake_c_llm):\n        body = make_payload(content="继续聊聊", session_id=str(sid))\n        resp = await api_client_with_eval.post(',
+     'lifecycle_ctx.rr.main_graph.astream = spy_astream\n\n    with _patch("app.domain.chat.factory.build_provider_llm", return_value=fake_c_llm):\n        body = make_payload(content="继续聊聊", session_id=str(sid))\n        resp = await client.post('),
     # app_with_eval for noop test
     ('app_with_eval.state.resources.main_graph.astream = fake_astream\n\n    body = make_payload(content="新的消息", session_id=str(sid))\n    resp = await api_client_with_eval.post(',
      'lifecycle_ctx.rr.main_graph.astream = fake_astream\n\n    body = make_payload(content="新的消息", session_id=str(sid))\n    resp = await client.post('),

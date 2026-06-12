@@ -7,11 +7,9 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-
+from app.domain.chat.graph import build_messages_crisis, build_messages_redline
+from app.domain.chat.state import MainDialogueState
 from langchain_core.messages import HumanMessage, SystemMessage
-
-from app.chat.graph import build_messages_crisis, build_messages_redline
-from app.chat.state import MainDialogueState
 
 pytestmark = pytest.mark.asyncio
 
@@ -28,8 +26,10 @@ _STATE: MainDialogueState = {
 
 def _make_fake_ctx():
     from types import SimpleNamespace
+    from tests.conftest import make_child_profile_snapshot
     return SimpleNamespace(
-        session_id="sid", user_input="我很难过", age=10, gender="male",
+        session_id="sid", user_input="我很难过",
+        child_profile=make_child_profile_snapshot(age=10, gender="male"),
         settings=MagicMock(), db_session_factory=MagicMock(),
     )
 
@@ -42,8 +42,8 @@ async def test_crisis_build_messages_expected_order():
     fake_after = [HumanMessage(content="历史消息")]
 
     with (
-        patch("app.chat.graph.build_crisis_context", return_value=(fake_anchor, fake_after)),
-        patch("app.chat.graph.build_crisis_system_prompt", return_value=SystemMessage(content="[crisis system]")),
+        patch("app.domain.chat.graph.build_crisis_context", return_value=(fake_anchor, fake_after)),
+        patch("app.domain.chat.graph.build_crisis_system_prompt", return_value=SystemMessage(content="[crisis system]")),
     ):
         result = await build_messages_crisis(_STATE, runtime)
 
@@ -63,8 +63,8 @@ async def test_redline_build_messages_expected_order():
     fake_pairs = [HumanMessage(content="前三轮消息")]
 
     with (
-        patch("app.chat.graph.build_redline_context", return_value=(fake_summaries, fake_pairs)),
-        patch("app.chat.graph.build_redline_system_prompt", return_value=SystemMessage(content="[redline system]")),
+        patch("app.domain.chat.graph.build_redline_context", return_value=(fake_summaries, fake_pairs)),
+        patch("app.domain.chat.graph.build_redline_system_prompt", return_value=SystemMessage(content="[redline system]")),
     ):
         result = await build_messages_redline(_STATE, runtime)
 

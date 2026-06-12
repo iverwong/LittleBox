@@ -1,4 +1,4 @@
-"""_frame_sse_event + stream_graph_to_sse 测试。
+"""frame_sse_event + stream_graph_to_sse 测试。
 
 M6 多行协议 framer 和 graphSSE 桥的单元测试。
 M3 dev 路径（_sse_pack / stream_chat）已于 M6-patch3 移除。
@@ -7,16 +7,14 @@ M3 dev 路径（_sse_pack / stream_chat）已于 M6-patch3 移除。
 import json
 
 import pytest
+from app.domain.chat import stream as sse
 
-from app.chat import sse
-
-
-# ---- S2: _frame_sse_event 格式（M6 多行协议）----
+# ---- S2: frame_sse_event 格式（M6 多行协议）----
 
 
 def test_frame_sse_event_format() -> None:
-    """_frame_sse_event 产出 M6 多行协议格式：event: <type>\ndata: <json>\n\n。"""
-    result = sse._frame_sse_event("thinking_start", {})
+    """frame_sse_event 产出 M6 多行协议格式：event: <type>\ndata: <json>\n\n。"""
+    result = sse.frame_sse_event("thinking_start", {})
     assert result.startswith(b"event: thinking_start\ndata: ")
     assert result.endswith(b"\n\n")
     parsed = json.loads(result[len("event: thinking_start\ndata: "):])
@@ -24,8 +22,8 @@ def test_frame_sse_event_format() -> None:
 
 
 def test_frame_sse_event_with_payload() -> None:
-    """_frame_sse_event 含 data dict 序列化。"""
-    result = sse._frame_sse_event("delta", {"content": "hi"})
+    """frame_sse_event 含 data dict 序列化。"""
+    result = sse.frame_sse_event("delta", {"content": "hi"})
     assert b"event: delta\ndata: " in result
     lines = result.split(b"\n")
     data_line = lines[1]
@@ -34,12 +32,12 @@ def test_frame_sse_event_with_payload() -> None:
     assert parsed == {"content": "hi"}
 
 
-# ---- S4: patch3 清理后仅保留 _frame_sse_event（契约保护）----
+# ---- S4: patch3 清理后仅保留 frame_sse_event（契约保护）----
 
 
 def test_frame_sse_event_only_remains() -> None:
-    """_frame_sse_event 保留，_sse_pack 和 stream_chat 已移除（patch3 清理契约）。"""
-    assert hasattr(sse, '_frame_sse_event')
+    """frame_sse_event 保留，_sse_pack 和 stream_chat 已移除（patch3 清理契约）。"""
+    assert hasattr(sse, 'frame_sse_event')
     assert not hasattr(sse, '_sse_pack')
     assert not hasattr(sse, 'stream_chat')
 

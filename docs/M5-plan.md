@@ -391,7 +391,7 @@ M14 视觉打磨阶段如不满意可整体替换为自绘 SVG 风格头像，**
     - `onRefresh` 由 modal 内刷新按钮调用，父组件重新 `POST /bind-tokens` 后回传新 token
 - **打开流程（loading 责任链）**：
     1. F4 主按钮 `onPress` → 列表按钮 loading + disabled（按〈全局交互约定〉短场景规则）
-    2. 父组件调 `POST /bind-tokens` body `{ child_user_id: childId }` → 拿到 `{ bind_token, expires_in_seconds: 300 }`
+    2. 父组件调 `POST /bind-tokens` body `{ child_user_id: childId }` → 拿到 `{ bind_token }`
     3. POST 成功 → modal `visible=true`；列表按钮 loading 结束，仅保留 disabled（modal 打开期间不再转圈）
     4. POST 失败 → 不打开 modal；列表按钮释放；Toast「出码失败，请重试」error 3s
 - **modal 内 UI**：

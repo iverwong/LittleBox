@@ -2,8 +2,7 @@
 覆盖范围：hash 格式、正/反向验证、随机生成器的字符集与长度。
 """
 import pytest
-
-from app.auth.password import (
+from app.domain.auth.password import (
     generate_password,
     generate_phone,
     hash_password,

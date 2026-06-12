@@ -20,7 +20,7 @@
 - subprocess 跑 `app.scripts.*` 连真实库
 - httpx 直连真 server (localhost:8000 等)
 - redis.Redis(...) 显式连真实 host
-- from app.config import settings 后用 settings.database_url 自建 engine
+- from app.core.config import settings 后用 settings.database_url 自建 engine
 - flushdb() / flushall()
 - db_session 与 concurrent_db_sessions 混用（savepoint 语义不兼容）
 
@@ -40,7 +40,7 @@ import subprocess
 from collections.abc import AsyncGenerator
 
 # M8 audit pipeline test defaults
-# 必须早于 from app.config import settings，否则 Settings() 实例化时 env 已读完
+# 必须早于 from app.core.config import settings，否则 Settings() 实例化时 env 已读完
 os.environ.setdefault("LB_AUDIT_PROVIDER", "deepseek")
 os.environ.setdefault("LB_AUDIT_MODEL", "deepseek-v4-flash")
 os.environ.setdefault("LB_AUDIT_REASONING_EFFORT", "max")
@@ -77,17 +77,22 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if item.get_closest_marker("integration"):
                 item.add_marker(skip_int)
+import uuid
+from datetime import date
+from typing import Any
+
+from app.core.config import settings
+from app.core.db import get_db
+from app.core.redis import get_redis
+from app.domain.accounts.schemas import ChildProfileSnapshot
+from app.domain.chat.context_schema import ChatContextSchema
+from app.main import create_app
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
-
-from app.auth.redis_client import get_redis
-from app.config import settings
-from app.db import get_db
-from app.main import create_app
 
 TEST_DB_NAME = "littlebox_test"
 
@@ -304,17 +309,16 @@ def _make_mock_resources(redis_client: FakeRedis):
     """创建测试用 mock RuntimeResources，避免 build_runtime 连接真实 Redis/DB。"""
     from unittest.mock import AsyncMock, MagicMock
 
-    from app.runtime import RuntimeResources
+    from app.core.runtime import RuntimeResources
 
     mock_rr = MagicMock(spec=RuntimeResources)
     mock_rr.main_graph = MagicMock()
     mock_rr.main_graph.astream = AsyncMock()
     mock_rr.audit_graph = MagicMock()
     mock_rr.settings = MagicMock()
-    mock_rr.settings.main_provider = "deepseek"
-    mock_rr.settings.compression_provider = "deepseek"
     mock_rr.settings.deepseek_api_key.get_secret_value.return_value = ""
     mock_rr.db_session_factory = MagicMock()
+    mock_rr.db_session_factory.return_value.__aenter__.return_value = MagicMock(spec=AsyncSession)
     mock_rr.audit_redis = redis_client
     mock_rr.arq_pool = AsyncMock()
     mock_rr.arq_pool.close = AsyncMock()
@@ -357,9 +361,9 @@ async def api_client(app: FastAPI) -> AsyncGenerator[AsyncClient, None]:
 @pytest_asyncio.fixture
 async def seeded_parent(db_session: AsyncSession) -> tuple:
     """种一个 active parent + family + family_members。返回 (user, plaintext_password)。"""
-    from app.auth.password import generate_password, generate_phone, hash_password
-    from app.models.accounts import Family, FamilyMember, User
-    from app.models.enums import UserRole
+    from app.core.enums import UserRole
+    from app.domain.accounts.models import Family, FamilyMember, User
+    from app.domain.auth.password import generate_password, generate_phone, hash_password
 
     pw = generate_password()
     fam = Family()
@@ -384,9 +388,9 @@ async def seeded_parent(db_session: AsyncSession) -> tuple:
 @pytest_asyncio.fixture
 async def inactive_parent(db_session: AsyncSession) -> tuple:
     """种一个 is_active=False 的 parent。返回 (user, plaintext_password)。"""
-    from app.auth.password import generate_password, generate_phone, hash_password
-    from app.models.accounts import Family, FamilyMember, User
-    from app.models.enums import UserRole
+    from app.core.enums import UserRole
+    from app.domain.accounts.models import Family, FamilyMember, User
+    from app.domain.auth.password import generate_password, generate_phone, hash_password
 
     pw = generate_password()
     fam = Family()
@@ -418,8 +422,8 @@ async def make_child_user_with_profile(sess: AsyncSession):
     """
     from datetime import date
 
-    from app.models.accounts import ChildProfile, Family, FamilyMember, User
-    from app.models.enums import Gender, UserRole
+    from app.core.enums import Gender, UserRole
+    from app.domain.accounts.models import ChildProfile, Family, FamilyMember, User
 
     fam = Family()
     sess.add(fam)
@@ -456,12 +460,63 @@ async def child_user(db_session: AsyncSession):
     return await make_child_user_with_profile(db_session)
 
 
+# ---- 内存级 schema 工厂（Step 10）----
+
+
+def make_child_profile_snapshot(
+    *,
+    child_user_id: uuid.UUID | None = None,
+    nickname: str = "test",
+    gender: str = "male",
+    birth_date: date | None = None,
+    age: int = 8,
+) -> ChildProfileSnapshot:
+    """内存级 ChildProfileSnapshot 工厂，测试用。
+
+    默认值与既有测试 fixture 兼容（age=8, gender='male'）。
+    birth_date 默认 None：仅 age 用于 prompt 落档时不影响测试断言。
+    """
+    return ChildProfileSnapshot(
+        child_user_id=child_user_id or uuid.uuid4(),
+        nickname=nickname,
+        gender=gender,
+        birth_date=birth_date,
+        age=age,
+    )
+
+
+def make_chat_context(
+    *,
+    session_id: uuid.UUID | None = None,
+    child_user_id: uuid.UUID | None = None,
+    user_input: str = "test input",
+    settings: Any = None,
+    db_session_factory: Any = None,
+    audit_redis: Any = None,
+    profile: ChildProfileSnapshot | None = None,
+) -> ChatContextSchema:
+    """构造最小 ChatContextSchema，测试用。
+
+    settings / db_session_factory / audit_redis 必传（来自测试 fixture），
+    profile 缺省用 make_child_profile_snapshot() 默认值。
+    """
+    return ChatContextSchema(
+        session_id=session_id or uuid.uuid4(),
+        child_user_id=child_user_id or uuid.uuid4(),
+        child_profile=profile or make_child_profile_snapshot(),
+        user_input=user_input,
+        settings=settings,
+        db_session_factory=db_session_factory,
+        audit_redis=audit_redis,
+    )
+
+
 @pytest_asyncio.fixture
 async def rate_limit_parent(db_session: AsyncSession) -> tuple:
     """种一个固定 phone='abcd' 的 active parent，用于 rate-limit 计数测试。"""
-    from app.auth.password import generate_password, hash_password
-    from app.models.accounts import Family, FamilyMember, User
-    from app.models.enums import UserRole
+    from app.core.enums import UserRole
+    from app.domain.accounts.models import Family, FamilyMember, User
+    from app.domain.auth.password import generate_password, hash_password
 
     pw = generate_password()
     fam = Family()

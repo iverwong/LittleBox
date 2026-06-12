@@ -1,8 +1,10 @@
 """FastAPI app factory."""
+
 import asyncio
 import logging
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, AsyncIterator
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,18 +14,18 @@ from app.api.bind_tokens import router as bind_tokens_router
 from app.api.children import router as children_router
 from app.api.health import router as health_router
 from app.api.me import router as me_router
-from app.auth.redis_client import redis_lifespan
-from app.config import settings
-from app.runtime import build_runtime, teardown_runtime
+from app.core.config import settings
+from app.core.redis import redis_lifespan
+from app.core.runtime import build_runtime, teardown_runtime
 
 if TYPE_CHECKING:
-    from app.runtime import RuntimeResources
+    from app.core.runtime import RuntimeResources
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """合并 lifespan：Redis 连接池 + 进程级 RuntimeResources。"""
     # M9-patch1 test seam: 若 app.state.resources 已预注入（测试缝），
     # 跳过 redis_lifespan + build_runtime + teardown_runtime，

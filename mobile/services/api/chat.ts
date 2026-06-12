@@ -10,6 +10,7 @@
  */
 import { api } from './client';
 import type { ApiResult } from './client';
+import { Endpoints } from '@/constants/endpoints';
 
 // ---------------------------------------------------------------------------
 // types — mirror backend pydantic models
@@ -74,7 +75,7 @@ export function listSessions(params?: {
   if (params?.cursor) search.set('cursor', params.cursor);
   if (params?.limit !== undefined) search.set('limit', String(params.limit));
   const qs = search.toString();
-  return api.get<SessionListResponse>(`/me/sessions${qs ? `?${qs}` : ''}`);
+  return api.get<SessionListResponse>(`${Endpoints.meSessions}${qs ? `?${qs}` : ''}`);
 }
 
 /**
@@ -94,7 +95,7 @@ export function getMessages(
   if (params?.limit !== undefined) search.set('limit', String(params.limit));
   const qs = search.toString();
   return api.get<MessageListResponse>(
-    `/me/sessions/${sid}/messages${qs ? `?${qs}` : ''}`,
+    Endpoints.meSessionMessages(sid, qs ? `?${qs}` : ''),
   );
 }
 
@@ -104,12 +105,12 @@ export function getMessages(
  * 不存在 / 已软删 → 404；非自己的 session → 403。
  */
 export function stopSession(sid: SessionId): Promise<ApiResult<null>> {
-  return api.post<null>(`/me/sessions/${sid}/stop`, {});
+  return api.post<null>(Endpoints.meSessionStop(sid), {});
 }
 
 /**
  * DELETE /me/sessions/{sid} — 软删（status='deleted'）；204；第二次 → 404（幂等性按 404 兜底）。
  */
 export function deleteSession(sid: SessionId): Promise<ApiResult<null>> {
-  return api.delete<null>(`/me/sessions/${sid}`);
+  return api.delete<null>(Endpoints.meSession(sid));
 }

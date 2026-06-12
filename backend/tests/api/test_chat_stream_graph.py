@@ -15,31 +15,34 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
 pytestmark = pytest.mark.asyncio(loop_scope="function")
 
 
 @pytest.fixture(autouse=True)
 def _mock_enqueue_audit():
     """mock enqueue_audit 避免 Redis lifespan 依赖。"""
-    with patch("app.api.me.enqueue_audit", AsyncMock()):
+    with patch("app.domain.chat.pipeline.enqueue_audit", AsyncMock()):
         yield
 
 
+from app.domain.chat.graph import build_main_graph
+from app.core.redis import commit_with_redis
+from app.domain.auth.tokens import issue_token
 from fakeredis.aioredis import FakeRedis
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from app.auth.redis_ops import commit_with_redis
-from app.auth.tokens import issue_token
-from app.chat.graph import build_main_graph
-
 main_graph = build_main_graph()
-from app.db import get_db
-from app.models.accounts import Family, FamilyMember, User
-from app.models.chat import Message
-from app.models.chat import Session as SessionModel
-from app.models.enums import MessageRole, MessageStatus, UserRole
-from tests.api._chat_stream_lifecycle_helpers import lifecycle_ctx, lifecycle_setup, seed_compression_session
+from app.core.db import get_db
+from app.core.enums import MessageRole, MessageStatus, UserRole
+from app.domain.chat.models import Message
+from app.domain.chat.models import Session as SessionModel
+from tests.api._chat_stream_lifecycle_helpers import (
+    lifecycle_ctx,  # noqa: F401  # fixture param
+    lifecycle_setup,
+    seed_compression_session,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures (reused from test_chat_stream_control_plane.py)
@@ -67,9 +70,8 @@ async def redis_client_with_eval(redis_client: FakeRedis) -> FakeRedis:
 @pytest.fixture
 async def app_with_eval(db_session, redis_client_with_eval):
     """App fixture with patched redis for Lua DEL simulation."""
-    from unittest.mock import patch
 
-    from app.auth.redis_client import get_redis
+    from app.core.redis import get_redis
     from app.main import create_app
     from tests.conftest import _inject_mock_resources
 
@@ -707,7 +709,8 @@ async def test_thinking_only_no_content_no_emit_end(
 @pytest.fixture
 async def compression_session(db_session, child_user):
     """Create a session with 2 active messages + needs_compression=True."""
-    from datetime import UTC, datetime as _dt
+    from datetime import UTC
+    from datetime import datetime as _dt
     from uuid import uuid4 as _uuid4
 
     base_ts = _dt.now(UTC)
@@ -762,7 +765,7 @@ async def test_compression_normal_path(
 
     lifecycle_ctx.rr.main_graph.astream = fake_astream
 
-    with patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
+    with patch("app.core.llm.build_compression_llm", return_value=fake_c_llm):
         body = make_payload(content="继续聊聊", session_id=str(sid))
         resp = await client.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
@@ -822,7 +825,7 @@ async def test_compression_with_reasoning_path(lifecycle_ctx):
 
     lifecycle_ctx.rr.main_graph.astream = fake_astream
 
-    with patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
+    with patch("app.core.llm.build_compression_llm", return_value=fake_c_llm):
         body = make_payload(content="继续", session_id=str(sid))
         resp = await client.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
@@ -860,7 +863,7 @@ async def test_compression_failure_path(
 
     app_with_eval.state.resources.main_graph.astream = _fake_astream_fail
 
-    with patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
+    with patch("app.core.llm.build_compression_llm", return_value=fake_c_llm):
         body = make_payload(content="继续", session_id=str(sid))
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
@@ -929,7 +932,7 @@ async def test_compression_row84_regression(lifecycle_ctx):
 
     lifecycle_ctx.rr.main_graph.astream = _fake_astream_84
 
-    with patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
+    with patch("app.core.llm.build_compression_llm", return_value=fake_c_llm):
         body = make_payload(content="继续聊聊", session_id=str(sid))
         resp = await client.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
@@ -960,7 +963,6 @@ async def test_compression_row84_regression(lifecycle_ctx):
 @pytest.mark.asyncio
 async def test_compression_noop_empty_filter(lifecycle_ctx):
     """Only one active human message + needs_compression=True → actives empty after filter → noop (no summary, no compression markers)."""
-    from unittest.mock import AsyncMock
     from uuid import uuid4 as _uuid4
 
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
@@ -1033,7 +1035,8 @@ async def test_compression_noop_empty_filter(lifecycle_ctx):
 @pytest.mark.asyncio
 async def test_compression_messages_order_assertion(lifecycle_ctx):
     """方案 a 核心契约：压缩后 initial_state["messages"] 顺序为 [system_prompt, summary, protected_human]."""
-    from unittest.mock import AsyncMock, patch as _patch
+    from unittest.mock import AsyncMock
+    from unittest.mock import patch as _patch
 
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
     sid, _, msg1_id, msg2_id = await seed_compression_session(lifecycle_ctx, child)
@@ -1051,7 +1054,7 @@ async def test_compression_messages_order_assertion(lifecycle_ctx):
 
     lifecycle_ctx.rr.main_graph.astream = spy_astream
 
-    with _patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
+    with _patch("app.core.llm.build_compression_llm", return_value=fake_c_llm):
         body = make_payload(content="继续聊聊", session_id=str(sid))
         resp = await client.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
@@ -1087,11 +1090,13 @@ async def test_compression_messages_order_assertion(lifecycle_ctx):
 @pytest.mark.asyncio
 async def test_compression_with_existing_summary(lifecycle_ctx):
     """二次压缩：已有旧 summary 行的 session 中，旧 summary 被纳入压缩集并标 compressed。"""
-    from datetime import UTC, datetime as _dt
+    from datetime import UTC
+    from datetime import datetime as _dt
+    from unittest.mock import AsyncMock
+    from unittest.mock import patch as _patch
     from uuid import uuid4 as _uuid4
-    from unittest.mock import AsyncMock, patch as _patch
 
-    from app.chat.prompts import SUMMARY_PREFIX
+    from app.domain.chat.prompts import SUMMARY_PREFIX
 
     client, headers, child = await lifecycle_setup(lifecycle_ctx)
     sid = _uuid4()
@@ -1136,7 +1141,7 @@ async def test_compression_with_existing_summary(lifecycle_ctx):
 
     lifecycle_ctx.rr.main_graph.astream = spy_astream
 
-    with _patch("app.chat.factory.build_provider_llm", return_value=fake_c_llm):
+    with _patch("app.core.llm.build_compression_llm", return_value=fake_c_llm):
         body = make_payload(content="第三轮", session_id=str(sid))
         resp = await client.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
@@ -1204,7 +1209,8 @@ async def test_enqueue_audit_target_message_id_equals_aid(
     target_message_id 通过 spy 捕获 enqueue_audit 第 5 位位置参数。
     两者来源不同，assert 为"独立获取一致"，非"自己塞给自己"。
     """
-    from unittest.mock import AsyncMock, patch as _patch
+    from unittest.mock import AsyncMock
+    from unittest.mock import patch as _patch
 
     headers, child = auth_headers_child
 
@@ -1220,7 +1226,7 @@ async def test_enqueue_audit_target_message_id_equals_aid(
     app_with_eval.state.resources.main_graph.astream = fake_astream
 
     enqueue_spy = AsyncMock()
-    with _patch("app.api.me.enqueue_audit", enqueue_spy):
+    with _patch("app.domain.chat.pipeline.enqueue_audit", enqueue_spy):
         body = make_payload(content="你好")
         resp = await api_client_with_eval.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,

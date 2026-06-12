@@ -1,4 +1,5 @@
 """bind_tokens 路由：绑定凭证完整生命周期（创建 / status / redeem）。"""
+
 from __future__ import annotations
 
 import json
@@ -6,34 +7,32 @@ import uuid
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.bind import (
+from app.core.db import get_db
+from app.core.enums import UserRole
+from app.core.redis import commit_with_redis, get_redis
+from app.domain.accounts.models import User
+from app.domain.accounts.schemas import AccountOut, CurrentAccount
+from app.domain.auth.bind_tokens import (
     BIND_KEY_PREFIX,
     BIND_RESULT_KEY_PREFIX,
+    consume_bind_token,
     issue_bind_token,
-    peek_bind_token,
-    stage_consume_bind_token,
     stage_record_bind_result,
 )
-from app.auth.deps import require_parent
-from app.auth.redis_client import get_redis
-from app.auth.redis_ops import commit_with_redis
-from app.auth.tokens import issue_token, revoke_all_active_tokens
-from app.db import get_db
-from app.models.accounts import User
-from app.models.enums import UserRole
-from app.schemas.accounts import (
-    AccountOut,
+from app.domain.auth.deps import require_parent
+from app.domain.auth.schemas import (
     BindTokenResponse,
     BindTokenStatusOut,
     CreateBindTokenRequest,
     LoginResponse,
     RedeemBindTokenRequest,
 )
+from app.domain.auth.tokens import issue_token, revoke_all_active_tokens
 
 router = APIRouter(prefix="/api/v1/bind-tokens", tags=["bind_tokens"])
 
@@ -41,7 +40,7 @@ router = APIRouter(prefix="/api/v1/bind-tokens", tags=["bind_tokens"])
 @router.post("", response_model=BindTokenResponse, status_code=201)
 async def create_bind_token(
     payload: CreateBindTokenRequest,
-    parent: Annotated[User, Depends(require_parent)],
+    parent: Annotated[CurrentAccount, Depends(require_parent)],
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> BindTokenResponse:
@@ -57,10 +56,12 @@ async def create_bind_token(
     )
     child = (await db.execute(stmt)).scalar_one_or_none()
     if child is None:
-        raise HTTPException(404, "child not found in family")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "child not found in family")
 
     token = await issue_bind_token(
-        redis, parent_user_id=parent.id, child_user_id=child.id,
+        redis,
+        parent_user_id=parent.id,
+        child_user_id=child.id,
     )
     return BindTokenResponse(bind_token=token)
 
@@ -88,7 +89,7 @@ async def get_bind_token_status(
     if await redis.exists(f"{BIND_KEY_PREFIX}{bind_token}"):
         return BindTokenStatusOut(status="pending")
     # 3) 两者皆无 → bind_token 已过期且未兑换（或根本不存在）
-    raise HTTPException(404, "bind token not found or expired")
+    raise HTTPException(status.HTTP_404_NOT_FOUND, "bind token not found or expired")
 
 
 @router.post("/{bind_token}/redeem", response_model=LoginResponse)
@@ -101,16 +102,23 @@ async def redeem_bind_token(
     """子端扫码后换取永久 child token；同时吊销该 child 所有老 token。
 
     bind_token 从 path param 取；body 仅携带 device_id（device_info B0 不再由客户端传入）。
+
+    TODO(redeem-family-check):拿到 parent_id_at_issue 后补 family 边界校验
+    这部分可以留到 family 多家长，以及家长解绑绑定时再做
+    (parent_at_issue.family_id == child.family_id + parent is_active + role=parent),
+    防御运维 SQL 误改 family_id / 未来分家转交 API。详情见 review notes。
     """
-    # peek 不删；DB 写入成功后 stage_consume_bind_token 入 staging，
-    # 由 commit_with_redis 统一 flush（DB 回滚则 bind_token 保留，5min TTL 内可重试）
-    peeked = await peek_bind_token(redis, bind_token)
+    # consume 用 Redis GETDEL 原子「读+删」:并发 redeem 第二个必拿 None,
+    # 杜绝双发 token。bind_token 拿到后无论 DB 写入成败都不可重试(故意为之,
+    # 与 CLAUDE.md「DB 是 source of truth」一致:若 DB 无 auth_token 记录,
+    # 客户端即使拿到 bind_token 也不该再有重试机会)。
+    peeked = await consume_bind_token(redis, bind_token)
     if peeked is None:
-        raise HTTPException(400, "bind token invalid or expired")
-    _parent_id, child_id = peeked
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "bind token invalid or expired")
+    _parent_id_at_issue, child_id = peeked  # noqa: F841  # TODO(redeem-family-check)
     child = await db.get(User, child_id)
     if child is None or not child.is_active or child.role != UserRole.child:
-        raise HTTPException(400, "child account unavailable")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "child account unavailable")
 
     # 新设备扫码吊销该 child 所有活跃 token（与 /auth/login 对齐）
     await revoke_all_active_tokens(db, child.id)
@@ -123,8 +131,7 @@ async def redeem_bind_token(
         device_id=payload.device_id,
         device_info=None,  # B0: device_info no longer passed by client
     )
-    stage_consume_bind_token(db, bind_token)
-    # 同时 stage 一条 bind_result 供父端轮询端点读；DB 回滚则两条同时丢，父端保持看到 pending
+    # stage 一条 bind_result 供父端轮询端点读;DB 回滚则此条也不 flush,父端保持看到 pending
     stage_record_bind_result(db, bind_token, child.id)
     await commit_with_redis(db, redis)
     return LoginResponse(
@@ -133,7 +140,7 @@ async def redeem_bind_token(
             id=child.id,
             role=child.role,
             family_id=child.family_id,
-            phone=None,
-            is_active=True,
+            phone=child.phone,
+            is_active=child.is_active,
         ),
     )

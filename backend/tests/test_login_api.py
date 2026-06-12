@@ -2,14 +2,10 @@
 from __future__ import annotations
 
 import pytest
-import pytest_asyncio
+from app.core.redis import commit_with_redis
+from app.domain.accounts.models import User
+from app.domain.auth.tokens import REDIS_KEY_PREFIX, issue_token, token_hash
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.auth.password import generate_phone
-from app.auth.redis_ops import commit_with_redis
-from app.auth.tokens import REDIS_KEY_PREFIX, issue_token, token_hash
-from app.models.accounts import Family, FamilyMember, User
-from app.models.enums import UserRole
 
 # ---- C3 · 响应屏蔽辅助函数 ----
 
@@ -85,9 +81,8 @@ class TestLoginEndpoint:
         token = resp.json()["token"]
         th = token_hash(token)
 
+        from app.domain.accounts.models import AuthToken
         from sqlalchemy import select
-
-        from app.models.accounts import AuthToken
         row = (await db_session.execute(
             select(AuthToken.device_id).where(AuthToken.token_hash == th)
         )).scalar_one()
@@ -190,11 +185,14 @@ class TestLoginEndpoint:
     async def test_login_child_account_401(
         self, api_client, db_session: AsyncSession, redis_client, child_user: User,
     ) -> None:
-        """child 账号用 phone 来登录 → 401（child 本就没 password_hash）。"""
-        user = child_user
+        """child 账号尝试登录 → 401（业务层只允许 role=parent）。"""
+        # child 不持有 phone（User.phone 注释明确"仅父账号"，partial unique index 也只对
+        # parent 生效），用不存在的 fake phone 触发 LoginRequest 校验通过, 让业务层
+        # `User.phone=? AND role=parent` 查询返回空 → 401 invalid credentials。
         resp = await api_client.post(
             "/api/v1/auth/login",
-            json={"phone": user.phone, "password": "anypassword1", "device_id": "dev_login_I"},
+            json={"phone": "nonexistent-child-phone-401", "password": "anypassword1",
+                  "device_id": "dev_login_I"},
         )
         assert resp.status_code == 401
         assert resp.json()["detail"] == "invalid credentials"
@@ -233,9 +231,8 @@ class TestLoginEndpoint:
         assert revoked_resp.status_code == 401
 
         # DB revoked_at 已写入
+        from app.domain.accounts.models import AuthToken
         from sqlalchemy import select
-
-        from app.models.accounts import AuthToken
         revoked_at = (await db_session.execute(
             select(AuthToken.revoked_at).where(AuthToken.token_hash == th_a)
         )).scalar_one()
@@ -482,9 +479,8 @@ class TestLogoutEndpoint:
         assert me_resp.status_code == 401
 
         # DB revoked_at 已写入
+        from app.domain.accounts.models import AuthToken
         from sqlalchemy import select
-
-        from app.models.accounts import AuthToken
         revoked_at = (await db_session.execute(
             select(AuthToken.revoked_at).where(AuthToken.token_hash == th)
         )).scalar_one()

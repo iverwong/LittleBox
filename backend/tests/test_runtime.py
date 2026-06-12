@@ -8,8 +8,7 @@ import dataclasses
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
-
-from app.runtime import RuntimeResources, build_runtime, teardown_runtime
+from app.core.runtime import RuntimeResources, teardown_runtime
 
 
 @pytest.mark.asyncio

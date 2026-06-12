@@ -13,7 +13,6 @@ import uuid
 from contextlib import asynccontextmanager
 
 import pytest
-
 from app.scripts.create_parent import _create_parent
 from app.scripts.create_parent import _main as create_parent_main
 from app.scripts.reset_parent_password import _reset_password
@@ -35,8 +34,8 @@ class TestCreateParent:
         assert isinstance(info.family_id, uuid.UUID)
 
         # DB 写入断言
-        from app.models.accounts import Family, FamilyMember, User
-        from app.models.enums import UserRole
+        from app.core.enums import UserRole
+        from app.domain.accounts.models import Family, FamilyMember, User
 
         user = await db_session.get(User, info.user_id)
         assert user is not None
@@ -67,7 +66,7 @@ class TestCreateParent:
         info_a = await _create_parent(db_session, redis_client, note="note-aaa")
         info_b = await _create_parent(db_session, redis_client, note="note-bbb")
 
-        from app.models.accounts import User
+        from app.domain.accounts.models import User
 
         user_a = await db_session.get(User, info_a.user_id)
         user_b = await db_session.get(User, info_b.user_id)
@@ -84,7 +83,7 @@ class TestResetPassword:
         """
         info = await _create_parent(db_session, redis_client, note="reset-test")
 
-        from app.models.accounts import User
+        from app.domain.accounts.models import User
 
         old_user = await db_session.get(User, info.user_id)
         old_hash = old_user.password_hash
@@ -98,7 +97,7 @@ class TestResetPassword:
         assert new_user.password_hash != old_hash
 
         # 旧密码不应再通过验证
-        from app.auth.password import verify_password
+        from app.domain.auth.password import verify_password
 
         assert not verify_password(new_user.password_hash, info.plain_password)
         assert verify_password(new_user.password_hash, result.plain_password)

@@ -26,6 +26,7 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { toast } from '@/components/ui/Toast'
 import { api } from '@/services/api/client'
+import { Endpoints } from '@/constants/endpoints'
 import { AgePicker } from '@/components/business/AgePicker'
 import { Mascot } from '@/components/mascot/Mascot'
 import { GenderAvatar } from '@/components/business/GenderAvatar'
@@ -78,7 +79,7 @@ export default function NewChildScreen() {
     }
     setSubmitting(true)
 
-    const res = await api.post<{ id: string }>('/children', {
+    const res = await api.post<{ id: string }>(Endpoints.children, {
       nickname: nickname.trim(),
       age,
       gender,

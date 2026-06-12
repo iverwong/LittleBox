@@ -10,21 +10,24 @@ from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
+
 pytestmark = pytest.mark.asyncio(loop_scope="function")  # 覆盖 pyproject.toml 的 session 级 loop scope
+from app.domain.chat.graph import build_main_graph
+from app.core.redis import commit_with_redis
+from app.domain.auth.tokens import issue_token
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from app.auth.redis_ops import commit_with_redis
-from app.auth.tokens import issue_token
-from app.chat.graph import build_main_graph
-
 main_graph = build_main_graph()
-from app.db import get_db
-from app.models.accounts import ChildProfile, Family, FamilyMember, User
-from app.models.chat import Message
-from app.models.chat import Session as SessionModel
-from app.models.enums import Gender, MessageRole, MessageStatus, UserRole
-from tests.api._chat_stream_lifecycle_helpers import lifecycle_ctx, lifecycle_setup
+from app.core.db import get_db
+from app.core.enums import Gender, MessageRole, MessageStatus, UserRole
+from app.domain.accounts.models import ChildProfile, Family, FamilyMember, User
+from app.domain.chat.models import Message
+from app.domain.chat.models import Session as SessionModel
+from tests.api._chat_stream_lifecycle_helpers import (  # noqa: F401  # lifecycle_ctx 是 fixture param
+    lifecycle_ctx,
+    lifecycle_setup,
+)
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 
@@ -34,9 +37,8 @@ SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 @pytest.fixture
 async def app(db_session, redis_client):
-    from unittest.mock import patch
 
-    from app.auth.redis_client import get_redis
+    from app.core.redis import get_redis
     from app.main import create_app
     from tests.conftest import _inject_mock_resources
 
@@ -101,14 +103,13 @@ async def auth_headers_child(db_session, redis_client, child_with_profile):
 def _mock_enqueue_audit():
     """mock enqueue_audit 避免 audit Redis 依赖。"""
     from unittest.mock import AsyncMock, patch
-    with patch("app.api.me.enqueue_audit", AsyncMock()):
+    with patch("app.domain.chat.pipeline.enqueue_audit", AsyncMock()):
         yield
 
 
 @pytest.fixture
 def _patch_locks(monkeypatch: pytest.MonkeyPatch):
     """绕过 throttle + session lock（避免依赖 FakeRedis eval patch 跨测试泄漏）。"""
-    from app.chat.locks import acquire_session_lock, acquire_throttle_lock
     monkeypatch.setattr("app.api.me.acquire_throttle_lock", AsyncMock(return_value=True))
     monkeypatch.setattr("app.api.me.acquire_session_lock", AsyncMock(return_value="mock-nonce"))
     monkeypatch.setattr("app.api.me.release_session_lock", AsyncMock(return_value=None))
@@ -309,7 +310,7 @@ async def test_compression_progress_fired_when_flag_true(lifecycle_ctx):
 
     lifecycle_ctx.rr.main_graph.astream = fake_astream
     with (
-        patch("app.chat.factory.build_provider_llm", return_value=mock_llm),
+        patch("app.core.llm.build_compression_llm", return_value=mock_llm),
     ):
         body = make_payload(content="新消息", session_id=str(sid))
         resp = await client.post("/api/v1/me/chat/stream", json=body, headers=headers)
@@ -364,7 +365,7 @@ async def test_compression_failure_keeps_flag(api_client, auth_headers_child, db
 
     app.state.resources.main_graph.astream = fake_astream
     with (
-        patch("app.chat.factory.build_provider_llm", return_value=mock_llm),
+        patch("app.core.llm.build_compression_llm", return_value=mock_llm),
     ):
         body = make_payload(content="新消息", session_id=str(sid))
         resp = await api_client.post("/api/v1/me/chat/stream", json=body, headers=headers)

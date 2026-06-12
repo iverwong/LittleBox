@@ -30,7 +30,7 @@ services:
       context: ./backend
       args:
         INSTALL_DEV: "true"
-    command: arq app.audit.worker.WORKER_SETTINGS
+    command: arq app.domain.audit.worker.WORKER_SETTINGS
     volumes:
       - ./backend:/app
     env_file: .env
@@ -43,7 +43,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "arq", "app.audit.worker.WORKER_SETTINGS", "--check"]
+      test: ["CMD", "arq", "app.domain.audit.worker.WORKER_SETTINGS", "--check"]
       interval: 30s
       timeout: 10s
       retries: 3

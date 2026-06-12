@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/Button'
 import { useTheme } from '@/theme'
 import { api } from '@/services/api/client'
 import { toast } from '@/components/ui/Toast'
+import { Endpoints } from '@/constants/endpoints'
 
 interface BindQrModalProps {
     visible: boolean
@@ -34,7 +35,6 @@ interface BindQrModalProps {
 
 interface BindTokenResponse {
     bind_token: string
-    expires_in_seconds: number
 }
 
 interface BindTokenStatusResponse {
@@ -74,7 +74,7 @@ export function BindQrModal({
         setToken(null)
         setPhase('loading')
 
-        const res = await api.post<BindTokenResponse>('/bind-tokens', {
+        const res = await api.post<BindTokenResponse>(Endpoints.bindTokens, {
             child_user_id: childId,
         })
 
@@ -111,7 +111,7 @@ export function BindQrModal({
 
         const tick = async () => {
             const res = await api.get<BindTokenStatusResponse>(
-                `/bind-tokens/${token}/status`,
+                Endpoints.bindTokenStatus(token),
             )
             if (cancelledRef.current) return
 
@@ -202,7 +202,7 @@ export function BindQrModal({
         phase === 'active'
             ? '请用孩子的设备扫描上方二维码'
             : phase === 'expired'
-                ? '二维码 5 分钟有效，请重新生成'
+                ? '二维码已失效，请重新生成'
                 : phase === 'error'
                     ? '请检查网络后重试'
                     : '正在申请二维码...'

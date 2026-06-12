@@ -1,7 +1,7 @@
 """Graph-node 级 intervention_type 发射测试：真实图 + 真实 route_by_risk，仅 mock LLM astream。
 
 D-patch1-2 补遗 · 6 条收口必办（闸门 A 裁决）全部内置：
-  A. patch 靶点：app.chat.graph.build_main_llm / _crisis_llm / _redline_llm
+  A. patch 靶点：app.domain.chat.graph.build_main_llm / _crisis_llm / _redline_llm
   B. audit_state 完整 5 键 AuditState
   C. ChatContextSchema 含真实 settings + db_session_factory + 种子数据
   D. load_audit_state patch 早于 build_main_graph()
@@ -15,16 +15,15 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
+from app.domain.chat.graph import build_main_graph
+from app.domain.chat.state import AuditState, MainDialogueState
+from tests.conftest import make_chat_context, make_child_profile_snapshot
+from app.core.config import settings
+from app.core.enums import UserRole
+from app.domain.accounts.models import Family, FamilyMember, User
+from app.domain.chat.models import Message, Session
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-from app.chat.context_schema import ChatContextSchema
-from app.chat.graph import build_main_graph
-from app.chat.state import AuditState, MainDialogueState
-from app.config import settings
-from app.models.accounts import Family, FamilyMember, User
-from app.models.chat import Message, Session
-from app.models.enums import UserRole
 
 pytestmark = pytest.mark.asyncio(loop_scope="function")
 
@@ -127,16 +126,16 @@ async def test_crisis_emits_crisis(concurrent_db_sessions, engine):
 
     factory = async_sessionmaker(engine, expire_on_commit=False)
     audit = _audit(crisis_locked=True, target_message_id=anchor_id)
-    ctx = ChatContextSchema(
-        session_id=sid, child_user_id=child_uid, child_profile={},
-        age=8, gender="male", user_input="test",
+    ctx = make_chat_context(
+        session_id=sid, child_user_id=child_uid, user_input="test",
         settings=settings, db_session_factory=factory,
         audit_redis=AsyncMock(),
+        profile=make_child_profile_snapshot(age=8, gender="male"),
     )
 
     with (
-        patch("app.chat.graph.load_audit_state", _stub_load_audit(audit)),
-        patch("app.chat.graph.build_crisis_llm", return_value=FakeLLM()),
+        patch("app.domain.chat.graph.load_audit_state", _stub_load_audit(audit)),
+        patch("app.domain.chat.graph.build_crisis_llm", return_value=FakeLLM()),
     ):
         graph = build_main_graph()
         state: MainDialogueState = {
@@ -180,16 +179,16 @@ async def test_redline_emits_redline(concurrent_db_sessions, engine):
 
     factory = async_sessionmaker(engine, expire_on_commit=False)
     audit = _audit(redline_triggered=True)
-    ctx = ChatContextSchema(
-        session_id=sid, child_user_id=child_uid, child_profile={},
-        age=8, gender="male", user_input="test",
+    ctx = make_chat_context(
+        session_id=sid, child_user_id=child_uid, user_input="test",
         settings=settings, db_session_factory=factory,
         audit_redis=AsyncMock(),
+        profile=make_child_profile_snapshot(age=8, gender="male"),
     )
 
     with (
-        patch("app.chat.graph.load_audit_state", _stub_load_audit(audit)),
-        patch("app.chat.graph.build_redline_llm", return_value=FakeLLM()),
+        patch("app.domain.chat.graph.load_audit_state", _stub_load_audit(audit)),
+        patch("app.domain.chat.graph.build_redline_llm", return_value=FakeLLM()),
     ):
         graph = build_main_graph()
         state: MainDialogueState = {
@@ -236,16 +235,16 @@ async def test_guided_emits_guided(concurrent_db_sessions, engine):
 
     factory = async_sessionmaker(engine, expire_on_commit=False)
     audit = _audit(guidance="be gentle")  # 唯一差异：guidance 非 None
-    ctx = ChatContextSchema(
-        session_id=sid, child_user_id=child_uid, child_profile={},
-        age=8, gender="male", user_input="test",
+    ctx = make_chat_context(
+        session_id=sid, child_user_id=child_uid, user_input="test",
         settings=settings, db_session_factory=factory,
         audit_redis=AsyncMock(),
+        profile=make_child_profile_snapshot(age=8, gender="male"),
     )
 
     with (
-        patch("app.chat.graph.load_audit_state", _stub_load_audit(audit)),
-        patch("app.chat.graph.build_main_llm", return_value=FakeLLM()),
+        patch("app.domain.chat.graph.load_audit_state", _stub_load_audit(audit)),
+        patch("app.domain.chat.graph.build_main_llm", return_value=FakeLLM()),
     ):
         graph = build_main_graph()
         # pre-set messages → build_messages_main 早退，不碰 DB
@@ -294,16 +293,16 @@ async def test_normal_emits_nothing(concurrent_db_sessions, engine):
 
     factory = async_sessionmaker(engine, expire_on_commit=False)
     audit = _audit(guidance=None)  # 唯一差异：guidance None
-    ctx = ChatContextSchema(
-        session_id=sid, child_user_id=child_uid, child_profile={},
-        age=8, gender="male", user_input="test",
+    ctx = make_chat_context(
+        session_id=sid, child_user_id=child_uid, user_input="test",
         settings=settings, db_session_factory=factory,
         audit_redis=AsyncMock(),
+        profile=make_child_profile_snapshot(age=8, gender="male"),
     )
 
     with (
-        patch("app.chat.graph.load_audit_state", _stub_load_audit(audit)),
-        patch("app.chat.graph.build_main_llm", return_value=FakeLLM()),
+        patch("app.domain.chat.graph.load_audit_state", _stub_load_audit(audit)),
+        patch("app.domain.chat.graph.build_main_llm", return_value=FakeLLM()),
     ):
         graph = build_main_graph()
         state: MainDialogueState = {

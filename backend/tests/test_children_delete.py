@@ -5,18 +5,19 @@ import uuid
 from datetime import date
 
 import pytest
-from sqlalchemy import func, select
-
-from app.models.accounts import (
+from app.core.enums import UserRole
+from app.domain.accounts.models import (
     AuthToken,
     ChildProfile,
     Family,
     FamilyMember,
     User,
 )
-from app.models.chat import Session
-from app.models.enums import UserRole
-from app.models.parent import DataDeletionRequest, DailyReport, Notification
+from app.domain.accounts.models import DataDeletionRequest
+from app.domain.chat.models import Session
+from app.domain.expert.models import DailyReport
+from app.domain.notifications.models import Notification
+from sqlalchemy import func, select
 
 
 async def _login(api_client, user: User, pw: str, device_id: str = "test_device") -> str:
@@ -48,7 +49,7 @@ class TestDeleteChildSuccess:
         seeded_parent,
     ) -> None:
         """DELETE child → 各关联表行数归零；families / parent / parent_family_members 保留。"""
-        from app.models.enums import DailyStatus
+        from app.core.enums import DailyStatus
 
         parent, pw = seeded_parent
         parent_token = await _login(api_client, parent, pw)
@@ -248,7 +249,7 @@ class TestDeleteChildAuth:
         seeded_parent,
     ) -> None:
         """跨家族 child → 404（不暴露存在性）。"""
-        from app.auth.password import generate_password, generate_phone
+        from app.domain.auth.password import generate_phone
 
         parent, pw = seeded_parent
         parent_token = await _login(api_client, parent, pw)
@@ -292,12 +293,11 @@ class TestDeleteChildTransactionRollback:
         conftest 的 teardown 会自动 rollback，异常后 session 不支持再次 await，
         所以不显式调用 rollback。
         """
+        from app.core.redis import discard_pending_redis_ops
+        from app.domain.accounts.service import hard_delete_child
+        from app.domain.auth.password import generate_password
+        from app.domain.auth.tokens import REDIS_KEY_PREFIX
         from sqlalchemy.exc import SQLAlchemyError
-
-        from app.auth.password import generate_password
-        from app.auth.redis_ops import discard_pending_redis_ops
-        from app.auth.tokens import REDIS_KEY_PREFIX
-        from app.services.child_deletion import hard_delete_child
 
         parent, _pw = seeded_parent
 
@@ -358,7 +358,7 @@ class TestDeleteChildTransactionRollback:
 
         # teardown 会自动 rollback，所以这里不再显式调用 await db_session.rollback()
         # DB 验证：child 仍在、审计行未生成
-        from app.models.parent import DataDeletionRequest
+        from app.domain.accounts.models import DataDeletionRequest
         child_count = await db_session.scalar(
             select(func.count()).select_from(User).where(User.id == child.id)
         )

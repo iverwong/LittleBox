@@ -4,11 +4,10 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from app.core.enums import UserRole
+from app.domain.accounts.models import Family, FamilyMember, User
+from app.domain.accounts.service import age_to_birth_date
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models.accounts import Family, FamilyMember, User
-from app.models.enums import UserRole
-from app.services.age_converter import age_to_birth_date
 
 
 async def _login(api_client, user: User, pw: str, device_id: str = "test_device") -> str:
@@ -246,7 +245,7 @@ class TestCreateChildLimit:
         assert resp.status_code == 201
 
         # Patch limit to 1 and try second child
-        from app.config import settings
+        from app.core.config import settings
 
         original = settings.max_children_per_family
         settings.max_children_per_family = 1
@@ -269,7 +268,7 @@ class TestCreateChildLimit:
         db_session: AsyncSession,
     ) -> None:
         """family A 满 3 个，不影响 family B parent 仍能创建。"""
-        from app.auth.password import hash_password
+        from app.domain.auth.password import hash_password
 
         # family A parent: create 3 children
         parent_a, pw_a = seeded_parent

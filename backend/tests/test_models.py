@@ -4,13 +4,9 @@
 测试隔离：纯 Python 反射，不依赖任何 fixture。
 """
 
-import uuid
-from datetime import datetime
-from typing import get_type_hints
 
+from app.domain.chat.models import Session
 from sqlalchemy import inspect
-
-from app.models.chat import Message, Session
 
 
 class TestSessionORM:
@@ -37,7 +33,6 @@ class TestSessionORM:
 
     def test_last_active_at_timezone_aware(self):
         """last_active_at 列配置 TIMESTAMP(timezone=True)。"""
-        from sqlalchemy.dialects.postgresql import TIMESTAMP
 
         cols = {c.name: c for c in inspect(Session).columns}
         col = cols["last_active_at"]

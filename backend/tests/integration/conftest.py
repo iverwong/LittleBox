@@ -27,13 +27,12 @@ from urllib.parse import urlparse, urlunparse
 
 import pytest
 import pytest_asyncio
+from app.core.config import Settings
 from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
-
-from app.config import Settings
 
 INTEGRATION_DB_NAME = "littlebox_integration"
 INTEGRATION_REDIS_DB = 15
@@ -139,6 +138,7 @@ def _integration_row_count_guard():
     yield
 
     import asyncio
+
     from sqlalchemy import text as _text
     from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -258,7 +258,7 @@ async def integration_runtime(
     """用集成 settings 构建真 RuntimeResources。
 
     关注点 4（注入缝生效时机 vs 缓存）：
-      LLM 实例在图节点执行时才调 build_provider_llm 构建，
+      LLM 实例在图节点执行时才调 build_role_primary 构建，
       build_runtime 不缓存 LLM。因此 set_test_llm 可在 runtime
       构建之后再调用，仍能生效。
 
@@ -269,7 +269,7 @@ async def integration_runtime(
       暴露给测试（integration_runtime 返回值），阶段二测试可通过
       rr.register_chat_task 句柄 await 段一收口。
     """
-    from app.runtime import build_runtime, teardown_runtime
+    from app.core.runtime import build_runtime, teardown_runtime
 
     s = build_integration_settings()
     rr = await build_runtime(s)
@@ -300,10 +300,9 @@ async def app(
     httpx ASGITransport 自动触发 lifespan。本 fixture 不覆写
     application.router.lifespan_context，让真 lifespan 运行。
     """
+    from app.core.db import get_db
+    from app.core.redis import get_redis
     from app.main import create_app
-
-    from app.auth.redis_client import get_redis
-    from app.db import get_db
 
     application = create_app()
 
@@ -354,16 +353,15 @@ async def arq_worker(integration_runtime: Any) -> AsyncGenerator[Callable[[], in
       run_audit 从 ctx["resources"] 取出 rr 后：
         - db_session_factory → 连 littlebox_integration
         - audit_redis → 连 db 15
-        - audit_graph → 走 build_provider_llm → 受 _test_llm_overrides 控制
+        - audit_graph → 走 build_role_primary(Role.AUDIT) → 受 _test_llm_overrides 控制
 
     约束（计划 §4）：
       functions=WORKER_SETTINGS["functions"] 使用字符串路径
-      ["app.audit.worker.run_audit"]，禁止写成 [run_audit]。
+      ["app.domain.audit.worker.run_audit"]，禁止写成 [run_audit]。
     """
+    from app.domain.audit.signals import AuditSignalsManager
+    from app.domain.audit.worker import WORKER_SETTINGS
     from arq import Worker
-
-    from app.audit.worker import WORKER_SETTINGS
-    from app.state.audit_signals import AuditSignalsManager
 
     rr = integration_runtime
 
@@ -380,7 +378,7 @@ async def arq_worker(integration_runtime: Any) -> AsyncGenerator[Callable[[], in
         pass
 
     worker = Worker(
-        functions=WORKER_SETTINGS["functions"],  # 字符串路径：["app.audit.worker.run_audit"]
+        functions=WORKER_SETTINGS["functions"],  # 字符串路径：["app.domain.audit.worker.run_audit"]
         redis_pool=rr.arq_pool,
         burst=True,
         on_startup=_on_startup,

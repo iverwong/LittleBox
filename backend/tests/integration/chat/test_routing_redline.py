@@ -12,8 +12,8 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
-from app.chat.factory import clear_test_llm, set_test_llm
+from app.core.llm import clear_test_llm, set_test_llm
+from app.core.llm_topology import Role
 
 from ._helpers import (
     FakeAuditLLM,
@@ -54,9 +54,9 @@ class TestRedlineRoutingGreen:
     ) -> None:
         """第 2 轮应发 redline intervention_type 帧。"""
         child, headers = await seed_integration_child(integration_runtime)
-        set_test_llm("deepseek", FakeMainLLM())
+        set_test_llm(Role.MAIN, FakeMainLLM())
         set_test_llm(
-            "audit_deepseek",
+            Role.AUDIT,
             FakeAuditLLM(tool_calls=make_audit_tool_call(
                 redline_triggered=True,
                 redline_detail="explicit content",

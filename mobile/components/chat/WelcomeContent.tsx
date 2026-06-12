@@ -11,9 +11,15 @@ import { StyleSheet, Text, View } from 'react-native'
 
 import { Mascot } from '@/components/mascot/Mascot'
 import { api } from '@/services/api/client'
+import { Endpoints } from '@/constants/endpoints'
 
+/**
+ * GET /me/profile 响应类型。
+ * child_user_id 是 child 的 User.id（≠ ChildProfile.id PK）——见后端
+ * app/schemas/children.py:ChildProfileOut 上个 commit 的命名调整。
+ */
 type ChildProfileOut = {
-    id: string
+    child_user_id: string
     nickname: string | null
     gender: string
     birth_date: string
@@ -25,7 +31,7 @@ export function WelcomeContent() {
     useEffect(() => {
         let cancelled = false
         const fetchProfile = async () => {
-            const result = await api.get<ChildProfileOut>('/me/profile')
+            const result = await api.get<ChildProfileOut>(Endpoints.meProfile)
             if (cancelled) return
             if (result.ok && result.data.nickname) {
                 setNickname(result.data.nickname)

@@ -9,15 +9,14 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from app.domain.audit.worker import run_audit
+from app.core.enums import UserRole
+from app.domain.accounts.models import Family, FamilyMember, User
+from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
+from app.domain.audit.signals import AuditSignalsManager
+from app.domain.chat.models import Session as SessionModel
+from app.domain.chat.usecase import enqueue_audit
 from fakeredis.aioredis import FakeRedis
-
-from app.chat.graph import enqueue_audit
-from app.audit.worker import run_audit
-from app.state.audit_signals import AuditSignalsManager
-from app.models.accounts import Family, FamilyMember, User
-from app.models.enums import UserRole
-from app.models.chat import Session as SessionModel
-from app.schemas.audit import AuditDimensionScores, AuditOutputSchema
 
 pytestmark = pytest.mark.audit
 
@@ -74,8 +73,7 @@ async def test_e2e_enqueue_to_ready(concurrent_db_sessions):
 
     # 2) run_audit → ready
     # T10：构造 fake RuntimeResources + ctx，通过 audit_graph.ainvoke 走通
-    from unittest.mock import MagicMock
-    from app.runtime import RuntimeResources
+    from app.core.runtime import RuntimeResources
     fake_rr = MagicMock(spec=RuntimeResources)
     fake_graph = AsyncMock()
     fake_graph.ainvoke = AsyncMock(return_value={"structured_output": _AUDIT_OUT})

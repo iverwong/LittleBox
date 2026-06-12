@@ -27,7 +27,6 @@
 from __future__ import annotations
 
 import pytest
-
 from app.scripts.create_parent import _create_parent
 from app.scripts.reset_parent_password import _reset_password
 
