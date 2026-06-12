@@ -21,7 +21,7 @@ from sqlalchemy import select
 from app.core.enums import InterventionType, MessageRole, MessageStatus
 from app.core.locks import release_session_lock
 from app.core.runtime import RuntimeResources
-from app.domain.chat.compression import CONTEXT_COMPRESS_THRESHOLD_TOKENS
+from app.domain.chat.compression import CONTEXT_COMPRESS_THRESHOLD_TOKENS, split_for_compression
 from app.domain.chat.context_schema import ChatContextSchema
 from app.domain.chat.models import Message
 from app.domain.chat.models import Session as SessionModel
@@ -106,10 +106,10 @@ async def run_llm_pipeline(
 
                         from app.core.llm import build_compression_llm
                         from app.domain.chat.compression import (
-                            build_compression_prompt,
+                            build_compression_messages,
                             extract_compression_summary,
                         )
-                        from app.domain.chat.context import _to_lc_message
+                        from app.domain.chat.context import to_lc_message
 
                         if protected_id is None:
                             raise RuntimeError(
@@ -119,7 +119,9 @@ async def run_llm_pipeline(
 
                         # 提到压缩块顶端:仅在 actives_orm 非空时真正赋值,
                         # 但 L175 复用需要它已在 scope 中,故先 None 声明。
+                        summary: str | None = None
                         _summary_obj: Message | None = None
+                        to_keep_orm: list = []
 
                         actives_orm = (
                             (
@@ -138,29 +140,42 @@ async def run_llm_pipeline(
                         )
 
                         if actives_orm:
-                            c_input = build_compression_prompt(
-                                [_to_lc_message(mo) for mo in actives_orm]
-                            )
-                            c_llm = build_compression_llm(rr.settings)
-                            c_result = await c_llm.ainvoke(c_input)
-                            raw = (
-                                c_result.content if hasattr(c_result, "content") else str(c_result)
-                            )
-                            summary = extract_compression_summary(raw)
-                            for mo in actives_orm:
-                                mo.status = MessageStatus.compressed
-                            # 命名 + flush:让 server_default 填充 id / created_at,
-                            # 之后在 initial_state 构造处直接复用本对象,不再回 DB 二次 SELECT
-                            _summary_obj = Message(
-                                session_id=sid,
-                                role=MessageRole.summary,
-                                status=MessageStatus.active,
-                                content=summary,
-                            )
-                            db.add(_summary_obj)
-                            await db.flush()
+                            # 末尾 N 对 (h,a) 留原状 active,直接进 history;
+                            # 其余送 LLM 压成一段 summary。详见 compression.split_for_compression。
+                            to_compress_orm, to_keep_orm = split_for_compression(actives_orm)
+                            if to_compress_orm:
+                                c_input = build_compression_messages(
+                                    [to_lc_message(mo) for mo in to_compress_orm]
+                                )
+                                c_llm = build_compression_llm(rr.settings)
+                                c_result = await c_llm.ainvoke(c_input)
+                                raw = (
+                                    c_result.content
+                                    if hasattr(c_result, "content")
+                                    else str(c_result)
+                                )
+                                summary = extract_compression_summary(raw)
+                                for mo in to_compress_orm:
+                                    mo.status = MessageStatus.compressed
+                                # 命名 + flush:让 server_default 填充 id / created_at,
+                                # 之后在 initial_state 构造处直接复用本对象,不再回 DB 二次 SELECT
+                                _summary_obj = Message(
+                                    session_id=sid,
+                                    role=MessageRole.summary,
+                                    status=MessageStatus.active,
+                                    content=summary,
+                                )
+                                db.add(_summary_obj)
+                                await db.flush()
+                            else:
+                                # 切分后 to_compress 为空,无可压内容(防御分支)。
+                                logger.warning(
+                                    "compression noop for session %s: \
+                                        nothing to compress after split",
+                                    sid,
+                                )
                         else:
-                            logger.info(
+                            logger.warning(
                                 "compression noop for session %s: no messages to compress", sid
                             )
 
@@ -168,12 +183,13 @@ async def run_llm_pipeline(
                         await db.commit()
 
                         # 手动构造 initial_state["messages"]
-                        _sp = build_system_prompt(ctx.child_profile)
+                        _sp = build_system_prompt(ctx.child_profile, summary)
                         _new_hist: list = []
 
-                        if _summary_obj is not None:
-                            # 复用上方 flush 后的 _summary_obj,不再二次 SELECT
-                            _new_hist.append(_to_lc_message(_summary_obj))
+                        # 切分后保留的最近 N 对 (h,a),原状 active 注入 history
+                        # 顺序: created_at ASC → 自然接在 summary 之后
+                        for mo in to_keep_orm:
+                            _new_hist.append(to_lc_message(mo))
 
                         # protected 消息的 content 由 me.py 透传过来(原语字符串),
                         # 避免跨 session 边界传 ORM 对象(detached / identity map 不同步风险)
