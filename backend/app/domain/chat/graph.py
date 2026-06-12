@@ -200,12 +200,12 @@ async def build_messages_main(
     职责边界：
     - history 不含本轮 human（由 load_active_history_for_assembly 的 until_turn 过滤）
     - wrapper 仅作用于 LLM 输入装配层，不回写 messages 表
-    - compression 路径（me.py 预装 messages）时本节点跳过装配
+    - compression 路径（[app/domain/chat/pipeline.py]）时本节点跳过装配
     - build_context（audit 路径用）保留不删
     """
     ctx = runtime.context
 
-    # compression 路径：me.py 已预装 messages，跳过 DB 重装
+    # compression 路径：[app/domain/chat/pipeline.py] 已预装 initial_state['messages']，跳过 DB 重装
     if state.get("messages"):
         return {}
 
