@@ -151,16 +151,19 @@ async def build_context(sid: UUID, db: AsyncSession) -> list[BaseMessage]:
 # ---------------------------------------------------------------------------
 
 
-async def load_recent_active_pairs(
+async def load_recent_active_messages(
     sid: UUID,
     current_turn: int,
     db: AsyncSession,
     limit: int,
 ) -> list[BaseMessage]:
-    """取当前轮之前最近 n 对 active human/ai 消息，按 turn 升序返回。
+    """取当前轮之前最近 n 条 active human/ai 消息（按 created_at 升序）。
 
-    SQL：WHERE turn_number < current_turn AND status='active'
-    ORDER BY turn_number DESC LIMIT n*2 → Python reversed() 升序。
+    语义：``limit`` 直接是消息条数（非"对"数）。若要保留"n 对"行为，
+    调用方传入 ``limit = 2 * n``。
+
+    SQL：WHERE turn_number < current_turn AND role IN ('human','ai')
+    ORDER BY created_at DESC LIMIT n → Python reversed() 升序。
     """
     rows = (
         (
@@ -171,7 +174,7 @@ async def load_recent_active_pairs(
                     Message.turn_number < current_turn,
                     Message.role.in_([MessageRole.human, MessageRole.ai]),
                 )
-                .order_by(Message.created_at.asc(), Message.id.asc())
+                .order_by(Message.created_at.desc(), Message.id.desc())
                 .limit(limit)
             )
         )
@@ -201,7 +204,7 @@ async def build_crisis_context(
     if anchor is None:
         raise ValueError(f"crisis anchor not found: {target_message_id}")
 
-    n = settings.crisis_context_recent_turns  # 默认 5 对
+    n = settings.crisis_context_recent_messages  # 默认 10 条（5 对）
 
     # anchor_window：绕 status，以 created_at 切分
     aw_rows = (
@@ -213,7 +216,7 @@ async def build_crisis_context(
                     Message.created_at <= anchor.created_at,
                 )
                 .order_by(Message.created_at.desc())
-                .limit(n * 2)
+                .limit(n)
             )
         )
         .scalars()
@@ -248,12 +251,12 @@ async def build_redline_context(
     current_turn: int,
     db: AsyncSession,
 ) -> tuple[list[SystemMessage], list[BaseMessage]]:
-    """红线上下文装配：turn_summaries 前缀 + 最近 active 对。
+    """红线上下文装配：turn_summaries 前缀 + 最近 active 消息。
 
     Returns:
-        (summaries_systems, recent_pairs)
+        (summaries_systems, recent_messages)
         - summaries_systems: 最近 redline_turn_summaries_window 条摘要的 SystemMessage 列表
-        - recent_pairs: 最近 redline_context_recent_turns 对 active 消息
+        - recent_messages: 最近 redline_context_recent_messages 条 active 消息
     """
     rs = await db.scalar(select(RollingSummary).where(RollingSummary.session_id == sid).limit(1))
     summaries: list[SystemMessage] = []
@@ -264,13 +267,13 @@ async def build_redline_context(
             text = f"Turn {s.get('turn_number', '?')}: {s.get('summary', '')}"
             summaries.append(SystemMessage(content=text))
 
-    pairs = await load_recent_active_pairs(
+    messages = await load_recent_active_messages(
         sid,
         current_turn,
         db,
-        n=settings.redline_context_recent_turns,
+        limit=settings.redline_context_recent_messages,
     )
-    return summaries, pairs
+    return summaries, messages
 
 
 # ---- LangChain 消息转换 ----

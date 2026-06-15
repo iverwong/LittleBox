@@ -15,9 +15,9 @@ class Settings(BaseSettings):
     # timeout / fallback）全部入 app/core/llm_topology.py，settings 不再承载。
     deepseek_api_key: SecretStr = SecretStr("")  # required
     bailian_api_key: SecretStr = SecretStr("")  # required
-    # M9 三级干预上下文参数
-    crisis_context_recent_turns: int = 5  # crisis anchor_window 对数（含触发轮）
-    redline_context_recent_turns: int = 10  # 红线最近活跃对数
+    # M9 三级干预上下文参数（limit 直接是消息条数，非"对"数）
+    crisis_context_recent_messages: int = 10  # crisis anchor_window 消息数（含触发轮,等价 5 对）
+    redline_context_recent_messages: int = 20  # 红线最近活跃消息数（等价 10 对）
     redline_turn_summaries_window: int = 50  # 红线摘要窗口条数
     # M5 hotfix: family child count limit
     max_children_per_family: int = 3

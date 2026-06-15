@@ -278,7 +278,7 @@ async def build_messages_redline(
     ctx = runtime.context
 
     async with ctx.db_session_factory() as db:
-        summaries_systems, recent_pairs = await build_redline_context(
+        summaries_systems, recent_messages = await build_redline_context(
             ctx.session_id,
             state["turn_number"],
             db,
@@ -287,7 +287,7 @@ async def build_messages_redline(
         "messages": [
             build_redline_system_prompt(ctx.child_profile),
             *summaries_systems,
-            *recent_pairs,
+            *recent_messages,
             HumanMessage(content=format_reentry_wrapper_redline(ctx.user_input)),
         ]
     }
