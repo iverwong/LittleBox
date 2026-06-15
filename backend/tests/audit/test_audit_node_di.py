@@ -190,9 +190,9 @@ async def test_audit_llm_call_passes_settings():
 
     # build_audit_llm 被调一次，参数 == runtime.context.settings
     mock_build.assert_called_once_with(runtime.context.settings)
-    # C2 段:纯文本追问后单 OUTPUT 解析,structured_output 已设
+    # C2 段:纯文本追问后单 OUTPUT 透传,structured_output 不设(由 audit_tools 终止)
     assert "messages" in result
-    assert result.get("structured_output") is not None
+    assert result.get("structured_output") is None
     msgs = result["messages"]
     assert len(msgs) >= 1
     last_msg = msgs[-1]
@@ -364,20 +364,130 @@ class TestLoadContextHistorySplit:
         assert "notes" in content
 
 
-class TestRouteAfterLlmShortCircuit:
-    """C4 段:route_after_llm 简化为 structured_output 短路二分。"""
+class TestAuditToolsSingleOutput:
+    """单 OUTPUT 终止路径:audit_tools 校验 args, 校验通过则设 structured_output 终止,
+    校验失败则发 error ToolMessage(带 validation_errors)触发下一轮修正。
+    """
 
-    def test_structured_output_set_goes_to_write_results(self):
-        from app.domain.audit.graph import route_after_llm
+    async def test_single_output_valid_sets_structured_output(self):
+        """单 OUTPUT 校验通过 → structured_output 设,M9.5 清掉 guidance_injection,
+        不发 ToolMessage。"""
+        from app.domain.audit.graph import audit_tools
+        from langchain_core.messages import ToolMessage
 
-        state = _make_state(structured_output=MagicMock())
-        assert route_after_llm(state) == "write_results"
+        state = _make_state(
+            session_notes_working="",
+            messages=[
+                AIMessage(
+                    content="",
+                    tool_calls=[_tc(TOOL_NAME_OUTPUT, _AUDIT_OUTPUT_ARGS, call_id="call-1")],
+                ),
+            ],
+        )
+        runtime = _make_fake_runtime()
+        result = await audit_tools(state, runtime)
 
-    def test_structured_output_none_goes_to_audit_tools(self):
-        from app.domain.audit.graph import route_after_llm
+        # 终止信号:structured_output 设了
+        assert result.get("structured_output") is not None
+        assert result["structured_output"].turn_summary == "情绪稳定"
+        # M9.5:guidance_injection 强制清掉
+        assert result["structured_output"].guidance_injection is None
+        # 不发 ToolMessage
+        tool_messages = [m for m in result.get("messages", []) if isinstance(m, ToolMessage)]
+        assert tool_messages == []
+        # 不增 tool_iter_count(终止信号,loop 结束)
+        assert "tool_iter_count" not in result
 
-        state = _make_state(structured_output=None)
-        assert route_after_llm(state) == "audit_tools"
+    async def test_single_output_invalid_emits_error_tool_message(self):
+        """单 OUTPUT args 非法 → 发 error ToolMessage(带 validation_errors),
+        不设 structured_output, tool_iter_count 增 1。"""
+        from app.domain.audit.graph import audit_tools
+        from langchain_core.messages import ToolMessage
+
+        # crisis_detected=True 但 crisis_topic=None → 触发 _check_crisis_consistency
+        bad_args = {
+            "dimension_scores": {**_AUDIT_OUTPUT_ARGS["dimension_scores"]},
+            "crisis_detected": True,
+            "crisis_topic": None,  # 非法搭配
+            "redline_triggered": False,
+            "redline_detail": None,
+            "guidance_injection": None,
+            "turn_summary": "x",
+        }
+        state = _make_state(
+            session_notes_working="",
+            tool_iter_count=0,
+            messages=[
+                AIMessage(
+                    content="",
+                    tool_calls=[_tc(TOOL_NAME_OUTPUT, bad_args, call_id="call-bad")],
+                ),
+            ],
+        )
+        runtime = _make_fake_runtime()
+        result = await audit_tools(state, runtime)
+
+        import json as _json
+
+        # 不设 structured_output → 路由到 audit_llm_call 修正
+        assert "structured_output" not in result
+        # 发 1 个 error ToolMessage
+        tool_messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
+        assert len(tool_messages) == 1
+        assert tool_messages[0].tool_call_id == "call-bad"
+        payload = _json.loads(tool_messages[0].content)
+        assert "error" in payload
+        assert "AuditOutputSchema args 校验失败" in payload["error"]
+        # 带字段级 validation_errors
+        assert "validation_errors" in payload
+        assert isinstance(payload["validation_errors"], list)
+        assert len(payload["validation_errors"]) > 0
+        err0 = payload["validation_errors"][0]
+        assert "loc" in err0
+        assert "msg" in err0
+        assert "type" in err0
+        # tool_iter_count 增 1
+        assert result["tool_iter_count"] == 1
+        # session_notes_working 不变
+        assert result["session_notes_working"] == ""
+
+    async def test_single_output_invalid_missing_field(self):
+        """单 OUTPUT args 缺字段(dimension_scores 缺失)→ 同样发 error ToolMessage。"""
+        from app.domain.audit.graph import audit_tools
+        from langchain_core.messages import ToolMessage
+
+        incomplete_args = {
+            # 缺 dimension_scores
+            "crisis_detected": False,
+            "crisis_topic": None,
+            "redline_triggered": False,
+            "redline_detail": None,
+            "guidance_injection": None,
+            "turn_summary": "ok",
+        }
+        state = _make_state(
+            session_notes_working="",
+            tool_iter_count=2,
+            messages=[
+                AIMessage(
+                    content="",
+                    tool_calls=[_tc(TOOL_NAME_OUTPUT, incomplete_args, call_id="call-inc")],
+                ),
+            ],
+        )
+        runtime = _make_fake_runtime()
+        result = await audit_tools(state, runtime)
+
+        import json as _json
+
+        assert "structured_output" not in result
+        tool_messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
+        assert len(tool_messages) == 1
+        payload = _json.loads(tool_messages[0].content)
+        assert "validation_errors" in payload
+        # 缺字段错误应指向 dimension_scores
+        locs = [tuple(err["loc"]) for err in payload["validation_errors"]]
+        assert ("dimension_scores",) in locs
 
 
 class TestAuditToolsOutputViolation:
@@ -519,10 +629,13 @@ class TestAuditToolsLastNotePayload:
         assert second_payload.get("ok") is True
 
 
-class TestAuditLlmCallParsesSingleOutput:
-    """C2 段:audit_llm_call 仅在'恰好单 OUTPUT'时解析。"""
+class TestAuditLlmCallTransparent:
+    """新设计下 audit_llm_call 是透传节点:有 tool_calls 都不解析,
+    structured_output 不设,统一交给 audit_tools 处理。"""
 
-    async def test_single_output_sets_structured_output(self):
+    async def test_single_output_no_parse(self):
+        """单 OUTPUT 在 audit_llm_call 透传,structured_output 不设
+        (校验 + 终止由 audit_tools 负责)。"""
         state = _make_state()
         runtime = _make_fake_runtime()
         from langchain_core.messages import AIMessage
@@ -540,9 +653,12 @@ class TestAuditLlmCallParsesSingleOutput:
             mock_build.return_value = mock_llm
             result = await audit_llm_call(state, runtime)
 
-        assert "structured_output" in result
-        assert result["structured_output"] is not None
-        assert result["structured_output"].turn_summary == "情绪稳定"
+        assert result.get("structured_output") is None
+        # 透传 messages
+        msgs = result["messages"]
+        assert len(msgs) == 1
+        last_msg = msgs[-1]
+        assert last_msg.tool_calls[0]["name"] == "AuditOutputSchema"
 
     async def test_note_only_no_structured_output(self):
         state = _make_state()
@@ -563,7 +679,7 @@ class TestAuditLlmCallParsesSingleOutput:
         assert "structured_output" not in result
 
     async def test_multi_output_no_parse(self):
-        """多 OUTPUT 不解析,交 audit_tools error ToolMessage 路径。"""
+        """多 OUTPUT 在 audit_llm_call 透传,交 audit_tools error ToolMessage 路径。"""
         state = _make_state()
         runtime = _make_fake_runtime()
         from langchain_core.messages import AIMessage
@@ -585,7 +701,7 @@ class TestAuditLlmCallParsesSingleOutput:
         assert "structured_output" not in result
 
     async def test_mixed_output_no_parse(self):
-        """混调 [NOTE, OUTPUT] 不解析。"""
+        """混调 [NOTE, OUTPUT] 在 audit_llm_call 透传。"""
         state = _make_state()
         runtime = _make_fake_runtime()
         from langchain_core.messages import AIMessage
@@ -605,6 +721,32 @@ class TestAuditLlmCallParsesSingleOutput:
             result = await audit_llm_call(state, runtime)
 
         assert "structured_output" not in result
+
+    async def test_double_text_fallback_logs_warning(self, caplog):
+        """两次 ainvoke 都返回纯文本 → logger.warning 记诊断,
+        不设 structured_output(audit_tools 防御性兜底负责设 default)。"""
+        state = _make_state()
+        runtime = _make_fake_runtime()
+        from langchain_core.messages import AIMessage
+
+        with patch("app.domain.audit.graph.build_audit_llm") as mock_build:
+            text_response = AIMessage(content="不调工具", tool_calls=[])
+            mock_llm = MagicMock()
+            mock_llm.ainvoke = AsyncMock(side_effect=[text_response, text_response])
+            mock_build.return_value = mock_llm
+
+            result = await audit_llm_call(state, runtime)
+
+        # 两次 ainvoke 都跑(后处理追问)
+        assert mock_llm.ainvoke.await_count == 2
+        # 不设 structured_output(audit_tools 兜底)
+        assert result.get("structured_output") is None
+        # 透传最后一次 response
+        msgs = result["messages"]
+        assert len(msgs) == 1
+        assert msgs[-1].content == "不调工具"
+        # 警告日志
+        assert any("连续两次未调用 audit_output" in r.message for r in caplog.records)
 
 
 class TestMaxIterTailFallback:
