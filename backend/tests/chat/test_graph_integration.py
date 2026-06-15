@@ -51,8 +51,8 @@ def _mock_settings(**overrides: dict) -> SimpleNamespace:
         bailian_api_key="",
         audit_redis_ttl_seconds=86400,
         audit_wait_timeout_seconds=30,
-        crisis_context_recent_turns=5,
-        redline_context_recent_turns=10,
+        crisis_context_recent_messages=10,
+        redline_context_recent_messages=20,
         redline_turn_summaries_window=50,
     )
     defaults.update(overrides)
@@ -138,9 +138,15 @@ class TestMainPath:
         runtime = _make_runtime(user_input="你好")
         fake_history = [HumanMessage(content="历史消息")]
 
-        with patch(
-            "app.domain.chat.graph.load_active_history_for_assembly",
-            return_value=fake_history,
+        with (
+            patch(
+                "app.domain.chat.graph.load_active_messages_with_summary",
+                return_value=(fake_history, None),
+            ),
+            patch(
+                "app.domain.chat.graph.to_lc_message",
+                side_effect=lambda m: m,
+            ),
         ):
             result = await build_messages_main(state, runtime)
 
@@ -298,7 +304,7 @@ class TestRedlinePath:
 
     async def test_assembly_with_real_db(self, db_session):
         """Given: redline state + seed DB, When build_messages_redline,
-        Then 装配 [redline_system, *summaries, *recent_pairs, reentry_wrapper]。
+        Then 装配 [redline_system, *summaries, *recent_messages, reentry_wrapper]。
         """
         # ---- seed ----
         sid = uuid.uuid4()
@@ -399,9 +405,15 @@ class TestGuidancePath:
         runtime = _make_runtime(user_input="我不想动", settings=_mock_settings())
         fake_history = [HumanMessage(content="之前的消息")]
 
-        with patch(
-            "app.domain.chat.graph.load_active_history_for_assembly",
-            return_value=fake_history,
+        with (
+            patch(
+                "app.domain.chat.graph.load_active_messages_with_summary",
+                return_value=(fake_history, None),
+            ),
+            patch(
+                "app.domain.chat.graph.to_lc_message",
+                side_effect=lambda m: m,
+            ),
         ):
             result = await build_messages_main(state, runtime)
 

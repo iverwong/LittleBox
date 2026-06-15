@@ -24,7 +24,7 @@ from app.domain.chat.context import (
     build_crisis_context,
     build_redline_context,
     load_active_history_for_assembly,
-    load_recent_active_pairs,
+    load_recent_active_messages,
 )
 from app.domain.chat.prompts import ANCHOR_WINDOW_PREFIX
 from app.core.enums import MessageRole, MessageStatus
@@ -319,18 +319,18 @@ async def _seed_messages(
     return ids
 
 
-class TestLoadRecentActivePairs:
-    """D.3 load_recent_active_pairs — 9 条 (编号 9)。"""
+class TestLoadRecentActiveMessages:
+    """D.3 load_recent_active_messages — 9 条 (编号 9)。"""
 
     @pytest.mark.asyncio
-    async def test_load_recent_active_pairs_limit_and_order(self, db_session, child_user) -> None:
-        """Given 15 轮 active + current_turn=16, When n=10, Then 返回 20 条(10 对)升序。"""
+    async def test_load_recent_active_messages_limit_and_order(self, db_session, child_user) -> None:
+        """Given 15 轮 active + current_turn=16, When limit=20, Then 返回 20 条最近消息升序。"""
         sid = await _seed_session(db_session, child_user.id)
         await _seed_messages(db_session, sid, 15, base_time=datetime(2025, 1, 1, tzinfo=timezone.utc))
 
-        result = await load_recent_active_pairs(sid, current_turn=16, db=db_session, n=10)
+        result = await load_recent_active_messages(sid, current_turn=16, db=db_session, limit=20)
 
-        assert len(result) == 20, f"expected 10 pairs=20, got {len(result)}"
+        assert len(result) == 20, f"expected 20 messages, got {len(result)}"
         turns = [m.content for m in result]
         # DESC LIMIT 20 → 拿到 turns 6-15 → reversed() 后 turns 6-15 升序
         assert "turn6" in turns[0], f"expected turn6 first, got {turns[0]}"

@@ -16,10 +16,10 @@ pytestmark = pytest.mark.audit
 
 
 class TestAuditDimensionScores:
-    """7 维度 × Field(ge=0, le=9) 范围校验。"""
+    """6 维度 × Field(ge=0, le=9) 范围校验。"""
 
     @pytest.mark.parametrize("field", [
-        "emotional", "social", "romance", "values",
+        "emotional", "social", "values",
         "boundaries", "academic", "lifestyle",
     ])
     @pytest.mark.parametrize("value,should_pass", [

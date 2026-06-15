@@ -23,6 +23,19 @@ SID = "00000000-0000-0000-0000-000000000001"
 CUID = "00000000-0000-0000-0000-000000000002"
 TARGET_MID = "00000000-0000-0000-0000-000000000003"
 
+
+def _fake_child_profile_dict() -> dict:
+    """构造 run_audit 接收的 child_profile 字典（R2 入参 asdict 序列化）。"""
+    from datetime import date
+
+    return {
+        "child_user_id": "00000000-0000-0000-0000-000000000002",
+        "nickname": "test_kid",
+        "gender": "unknown",
+        "birth_date": date(2013, 1, 1),
+        "age": 12,
+    }
+
 _AUDIT_OUTPUT = AuditOutputSchema(
     dimension_scores=AuditDimensionScores(),
     crisis_detected=False,
@@ -98,7 +111,7 @@ class TestRunAudit:
         fake_rr: MagicMock = ctx["resources"]
         fake_rr.audit_graph.ainvoke = _fake_graph_ainvoke_ok
 
-        await run_audit(ctx, SID, turn_number=1, child_user_id=CUID, target_message_id=TARGET_MID)
+        await run_audit(ctx, SID, turn_number=1, child_user_id=CUID, target_message_id=TARGET_MID, child_profile=_fake_child_profile_dict())
 
         # 验证 Redis 状态
         payload = await mgr.get(SID)
@@ -115,7 +128,7 @@ class TestRunAudit:
         fake_rr.audit_graph.ainvoke = _fake_graph_ainvoke_raise
 
         with pytest.raises(RuntimeError, match="LLM error"):
-            await run_audit(ctx, SID, turn_number=2, child_user_id=CUID, target_message_id=TARGET_MID)
+            await run_audit(ctx, SID, turn_number=2, child_user_id=CUID, target_message_id=TARGET_MID, child_profile=_fake_child_profile_dict())
 
         # 验证 Redis 状态
         payload = await mgr.get(SID)
@@ -133,7 +146,7 @@ class TestRunAudit:
         fake_rr.audit_graph.ainvoke = _fake_graph_ainvoke_raise
 
         with pytest.raises(RuntimeError, match="LLM error"):
-            await run_audit(ctx, SID, turn_number=2, child_user_id=CUID, target_message_id=TARGET_MID)
+            await run_audit(ctx, SID, turn_number=2, child_user_id=CUID, target_message_id=TARGET_MID, child_profile=_fake_child_profile_dict())
 
         # 验证 Redis 状态未写入（key 不存在）
         payload = await mgr.get(SID)
@@ -157,7 +170,7 @@ class TestRunAudit:
         fake_rr: MagicMock = ctx["resources"]
         fake_rr.audit_graph.ainvoke = ainvoke_spy
 
-        await run_audit(ctx, SID, turn_number=1, child_user_id=CUID, target_message_id=TARGET_MID)
+        await run_audit(ctx, SID, turn_number=1, child_user_id=CUID, target_message_id=TARGET_MID, child_profile=_fake_child_profile_dict())
 
         ainvoke_spy.assert_called_once()
         _, kwargs = ainvoke_spy.call_args

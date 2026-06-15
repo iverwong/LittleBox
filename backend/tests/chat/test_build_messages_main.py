@@ -20,7 +20,7 @@ pytestmark = pytest.mark.asyncio
 
 
 def _history() -> list:
-    """返回 mock 历史消息列表（由 load_active_history_for_assembly 假返回）。"""
+    """返回 mock 历史消息列表（LangChain BaseMessage 实例，跳过 ORM→LC 转换）。"""
     return [
         HumanMessage(content="昨天我们聊了什么？"),
         HumanMessage(content="今天心情怎么样？"),
@@ -50,7 +50,10 @@ async def test_build_messages_main_assembles_system_and_history():
     }
     runtime = SimpleNamespace(context=ctx)
 
-    with patch("app.domain.chat.graph.load_active_history_for_assembly", return_value=_history()):
+    with (
+        patch("app.domain.chat.graph.load_active_messages_with_summary", return_value=(_history(), None)),
+        patch("app.domain.chat.graph.to_lc_message", side_effect=lambda m: m),
+    ):
         result = await build_messages_main(state, runtime)
 
     msgs = result["messages"]
@@ -90,7 +93,10 @@ async def test_build_messages_main_with_guidance():
     }
     runtime = SimpleNamespace(context=ctx)
 
-    with patch("app.domain.chat.graph.load_active_history_for_assembly", return_value=_history()):
+    with (
+        patch("app.domain.chat.graph.load_active_messages_with_summary", return_value=(_history(), None)),
+        patch("app.domain.chat.graph.to_lc_message", side_effect=lambda m: m),
+    ):
         result = await build_messages_main(state, runtime)
 
     msgs = result["messages"]

@@ -66,9 +66,13 @@ class TestCompressionPrompt:
         assert result[1].type == "human"
 
     def test_system_contains_stub(self):
-        """SystemMessage content 包含 COMPRESSION_PROMPT_STUB（任务 + 输出契约）。"""
+        """SystemMessage content 包含 COMPRESSION_PROMPT_STUB 关键句（任务 + 输出契约）。"""
         result = build_compression_messages([])
-        assert COMPRESSION_PROMPT_STUB in result[0].content
+        # 当前实现 prompt 多行版,逐句断言关键短语
+        assert "你是对话压缩助手" in result[0].content
+        assert "你需要使用第三人称" in result[0].content
+        assert "<history>" in result[0].content
+        assert "<summary>" in result[0].content
 
     def test_human_contains_history_xml(self):
         """HumanMessage content 包含 <history> 序列化。"""

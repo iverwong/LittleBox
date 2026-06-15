@@ -12,29 +12,46 @@ pytestmark = pytest.mark.audit
 class TestAuditSystemPrompt:
     """关键词断言（不使用 STUB_*，final 文本直接匹配）。"""
 
+    @staticmethod
+    def _prompt() -> str:
+        """构造 child_profile + max_iter 调 build_audit_system_prompt，返回 content 字符串。"""
+        from datetime import date
+        from app.domain.accounts.schemas import ChildProfileSnapshot
+
+        profile = ChildProfileSnapshot(
+            child_user_id="00000000-0000-0000-0000-000000000002",
+            nickname="test_kid",
+            gender="unknown",
+            birth_date=date(2013, 1, 1),
+            age=12,
+        )
+        return build_audit_system_prompt(profile, max_iter=5).content
+
     def test_contains_role_identity(self):
-        prompt = build_audit_system_prompt()
-        assert "审查 Agent" in prompt
-        assert "你**不直接与子账号对话**" in prompt
+        prompt = self._prompt()
+        assert "独立安全审查员" in prompt
+        assert "你不直接与用户对话" in prompt
 
     def test_contains_tool_usage_protocol(self):
-        prompt = build_audit_system_prompt()
+        prompt = self._prompt()
         assert "AppendNote" in prompt
         assert "ReplaceInNotes" in prompt
         assert "AuditOutputSchema" in prompt
-        assert "tool_choice" in prompt or "必须选一个 tool" in prompt
-        assert "唯一匹配" in prompt
+        assert "单独调用 AuditOutputSchema" in prompt
+        # max_iter 注入工作流程段
+        assert "你最多拥有 5 次迭代次数" in prompt
 
     def test_contains_tool_return_protocol(self):
-        prompt = build_audit_system_prompt()
-        assert "Tool 返回协议" in prompt
-        assert "current_notes" in prompt
-        assert "脑补" in prompt
+        prompt = self._prompt()
+        # 当前实现:Tool 返回协议是隐式 contract(通过 current_notes 字段返回),
+        # 关键词断言转向"# 审查笔记(session_notes)"与"# 引导注入(guidance_injection)"段
+        assert "# 审查笔记(session_notes)" in prompt
+        assert "AppendNote 和 ReplaceInNotes" in prompt
 
     def test_contains_signal_guidelines(self):
-        prompt = build_audit_system_prompt()
-        assert "危机信号" in prompt
-        assert "红线信号" in prompt
+        prompt = self._prompt()
+        assert "# 危机(crisis)" in prompt
+        assert "# 红线(redline)" in prompt
         assert "crisis_detected" in prompt
         assert "redline_triggered" in prompt
 

@@ -63,8 +63,24 @@ async def test_e2e_enqueue_to_ready(concurrent_db_sessions):
     real_manager = AuditSignalsManager(shared_redis, ttl=86400)
     mock_arq = AsyncMock()
 
+    # child_profile 投影（frozen dataclass，无 DB 写入依赖）
+    from datetime import date
+    from app.domain.accounts.schemas import ChildProfileSnapshot
+
+    profile_snapshot = ChildProfileSnapshot(
+        child_user_id=child.id,
+        nickname="e2e_kid",
+        gender="unknown",
+        birth_date=date(2013, 1, 1),
+        age=12,
+    )
+
     # 1) enqueue_audit → pending（§H.2：arq_pool + audit_redis 直接注入）
-    await enqueue_audit(mock_arq, shared_redis, sid, db, turn_number=1, child_user_id=child.id, target_message_id=sid)
+    await enqueue_audit(
+        mock_arq, shared_redis, sid, db, turn_number=1,
+        child_user_id=child.id, target_message_id=sid,
+        child_profile=profile_snapshot,
+    )
 
     payload = await real_manager.get(str(sid))
     assert payload is not None
@@ -89,7 +105,11 @@ async def test_e2e_enqueue_to_ready(concurrent_db_sessions):
         "resources": fake_rr,
         "signals_manager": AuditSignalsManager(shared_redis, ttl=86400),
     }
-    await run_audit(worker_ctx, str(sid), 1, str(child.id), str(sid))
+    # run_audit 签名扩 child_profile 必传(dict 入参,R2 重构后冻结 dataclass 入队改 asdict 由 worker 层处理)
+    await run_audit(
+        worker_ctx, str(sid), 1, str(child.id), str(sid),
+        child_profile=profile_snapshot.__dict__,
+    )
 
     payload = await real_manager.get(str(sid))
     assert payload is not None

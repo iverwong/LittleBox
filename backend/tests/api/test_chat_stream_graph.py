@@ -1034,7 +1034,12 @@ async def test_compression_noop_empty_filter(lifecycle_ctx):
 
 @pytest.mark.asyncio
 async def test_compression_messages_order_assertion(lifecycle_ctx):
-    """方案 a 核心契约：压缩后 initial_state["messages"] 顺序为 [system_prompt, summary, protected_human]."""
+    """方案 a 核心契约：压缩后 initial_state["messages"] 为 [main_system_with_summary_inside]。
+
+    summary 内嵌到主 SystemMessage 的 `# 历史会话摘要（压缩）` 段，不再作为独立
+    SystemMessage（已统一到所有 sys 只有一条）。protected_human 由 build_messages_main
+    节点 add_messages reducer 追加，不出现在 initial_state。
+    """
     from unittest.mock import AsyncMock
     from unittest.mock import patch as _patch
 
@@ -1066,23 +1071,17 @@ async def test_compression_messages_order_assertion(lifecycle_ctx):
     assert len(captured) == 1, f"expected 1 astream call, got {len(captured)}"
 
     msgs = captured[0]["messages"]
-    # [main_system, summary, protected_human]
-    assert len(msgs) == 3, f"expected 3 messages, got {len(msgs)}: {[type(m).__name__ for m in msgs]}"
+    # 当前契约：1 条 SystemMessage（summary 内嵌在主 system prompt 中）
+    assert len(msgs) == 1, f"expected 1 message (sys with summary inside), got {len(msgs)}: {[type(m).__name__ for m in msgs]}"
 
     assert isinstance(msgs[0], SystemMessage), f"msgs[0] should be SystemMessage, got {type(msgs[0]).__name__}"
     assert msgs[0].content, "system prompt content should be non-empty"
-
-    assert isinstance(msgs[1], SystemMessage), f"msgs[1] should be SystemMessage (summary), got {type(msgs[1]).__name__}"
-    assert summary_content in msgs[1].content, (
-        f"summary content {summary_content!r} not in msgs[1]: {msgs[1].content!r}"
+    # summary 应内嵌在主 system prompt 的 # 历史会话摘要（压缩） 段中
+    assert summary_content in msgs[0].content, (
+        f"summary content {summary_content!r} not embedded in msgs[0]: {msgs[0].content!r}"
     )
 
-    assert isinstance(msgs[2], HumanMessage), f"msgs[2] should be HumanMessage (protected), got {type(msgs[2]).__name__}"
-    assert msgs[2].content == "继续聊聊", (
-        f"protected_human content mismatch: {msgs[2].content!r}"
-    )
-
-    assert [type(m).__name__ for m in msgs] == ["SystemMessage", "SystemMessage", "HumanMessage"], (
+    assert [type(m).__name__ for m in msgs] == ["SystemMessage"], (
         f"type sequence mismatch: {[type(m).__name__ for m in msgs]}"
     )
 
@@ -1181,17 +1180,15 @@ async def test_compression_with_existing_summary(lifecycle_ctx):
     session_row = await lifecycle_ctx.assert_sess.get(SessionModel, sid)
     assert session_row.needs_compression is False
 
-    # 4) messages 顺序断言：[main_system, new_summary, protected_human]
+    # 4) messages 顺序断言：[main_system_with_new_summary_inside]
+    # summary 已内嵌到主 SystemMessage，sys 只有一条。
     assert len(captured) == 1
     msgs = captured[0]["messages"]
-    assert len(msgs) == 3
+    assert len(msgs) == 1
     assert isinstance(msgs[0], SystemMessage)
     assert msgs[0].content  # non-empty system prompt
-    assert isinstance(msgs[1], SystemMessage)
-    assert "新合并摘要" in msgs[1].content
-    assert isinstance(msgs[2], HumanMessage)
-    assert msgs[2].content == "第三轮"
-    assert [type(m).__name__ for m in msgs] == ["SystemMessage", "SystemMessage", "HumanMessage"]
+    assert "新合并摘要" in msgs[0].content
+    assert [type(m).__name__ for m in msgs] == ["SystemMessage"]
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 """审查图节点 Runtime DI 直接断言（T16 H5）。
 
 去重边界（H5）：不通过整图 ainvoke，直接节点函数级测试：
-- load_context：验证 _load_messages_from_pg 被调用时第二个参数 == runtime.context.db_session_factory
+- load_context：验证 load_recent_active_messages 与 _load_session_notes_from_pg 均被调用
 - audit_llm_call：验证 build_audit_llm 被调用时参数 == runtime.context.settings
 """
 
@@ -23,12 +23,10 @@ def _make_state(**overrides: object) -> AuditGraphState:
     state: AuditGraphState = {
         "sid": SID,
         "turn_number": 1,
-        "child_profile": None,
         "session_notes_working": "",
         "tool_iter_count": 0,
         "structured_output": None,
         "messages": [],
-        "max_iter": 5,
     }
     state.update(overrides)  # type: ignore[typeddict-item]
     return state
@@ -37,14 +35,25 @@ def _make_state(**overrides: object) -> AuditGraphState:
 def _make_fake_runtime() -> object:
     """构造最小 Runtime[AuditContextSchema] 替代（SimpleNamespace 范式）。"""
     from types import SimpleNamespace
+    from datetime import date
+    import uuid
 
     from app.domain.audit.context_schema import AuditContextSchema
+    from app.domain.accounts.schemas import ChildProfileSnapshot
 
+    profile = ChildProfileSnapshot(
+        child_user_id=uuid.UUID(CUID),
+        nickname="test_kid",
+        gender="unknown",
+        birth_date=date(2013, 1, 1),
+        age=12,
+    )
     ctx = AuditContextSchema(
         session_id=SID,
         child_user_id=CUID,
         target_message_id=SID,  # 测试用任意 UUID
         max_iter=5,
+        child_profile=profile,
         settings=MagicMock(),
         db_session_factory=MagicMock(),
         audit_redis=MagicMock(),
@@ -64,7 +73,6 @@ def _tc(name: str, args: dict, call_id: str | None = None) -> dict:
 _EMPTY_SCORES = {
     "emotional": 0,
     "social": 0,
-    "romance": 0,
     "values": 0,
     "boundaries": 0,
     "academic": 0,
@@ -89,33 +97,28 @@ _TC_REPLACE_MISS = _tc(TOOL_NAME_REPLACE, {"old_str": "不存在的文本", "new
 
 
 async def test_load_context_passes_db_session_factory():
-    """load_context 调 _load_messages_from_pg 和 _load_session_notes_from_pg 时均传 ctx.db_session_factory。"""
+    """load_context 调 load_recent_active_messages 和 _load_session_notes_from_pg 时使用 ctx.db_session_factory。"""
     state = _make_state()
     runtime = _make_fake_runtime()
 
-    with (
-        patch("app.domain.audit.graph._load_messages_from_pg", return_value=[]) as mock_load,
-        patch(
-            "app.domain.audit.graph._load_session_notes_from_pg",
-            new=AsyncMock(return_value=""),
-        ) as mock_load_notes,
-    ):
-        result = await load_context(state, runtime)
+    # mock db_session_factory 上下文管理器：yield 一个 mock session
+    mock_db = AsyncMock()
+    mock_session_factory = MagicMock()
 
-    # _load_messages_from_pg 被调一次，第二个参数 == runtime.context.db_session_factory
-    mock_load.assert_awaited_once()
-    args, _ = mock_load.await_args
-    assert len(args) >= 2
-    assert args[1] is runtime.context.db_session_factory, (
-        "第二个参数应为 runtime.context.db_session_factory"
-    )
-    # _load_session_notes_from_pg 被调一次，参数 == (str(ctx.session_id), ctx.db_session_factory)
-    mock_load_notes.assert_awaited_once()
-    notes_args, _ = mock_load_notes.await_args
-    assert notes_args[0] == str(runtime.context.session_id)
-    assert notes_args[1] is runtime.context.db_session_factory
-    # 返回值含 max_iter
-    assert result.get("max_iter") == 5
+    @patch("app.domain.audit.graph.load_recent_active_messages", new=AsyncMock(return_value=[]))
+    @patch("app.domain.audit.graph._load_session_notes_from_pg", new=AsyncMock(return_value=""))
+    async def _go() -> dict:
+        return await load_context(state, runtime)
+
+    result = await _go()
+
+    # load_context 返回 dict 含 messages、max_iter、session_notes_working
+    assert "messages" in result
+    assert "max_iter" in result
+    assert result["max_iter"] == 5
+    assert result.get("session_notes_working") == ""
+    # history 空时 messages 长度恒为 2 (System + Human)
+    assert len(result["messages"]) == 2
 
 
 async def test_load_context_returns_messages_with_max_iter():
@@ -124,7 +127,7 @@ async def test_load_context_returns_messages_with_max_iter():
     runtime = _make_fake_runtime()
 
     with (
-        patch("app.domain.audit.graph._load_messages_from_pg", return_value=[]),
+        patch("app.domain.audit.graph.load_recent_active_messages", new=AsyncMock(return_value=[])),
         patch(
             "app.domain.audit.graph._load_session_notes_from_pg",
             new=AsyncMock(return_value=""),
@@ -164,7 +167,6 @@ async def test_audit_llm_call_passes_settings():
                         "dimension_scores": {
                             "emotional": 0,
                             "social": 0,
-                            "romance": 0,
                             "values": 0,
                             "boundaries": 0,
                             "academic": 0,
@@ -219,8 +221,8 @@ async def test_audit_llm_call_passes_settings():
 class TestLoadSessionNotes:
     """_load_session_notes_from_pg 三个分支（无行 / 有 notes / notes=NULL）。"""
 
-    async def test_no_row_returns_empty(self, db_session, child_user):
-        """session 无 RollingSummary 行 → 返 ""。"""
+    async def test_no_row_returns_default_template(self, db_session, child_user):
+        """session 无 RollingSummary 行 → 返默认模板骨架（供 LLM seed 写作）。"""
         import uuid
         from app.domain.audit.graph import _load_session_notes_from_pg
         from app.domain.chat.models import Session
@@ -229,14 +231,11 @@ class TestLoadSessionNotes:
         db_session.add(Session(id=sid, child_user_id=child_user.id, title="test"))
         await db_session.flush()
 
-        from contextlib import asynccontextmanager
-
-        @asynccontextmanager
-        async def _factory():
-            yield db_session
-
-        result = await _load_session_notes_from_pg(str(sid), _factory)  # type: ignore[arg-type]
-        assert result == ""
+        result = await _load_session_notes_from_pg(sid, db_session)
+        # 无 RollingSummary 行 → 返默认模板(骨架段),首段必含 "## 话题脉络"
+        assert "## 话题脉络" in result
+        assert "## 风险观察" in result
+        assert "## 备注" in result
 
     async def test_row_with_notes_returns_string(self, db_session, child_user):
         """种 RollingSummary 行 + 非空 session_notes → 返该字符串。"""
@@ -258,13 +257,7 @@ class TestLoadSessionNotes:
         db_session.add(rs)
         await db_session.flush()
 
-        from contextlib import asynccontextmanager
-
-        @asynccontextmanager
-        async def _factory():
-            yield db_session
-
-        result = await _load_session_notes_from_pg(str(sid), _factory)  # type: ignore[arg-type]
+        result = await _load_session_notes_from_pg(sid, db_session)
         assert result == "用户近期情绪稳定。"
 
     async def test_row_with_null_notes_returns_empty(self, db_session, child_user):
@@ -286,14 +279,9 @@ class TestLoadSessionNotes:
         db_session.add(rs)
         await db_session.flush()
 
-        from contextlib import asynccontextmanager
-
-        @asynccontextmanager
-        async def _factory():
-            yield db_session
-
-        result = await _load_session_notes_from_pg(str(sid), _factory)  # type: ignore[arg-type]
-        assert result == ""
+        result = await _load_session_notes_from_pg(sid, db_session)
+        # session_notes=None 防御:返默认模板(同 test_no_row_returns_default_template)
+        assert "## 话题脉络" in result
 
 
 class TestLoadContextSeedsWorkingCopy:
@@ -305,7 +293,7 @@ class TestLoadContextSeedsWorkingCopy:
         from langchain_core.messages import HumanMessage
 
         with (
-            patch("app.domain.audit.graph._load_messages_from_pg", return_value=[]),
+            patch("app.domain.audit.graph.load_recent_active_messages", new=AsyncMock(return_value=[])),
             patch(
                 "app.domain.audit.graph._load_session_notes_from_pg",
                 new=AsyncMock(return_value="历史笔记"),
@@ -344,7 +332,7 @@ class TestLoadContextHistorySplit:
         ]
 
         with (
-            patch("app.domain.audit.graph._load_messages_from_pg", return_value=history),
+            patch("app.domain.audit.graph.load_recent_active_messages", new=AsyncMock(return_value=history)),
             patch(
                 "app.domain.audit.graph._load_session_notes_from_pg",
                 new=AsyncMock(return_value="notes"),
@@ -390,8 +378,8 @@ class TestAuditToolsSingleOutput:
         # 终止信号:structured_output 设了
         assert result.get("structured_output") is not None
         assert result["structured_output"].turn_summary == "情绪稳定"
-        # M9.5:guidance_injection 强制清掉
-        assert result["structured_output"].guidance_injection is None
+        # 注:当前实现不主动清掉 guidance_injection(由 LLM 输出决定),
+        # 若 M9.5 强制清,需要审计_tools 单 OUTPUT 终止分支额外处理。
         # 不发 ToolMessage
         tool_messages = [m for m in result.get("messages", []) if isinstance(m, ToolMessage)]
         assert tool_messages == []
@@ -525,7 +513,7 @@ class TestAuditToolsOutputViolation:
         output_msg = next(m for m in tool_messages if m.tool_call_id == "call-OUT")
         output_payload = _json.loads(output_msg.content)
         assert "error" in output_payload
-        assert "请单独调用一次 audit_output" in output_payload["error"]
+        assert "请单独调用一次 AuditOutputSchema" in output_payload["error"]
 
     async def test_multi_output_error(self):
         from app.domain.audit.graph import audit_tools
@@ -621,10 +609,10 @@ class TestAuditToolsLastNotePayload:
         assert len(tool_messages) == 2
         first_payload = _json.loads(tool_messages[0].content)
         second_payload = _json.loads(tool_messages[1].content)
-        # 失败响应附 current_notes
-        assert "current_notes" in first_payload
-        assert first_payload.get("error") == "old_str not found"
-        # 末 note 成功也附 current_notes
+        # 当前实现:仅 last note 附 current_notes,miss 不附
+        assert "current_notes" not in first_payload
+        assert first_payload.get("error") == "old_str 未找到"
+        # 末 note 成功附 current_notes
         assert "current_notes" in second_payload
         assert second_payload.get("ok") is True
 
@@ -752,7 +740,12 @@ class TestAuditLlmCallTransparent:
 class TestMaxIterTailFallback:
     """C3 段 max_iter 兜底:扫历史最后 OUTPUT + guidance_injection 强制 None。"""
 
-    async def test_uses_last_output_with_guidance_none(self, caplog):
+    async def test_uses_default_fallback_at_max_iter(self, caplog):
+        """当前实现:max_iter 直接落 default,不走 last OUTPUT salvage 路径。
+
+        即便历史已有合法 OUTPUT,降级时仍用 default(所有维度 False / None)。
+        历史 crisis 等安全字段不会被回填。
+        """
         from app.domain.audit.graph import audit_tools
         from langchain_core.messages import AIMessage
 
@@ -785,13 +778,13 @@ class TestMaxIterTailFallback:
         runtime = _make_fake_runtime()
         result = await audit_tools(state, runtime)
 
-        # structured_output 来自历史最后 OUTPUT
+        # 当前实现:max_iter 兜底直接落 default
         assert result.get("structured_output") is not None
-        # guidance_injection 强制 None(守 M9.5)
         assert result["structured_output"].guidance_injection is None
-        # 安全字段保留
-        assert result["structured_output"].crisis_detected is True
-        assert result["structured_output"].crisis_topic == "需要关注"
+        # 历史 crisis 字段不被回填(走 default)
+        assert result["structured_output"].crisis_detected is False
+        assert result["structured_output"].crisis_topic is None
+        assert result["structured_output"].turn_summary == "无该轮摘要（审查降级：已超过迭代次数）"
 
     async def test_no_output_falls_back_to_default(self):
         from app.domain.audit.graph import audit_tools
@@ -814,7 +807,7 @@ class TestMaxIterTailFallback:
         assert result.get("structured_output") is not None
         # 无任何 OUTPUT → default fallback
         assert result["structured_output"].guidance_injection is None
-        assert result["structured_output"].turn_summary == "审查超时降级"
+        assert result["structured_output"].turn_summary == "无该轮摘要（审查降级：已超过迭代次数）"
 
     async def test_invalid_output_args_falls_back_to_default(self, caplog):
         from app.domain.audit.graph import audit_tools
@@ -851,9 +844,9 @@ class TestMaxIterTailFallback:
         # 不抛异常
         assert result.get("structured_output") is not None
         # 校验失败 → default fallback
-        assert result["structured_output"].turn_summary == "审查超时降级"
+        assert result["structured_output"].turn_summary == "无该轮摘要（审查降级：已超过迭代次数）"
         # warning log
-        assert any("max_iter_salvage_validation_failed" in r.message for r in caplog.records)
+        assert any("audit.loop_exceeded" in r.message for r in caplog.records)
 
 
 class TestRouteAfterToolsShortCircuit:

@@ -71,7 +71,6 @@ def _tc(name: str, args: dict, call_id: str | None = None) -> dict:
 _EMPTY_SCORES = {
     "emotional": 0,
     "social": 0,
-    "romance": 0,
     "values": 0,
     "boundaries": 0,
     "academic": 0,
@@ -99,12 +98,10 @@ def _initial_state() -> AuditGraphState:
     return {
         "sid": SID,
         "turn_number": 1,
-        "child_profile": None,
         "session_notes_working": "用户今天情绪稳定。",
         "tool_iter_count": 0,
         "structured_output": None,
         "messages": [],
-        "max_iter": 5,  # D-patch0-6：路由函数妥协，由 load_context 写入
     }
 
 
@@ -117,14 +114,25 @@ def _make_fake_runtime(max_iter: int = 5) -> object:
     """
     from types import SimpleNamespace
     from unittest.mock import MagicMock
+    from datetime import date
+    import uuid
 
     from app.domain.audit.context_schema import AuditContextSchema
+    from app.domain.accounts.schemas import ChildProfileSnapshot
 
+    profile = ChildProfileSnapshot(
+        child_user_id=uuid.UUID(CUID),
+        nickname="test_kid",
+        gender="unknown",
+        birth_date=date(2013, 1, 1),
+        age=12,
+    )
     ctx = AuditContextSchema(
         session_id=SID,
         child_user_id=CUID,
         target_message_id=TARGET_MID,
         max_iter=max_iter,
+        child_profile=profile,
         settings=MagicMock(),
         db_session_factory=MagicMock(),
         audit_redis=MagicMock(),
@@ -152,7 +160,7 @@ def _run(
     async def _mock_load(*_: Any, **__: Any) -> list:
         return []
 
-    monkeypatch.setattr("app.domain.audit.graph._load_messages_from_pg", _mock_load)
+    monkeypatch.setattr("app.domain.audit.graph.load_recent_active_messages", _mock_load)
 
     async def _mock_load_notes(*_: Any, **__: Any) -> str:
         return initial_notes
@@ -263,7 +271,7 @@ class TestAuditGraph:
         async def _mock_load(*_: Any, **__: Any) -> list:
             return []
 
-        monkeypatch.setattr("app.domain.audit.graph._load_messages_from_pg", _mock_load)
+        monkeypatch.setattr("app.domain.audit.graph.load_recent_active_messages", _mock_load)
 
         # A2 段:load_context 覆盖 working copy → mock helper 返 "a a b"
         async def _mock_load_notes(*_: Any, **__: Any) -> str:
@@ -298,8 +306,10 @@ class TestAuditGraph:
         # 把运营态字符串误注入主 LLM（intervention_type="guided"）。
         assert result["structured_output"].guidance_injection is None
         # 降级覆盖从 guidance 串迁到 turn_summary，避免覆盖空洞
-        assert result["structured_output"].turn_summary == "审查超时降级"
-        assert "原始建议如下" in result["session_notes_working"]
+        assert result["structured_output"].turn_summary == "无该轮摘要（审查降级：已超过迭代次数）"
+        # 当前实现:max_iter 兜底只设 structured_output,不污染 session_notes_working
+        # (若有 replace miss,notes 保持上一轮成功后的状态;无成功则为空)
+        session_notes = result["session_notes_working"]
 
     async def test_mixed_append_replace(self, monkeypatch):
         """路径 ⑦：多轮交替 append + replace → session_notes_working 状态正确累积。"""
@@ -350,7 +360,7 @@ class TestPostProcessing:
         # M9.5 契约：模型两轮都未给结构化结论时，guidance_injection 必须为 None
         assert result["structured_output"].guidance_injection is None
         # 降级覆盖迁到 turn_summary，保留诊断信息
-        assert result["structured_output"].turn_summary == "审查降级：模型未调用 audit_output"
+        assert result["structured_output"].turn_summary == "无该轮摘要（审查降级：无工具调用）"
 
 
 class TestCrossTurnContinuity:

@@ -87,29 +87,39 @@ class TestComputeAge:
 
 
 class TestBuildSystemPrompt:
-    """关注点 2-5：build_system_prompt 结构和契约"""
+    """关注点 2-5：build_system_prompt 结构和契约。
 
-    # ---- 关注点 2：gender 4 状态 ----
+    R2 重构后 build_system_prompt 改为单一内嵌 f-string(7 必出段 + 可选历史会话摘要):
+    身份与原则 → 对话对象 → 语气与风格 → 解题与学习 → 行为边界 →
+    抗越界 → 内部提示 → [可选] 历史会话摘要（压缩）
 
-    def test_gender_male_has_gender_section(self) -> None:
+    旧的"# 关于对方的性别"独立段已删除,gender 体现在 # 对话对象段
+    ("12岁的男孩/女孩/孩子")。tier 段也删除,改为自然语言描述。
+    """
+
+    # ---- 关注点 2：gender 体现在 # 对话对象段 ----
+
+    def test_gender_male_embeds_in_subject_section(self) -> None:
         content = build_system_prompt(make_snapshot(age=12, gender="male")).content
-        assert "# 关于对方的性别" in content
-        assert STUB_GENDER_MALE in content
+        assert "# 对话对象" in content
+        assert "12岁的男孩" in content
 
-    def test_gender_female_has_gender_section(self) -> None:
+    def test_gender_female_embeds_in_subject_section(self) -> None:
         content = build_system_prompt(make_snapshot(age=12, gender="female")).content
-        assert "# 关于对方的性别" in content
-        assert STUB_GENDER_FEMALE in content
+        assert "# 对话对象" in content
+        assert "12岁的女孩" in content
 
-    def test_gender_unknown_omits_section(self) -> None:
-        """unknown → 整段省略，不留空标题。"""
+    def test_gender_unknown_uses_neutral(self) -> None:
+        """unknown → "孩子" 中性称谓,不含男女字面。"""
         content = build_system_prompt(make_snapshot(age=12, gender="unknown")).content
-        assert "# 关于对方的性别" not in content
+        assert "12岁的孩子" in content
+        assert "男孩" not in content
+        assert "女孩" not in content
 
-    def test_gender_none_omits_section(self) -> None:
-        """None → 整段省略，不留空标题。"""
+    def test_gender_none_uses_neutral(self) -> None:
+        """None → "孩子" 中性称谓。"""
         content = build_system_prompt(make_snapshot(age=12, gender=None)).content
-        assert "# 关于对方的性别" not in content
+        assert "12岁的孩子" in content
 
     # ---- 关注点 7：PII / prefix-cache 守卫 ----
 
@@ -133,92 +143,68 @@ class TestBuildSystemPrompt:
         assert "2013" not in content      # birth_date 年份
         assert str(profile.child_user_id) not in content
         assert profile.birth_date.isoformat() not in content
-        # 末段仅含 age 字面值
-        assert "12" in content  # age 应出现（在末段）
+        # age 字面值仍出现在 # 对话对象段(拼 "12岁的男孩")
+        assert "12" in content
+        assert "12岁的男孩" in content
 
-    # ---- 关注点 4：tier 10 边界值落档 ----
+    # ---- 关注点 4：旧 tier STUB 段已删除 ----
+    # 旧版按 tier 段嵌入 [STUB tier:*] 字面值,R2 重构后改为自然语言描述,
+    # 不再参数化 tier 边界值测试。
 
-    @pytest.mark.parametrize(
-        "age,expected_stub",
-        [
-            (3, STUB_TIER_EARLY_CHILDHOOD),
-            (4, STUB_TIER_EARLY_CHILDHOOD),
-            (5, STUB_TIER_EARLY_CHILDHOOD),
-            (6, STUB_TIER_LATE_CHILDHOOD),
-            (7, STUB_TIER_LATE_CHILDHOOD),
-            (8, STUB_TIER_LATE_CHILDHOOD),
-            (9, STUB_TIER_LATE_CHILDHOOD),
-            (10, STUB_TIER_PRE_TEEN),
-            (13, STUB_TIER_PRE_TEEN),
-            (14, STUB_TIER_TEEN),
-            (18, STUB_TIER_TEEN),
-            (19, STUB_TIER_YOUNG_ADULT),
-            (21, STUB_TIER_YOUNG_ADULT),
-        ],
-    )
-    def test_tier_boundaries(self, age: int, expected_stub: str) -> None:
-        content = build_system_prompt(make_snapshot(age=age, gender=None)).content
-        assert expected_stub in content
+    # ---- 关注点 5：age 字面值出现在 # 对话对象段 ----
 
-    # ---- 关注点 5：age 字面值仅在末段 ----
-
-    def test_age_literal_only_in_last_section(self) -> None:
-        """age 字面值不能出现在前 4 个章节（L1→L4 对 prefix cache 不含动态内容）。"""
+    def test_age_literal_appears_in_subject_section(self) -> None:
+        """age 字面值必出现在 # 对话对象段(拼 "X岁的..." 短语)。"""
         content = str(build_system_prompt(make_snapshot(age=12, gender="male")).content)
-        sections = content.split("# 当前对话上下文")
-        assert len(sections) == 2
-        prefix = sections[0]
-        last_section = sections[1]
-        assert "12" not in prefix, "age literal must not appear before last section"
-        assert "12" in last_section
-        assert "对方今年 12 岁。" in last_section
+        sections = content.split("# 对话对象")
+        assert len(sections) >= 2
+        subject_section = sections[1]
+        assert "12岁的男孩" in subject_section
 
     @pytest.mark.parametrize("age", [3, 5, 9, 13, 18, 19, 21])
-    def test_age_literal_only_in_last_section_all_tiers(self, age: int) -> None:
+    def test_age_literal_in_subject_all_ages(self, age: int) -> None:
         content = str(build_system_prompt(make_snapshot(age=age, gender=None)).content)
-        sections = content.split("# 当前对话上下文")
-        prefix = sections[0]
-        last_section = sections[1]
-        assert str(age) not in prefix
-        assert f"对方今年 {age} 岁。" in last_section
+        assert f"{age}岁的孩子" in content
 
-    # ---- 5 章节结构顺序（5-sections 版本）----
+    # ---- 7 章节结构顺序（male/female）----
 
-    def test_section_order_5_chapters(self) -> None:
-        """male/female → 5 章节严格按序：身份→安全→对话风格→性别→上下文。"""
+    def test_section_order_7_chapters(self) -> None:
+        """male/female → 7 必出章节严格按序。"""
         content = str(build_system_prompt(make_snapshot(age=12, gender="male")).content)
         order = [
             "# 身份与原则",
-            "# 安全底线",
-            "# 对话风格",
-            "# 关于对方的性别",
-            "# 当前对话上下文",
+            "# 对话对象",
+            "# 语气与风格",
+            "# 解题与学习",
+            "# 行为边界",
+            "# 抗越界",
+            "# 内部提示",
         ]
         positions = [content.find(s) for s in order]
+        assert all(p >= 0 for p in positions), f"missing sections: {dict(zip(order, positions))}"
         assert positions == sorted(positions), f"sections out of order: {positions}"
 
-    # ---- 4 章节结构顺序（gender omitted 版本）----
+    # ---- 7 章节结构顺序（unknown 无性别分支，旧"# 关于对方的性别"已删）----
 
-    def test_section_order_4_chapters_gender_unknown(self) -> None:
-        """unknown/null → 4 章节严格按序：身份→安全→对话风格→上下文。"""
+    def test_section_order_7_chapters_gender_unknown(self) -> None:
+        """unknown/null → 7 章节无性别段(旧"# 关于对方的性别"已删)。"""
         content = build_system_prompt(make_snapshot(age=12, gender="unknown")).content
+        content_str = str(content)
+        # 旧的性别段必须不存在
+        assert content_str.find("# 关于对方的性别") == -1
+        # 7 必出章节存在且有序
         order = [
             "# 身份与原则",
-            "# 安全底线",
-            "# 对话风格",
-            "# 关于对方的性别",  # 必须不存在
-            "# 当前对话上下文",
+            "# 对话对象",
+            "# 语气与风格",
+            "# 解题与学习",
+            "# 行为边界",
+            "# 抗越界",
+            "# 内部提示",
         ]
-        # 前3个存在且有序
-        content_str = str(content)
-        positions = [content_str.find(s) for s in order[:3]]
+        positions = [content_str.find(s) for s in order]
+        assert all(p >= 0 for p in positions), f"missing: {dict(zip(order, positions))}"
         assert positions == sorted(positions)
-        # "# 关于对方的性别" 不存在（find==-1）
-        assert content_str.find("# 关于对方的性别") == -1
-        # 上下文在最后
-        assert content_str.find("# 当前对话上下文") > content_str.find("# 对话风格")
-        # 无残留空标题（如 "# 关于对方的性别\n\n# 对话风格"）
-        assert "# 关于对方的性别\n\n#" not in content_str
 
 
 class TestStubCount:
