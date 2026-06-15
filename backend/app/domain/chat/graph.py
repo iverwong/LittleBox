@@ -24,7 +24,7 @@ from langchain_core.messages import (
 )
 from langchain_core.runnables import Runnable
 from langgraph.config import get_stream_writer
-from langgraph.graph import END, StateGraph
+from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from sqlalchemy import select
 
@@ -460,8 +460,8 @@ def build_main_graph() -> CompiledStateGraph:
     builder.add_edge("build_messages_main", "call_main_llm")
     builder.add_edge("build_messages_crisis", "call_crisis_llm")
     builder.add_edge("build_messages_redline", "call_redline_llm")
-    builder.add_edge("call_main_llm", END)
-    builder.add_edge("call_crisis_llm", END)
-    builder.add_edge("call_redline_llm", END)
+    builder.add_edge("call_main_llm", "__end__")
+    builder.add_edge("call_crisis_llm", "__end__")
+    builder.add_edge("call_redline_llm", "__end__")
 
     return builder.compile()  # type: ignore[reportReturnType]

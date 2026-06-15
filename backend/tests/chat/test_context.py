@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from app.domain.chat.context import (
-    _to_lc_message,
+    to_lc_message,
     build_context,
     build_crisis_context,
     build_redline_context,
@@ -263,7 +263,7 @@ def test_to_lc_message_human() -> None:
         role = MessageRole.human
         content = "hello"
 
-    msg = _to_lc_message(FakeRow())
+    msg = to_lc_message(FakeRow())
     assert msg.__class__.__name__ == "HumanMessage"
     assert msg.content == "hello"
 
@@ -275,7 +275,7 @@ def test_to_lc_message_ai() -> None:
         role = MessageRole.ai
         content = "assistant reply"
 
-    msg = _to_lc_message(FakeRow())
+    msg = to_lc_message(FakeRow())
     assert msg.__class__.__name__ == "AIMessage"
     assert msg.content == "assistant reply"
 

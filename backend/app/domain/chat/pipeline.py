@@ -308,6 +308,7 @@ async def run_llm_pipeline(
                             turn_number,
                             child_user_id,
                             aid,
+                            ctx.child_profile,
                         )
                         _put(
                             frame_sse_event(
@@ -342,6 +343,7 @@ async def run_llm_pipeline(
                         turn_number,
                         child_user_id,
                         aid,
+                        ctx.child_profile,
                     )
                     _put(
                         frame_sse_event(

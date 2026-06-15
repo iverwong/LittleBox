@@ -10,11 +10,11 @@ M6-patch3 scheme R：commit② 写 LLM usage 真值快照，
 import logging
 from typing import Sequence
 
-from backend.app.domain.chat.prompts import build_compression_prompt
 from langchain_core.messages import BaseMessage, HumanMessage
 
 from app.core.history_xml import extract_wrapped_output, serialize_history_to_xml
 from app.domain.chat.models import Message
+from app.domain.chat.prompts import build_compression_prompt
 
 logger = logging.getLogger(__name__)
 

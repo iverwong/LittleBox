@@ -155,7 +155,7 @@ async def load_recent_active_pairs(
     sid: UUID,
     current_turn: int,
     db: AsyncSession,
-    n: int,
+    limit: int,
 ) -> list[BaseMessage]:
     """取当前轮之前最近 n 对 active human/ai 消息，按 turn 升序返回。
 
@@ -169,10 +169,10 @@ async def load_recent_active_pairs(
                 .where(
                     Message.session_id == sid,
                     Message.turn_number < current_turn,
-                    Message.status == "active",  # CHECK 按理说这里应该只限制 role in (human, ai)
+                    Message.role.in_([MessageRole.human, MessageRole.ai]),
                 )
-                .order_by(Message.turn_number.desc())
-                .limit(n * 2)
+                .order_by(Message.created_at.asc(), Message.id.asc())
+                .limit(limit)
             )
         )
         .scalars()

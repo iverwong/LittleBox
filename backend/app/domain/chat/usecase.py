@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -25,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.enums import InterventionType, MessageRole, MessageStatus
+from app.domain.accounts.schemas import ChildProfileSnapshot
 from app.domain.audit.signals import AuditSignalsManager
 from app.domain.chat.models import Message, Session
 
@@ -112,11 +114,11 @@ async def enqueue_audit(
     turn_number: int,
     child_user_id: uuid.UUID,
     target_message_id: uuid.UUID,
+    child_profile: ChildProfileSnapshot,
 ) -> None:
     """SET Redis pending + ARQ enqueue 触发异步审查。
 
-    §H.2 单例迁移：arq_pool / audit_redis 由 RuntimeResources 注入，
-    生命周期由 teardown_runtime 独占关闭，helper 内只用不关。
+    入队使用 asdict 确保签名变更不会影响原有job
     """
     manager = AuditSignalsManager(audit_redis, ttl=settings.audit_redis_ttl_seconds)
     await manager.set_pending(str(sid), turn_number, started_at=datetime.now(UTC).isoformat())
@@ -127,6 +129,7 @@ async def enqueue_audit(
         turn_number,
         str(child_user_id),
         str(target_message_id),
+        asdict(child_profile),
         _job_id=f"audit:{sid}:{turn_number}",
     )
 
