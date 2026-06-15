@@ -22,6 +22,9 @@ Thumbs.db
 # === Claude Code ===
 .claude/
 
+# === Kilo Code ===
+.kilo/
+
 # === PostgreSQL data (mounted volume at repo root) ===
 pgdata/
 
