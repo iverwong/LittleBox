@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.domain.accounts.schemas import ChildProfileSnapshot
+
 if TYPE_CHECKING:
     from app.core.config import Settings
 
@@ -28,6 +30,7 @@ class AuditContextSchema:
     target_message_id: uuid.UUID  # 被审查的 ai_msg id（本轮审查锚点，必非空）
     # 业务字段
     max_iter: int  # tool agentic loop 硬上限
+    child_profile: ChildProfileSnapshot
     # 三资源
     settings: Settings  # 应用配置
     db_session_factory: async_sessionmaker[AsyncSession]  # DB 会话工厂

@@ -29,6 +29,7 @@ from urllib.parse import urlparse
 from arq.connections import RedisSettings
 
 from app.core.config import settings
+from app.domain.accounts.schemas import ChildProfileSnapshot
 from app.domain.audit.graph import AuditGraphState
 from app.domain.audit.signals import AuditSignalsManager
 
@@ -115,6 +116,7 @@ async def run_audit(
     turn_number: int,
     child_user_id: str,
     target_message_id: str,
+    child_profile: dict,  # 入队 asdict，出队重建实例
 ) -> None:
     """执行一次审查（ARQ job function）。
 
@@ -135,6 +137,8 @@ async def run_audit(
 
     rr: RuntimeResources = ctx["resources"]
     manager: AuditSignalsManager = ctx["signals_manager"]
+    # 重建，确保新增字段通过默认值传入，而非报错
+    snapshot = ChildProfileSnapshot(**child_profile)
 
     try:
         audit_ctx = AuditContextSchema(
@@ -142,6 +146,7 @@ async def run_audit(
             child_user_id=uuid.UUID(child_user_id),
             target_message_id=uuid.UUID(target_message_id),
             max_iter=rr.settings.max_audit_tool_iterations,
+            child_profile=snapshot,
             settings=rr.settings,
             db_session_factory=rr.db_session_factory,
             audit_redis=rr.audit_redis,
@@ -149,12 +154,10 @@ async def run_audit(
         state: AuditGraphState = {
             "sid": sid,
             "turn_number": turn_number,
-            "child_profile": None,
             "session_notes_working": "",
             "tool_iter_count": 0,
             "structured_output": None,
             "messages": [],
-            "max_iter": rr.settings.max_audit_tool_iterations,
         }
         result: dict[str, Any] = await rr.audit_graph.ainvoke(
             state,

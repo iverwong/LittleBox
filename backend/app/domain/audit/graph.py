@@ -23,27 +23,30 @@ from __future__ import annotations
 import json
 import logging
 from typing import TYPE_CHECKING, Annotated, Any, Literal
+from uuid import UUID
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
-from langgraph.graph import END, StateGraph
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langgraph.graph import StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import ValidationError
 from typing_extensions import TypedDict
 
 from app.core.history_xml import serialize_history_to_xml
-from app.domain.accounts.schemas import ChildProfileSnapshot
 from app.domain.audit.llm import build_audit_llm
 from app.domain.audit.prompts import build_audit_system_prompt
 from app.domain.audit.schemas import (
+    AppendNote,
     AuditDimensionScores,
     AuditOutputSchema,
+    ReplaceInNotes,
 )
 from app.domain.audit.usecase import write_audit_results
+from app.domain.chat.context import load_recent_active_pairs
 
 if TYPE_CHECKING:
     from langgraph.runtime import Runtime
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from sqlalchemy.ext.asyncio import AsyncSession
 
     from app.domain.audit.context_schema import AuditContextSchema
 
@@ -79,20 +82,14 @@ class AuditGraphState(TypedDict):
     `messages` 承载 LLM ↔ tool 循环累积，通过 ``add_messages`` reducer 自动追加。
     `load_context` 节点构造首帧 messages（含 system prompt + 历史对话 + 当前 session_notes）。
     tool loop 中 audit_tools 返回的 ToolMessage 通过此 reducer 追加到 messages 末尾。
-
-    `max_iter` 因 LangGraph 路由函数 route_after_tools(state) 无法接收 runtime 参数，
-    此为框架限制下的妥协，由 load_context 节点从 runtime.context.max_iter 一次性写入，
-    运行期不可变。（D-patch0-7）
     """
 
     sid: str
     turn_number: int
-    child_profile: ChildProfileSnapshot | None  # 暂传 None，sensitivity 接入时改真值
     session_notes_working: str
     tool_iter_count: int
     structured_output: AuditOutputSchema | None
     messages: Annotated[list[BaseMessage], add_messages]
-    max_iter: int  # 路由函数妥协（D-patch0-7），load_context 从 runtime.context 写入
 
 
 # ---------------------------------------------------------------------------
@@ -109,8 +106,8 @@ def _last_aimessage(messages: list[BaseMessage]) -> AIMessage | None:
 
 
 def _build_audit_output_default(
+    turn_summary: str,
     guidance_injection: str | None = None,
-    turn_summary: str = "审查超时降级",
 ) -> AuditOutputSchema:
     """构造降级用的默认 AuditOutputSchema（循环超限 / post-processing 兜底）。
 
@@ -123,7 +120,6 @@ def _build_audit_output_default(
         dimension_scores=AuditDimensionScores(
             emotional=0,
             social=0,
-            romance=0,
             values=0,
             boundaries=0,
             academic=0,
@@ -138,52 +134,9 @@ def _build_audit_output_default(
     )
 
 
-# ---------------------------------------------------------------------------
-# Helper: _load_messages_from_pg（T12：ORM 改造，零行为漂移）
-# ---------------------------------------------------------------------------
-
-# T12 保留 M8 契约：
-# - 不过滤 status（原 SQL 无 WHERE status = ...）
-# - ORDER BY created_at DESC LIMIT limit + Python reversed() 输出正序
-# - select(Message.role, Message.content) 返回 tuple Row
-#   避免破坏调用方 for r, c in reversed(rows) 解构
-
-
-async def _load_messages_from_pg(
-    sid: str,
-    db_session_factory: async_sessionmaker[AsyncSession],
-    limit: int = 10,
-) -> list[BaseMessage]:
-    """从 PG 读近 N 轮 messages 并转为 LangChain BaseMessage 列表。
-
-    T12（D-patch0-7）：ORM `select(Message.role, Message.content)` 替代原始 text-SQL。
-    行为与 M8 完全一致：不过滤 status、DESC LIMIT + reversed()。
-
-    TODO(M9): 接入 rolling_summaries 闭环后，history 可包含压缩摘要。
-    """
-    from sqlalchemy import select
-
-    from app.core.enums import MessageRole
-    from app.domain.chat.models import Message
-
-    async with db_session_factory() as db:
-        stmt = (
-            select(Message.role, Message.content)
-            .where(Message.session_id == sid)
-            .order_by(Message.created_at.desc())
-            .limit(limit)
-        )
-        rows = (await db.execute(stmt)).all()
-
-    return [
-        HumanMessage(content=c) if r == MessageRole.human else AIMessage(content=c)
-        for r, c in reversed(rows)
-    ]
-
-
 async def _load_session_notes_from_pg(
-    sid: str,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    sid: UUID,
+    db: AsyncSession,
 ) -> str:
     """从 PG 读该 session 的历史 `session_notes`（per-session 唯一行）。
 
@@ -194,13 +147,31 @@ async def _load_session_notes_from_pg(
 
     from app.domain.audit.models import RollingSummary
 
-    async with db_session_factory() as db:
-        rs = await db.scalar(
-            select(RollingSummary).where(RollingSummary.session_id == sid).limit(1)
-        )
-    if rs is None or rs.session_notes is None:
-        return ""
-    return rs.session_notes
+    rs = await db.scalar(
+        select(RollingSummary.session_notes).where(RollingSummary.session_id == sid).limit(1)
+    )
+    if rs is None:
+        return """## 话题脉络
+（按时间记录聊了哪些话题/事件）
+
+## 风险观察
+（记录是哪个维度、什么苗头、趋势如何，可带入风控判断）
+
+## 情绪走向
+（整段叙事描述情绪如何变化）
+
+## 发展性话题观察
+（正常发展话题：中性记录孩子在探索什么，不做风险判断）
+
+## 家长关注点回应
+（对照家长填写的关注点，本会话有无相关进展）
+
+## 待续关注
+（需要下轮或跨会话继续盯的点）
+
+## 备注
+"""
+    return rs
 
 
 # ---------------------------------------------------------------------------
@@ -225,16 +196,17 @@ async def load_context(
     T12：_load_messages_from_pg 内部 ORM 改造，对外接口不变。
     """
     ctx = runtime.context
-    sid = str(ctx.session_id)
-    history = await _load_messages_from_pg(sid, ctx.db_session_factory, limit=8)
+    sid = ctx.session_id
+    async with ctx.db_session_factory() as db:
+        history = await load_recent_active_pairs(sid, state["turn_number"] + 1, db, 8)
+        session_notes = await _load_session_notes_from_pg(sid, db)
     prior_turns = history[:-2]  # 前 3 轮 = 6 条消息
     current_turn = history[-2:]  # 当前 1 轮 = 2 条消息
-    session_notes = await _load_session_notes_from_pg(sid, ctx.db_session_factory)
     prior_xml = serialize_history_to_xml(prior_turns, include_system=False)
     current_xml = serialize_history_to_xml(current_turn, include_system=False)
     return {
         "messages": [
-            SystemMessage(content=build_audit_system_prompt()),
+            build_audit_system_prompt(ctx.child_profile, ctx.max_iter),
             HumanMessage(
                 content=(
                     f"以下是该会话最近 3 轮历史对话：\n{prior_xml}\n\n"
@@ -257,15 +229,21 @@ async def audit_llm_call(
     state: AuditGraphState,
     runtime: Runtime[AuditContextSchema],
 ) -> dict:
-    """调审查 LLM + 纯文本追问 + 恰好单 OUTPUT 时解析为 structured_output。
+    """调审查 LLM + 纯文本追问兜底 + AIMessage 透传。
 
-    解析边界：响应恰好 1 个 tool_call 且 name == TOOL_NAME_OUTPUT。
-    其余情况（含 0 个、≥2 个、混调）原样返回，structured_output 不设，
-    交由 audit_tools 处理（含 max_iter 尾部兜底）。
+    责任：
+    1. 调 LLM,等回复
+    2. 若回复无 tool_calls,追问一轮(post-processing),仍无则 logger.warning
+       记诊断(双失败降级 structured_output 由 audit_tools 防御性兜底设 default)
+    3. 有 tool_calls 的回复一律透传,structured_output 不设 → audit_tools
+       由 audit_tools 做规则校验(混/多 OUTPUT)、参数校验(pydantic)、单 OUTPUT 终止
 
-    T11：build_audit_llm 从 runtime.context.settings 取参数，替代 closure 注入。
-    D11 v3（M8-hotfix）：tool_choice="auto" + post-processing 兜底。
-    C2 收紧：删除 in-node 多 OUTPUT retry / 缓存 [-1] 改写，协议违规收敛到
+    节点契约:本节点出参恒为 {"messages": [response]},不设 structured_output。
+    审计图 audit_llm_call → audit_tools 直连,无 route_after_llm 中转。
+
+    T11:build_audit_llm 从 runtime.context.settings 取参数,替代 closure 注入。
+    D11 v3(M8-hotfix):tool_choice="auto" + post-processing 兜底。
+    C2 收紧:删除 in-node 多 OUTPUT retry / 缓存 [-1] 改写,协议违规收敛到
     audit_tools 发 error ToolMessage 触发 loop 修正。
     """
     ctx = runtime.context
@@ -278,10 +256,10 @@ async def audit_llm_call(
         messages.append(response)
         messages.append(
             HumanMessage(
-                content="请调用 audit_output 工具给出最终结论"
+                content="请调用 AuditOutputSchema 工具给出最终结论"
                 "（verdict 为 pass / warn / fail），"
-                "不要直接回复文本。你仍然可以在调用 audit_output"
-                " 之前先调用 append_note 或 replace_in_notes"
+                "不要直接回复文本。你仍然可以在调用 AuditOutputSchema"
+                " 之前先调用 AppendNote 或 ReplaceInNotes"
                 " 记录笔记。",
             ),
         )
@@ -291,46 +269,12 @@ async def audit_llm_call(
             # guidance_injection 不再传运营态字符串：降级时主 LLM 不应收到
             # 任何 guidance 注入（route_by_risk.ready 分支 guidance 为 None
             # → 落到 main 分支而非 guidance 分支）。
+            # structured_output 由 audit_tools 防御性兜底(无 tool_call 路径)设 default。
             logger.warning("audit_pipeline: 模型连续两次未调用 audit_output，默认 verdict=warn")
-            return {
-                "messages": [response],
-                "structured_output": _build_audit_output_default(
-                    turn_summary="审查降级：模型未调用 audit_output",
-                ),
-            }
 
-    # ---- OUTPUT 解析：仅当恰好单 OUTPUT 时 ----
-    result: dict[str, Any] = {"messages": [response]}
-    if (
-        response.tool_calls
-        and len(response.tool_calls) == 1
-        and response.tool_calls[0]["name"] == TOOL_NAME_OUTPUT
-    ):
-        result["structured_output"] = AuditOutputSchema.model_validate(
-            response.tool_calls[0]["args"]
-        )
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Route: route_after_llm
-# ---------------------------------------------------------------------------
-
-
-def route_after_llm(state: AuditGraphState) -> Literal["audit_tools", "write_results"]:
-    """structured_output 非空 → write_results；否则 → audit_tools。
-
-    write_results 分支承载三种情况：
-    - 单 OUTPUT 解析：audit_llm_call 设的 structured_output
-    - 双失败降级：audit_llm_call 设的 _build_audit_output_default
-    - max_iter 兜底：audit_tools 设的（扫历史最后 OUTPUT 或 default）
-
-    其余情况（带 tool_calls：note-only / 混调 / 多 OUTPUT）→ audit_tools
-    让 audit_tools 节点处理（应用笔记 + 发 error ToolMessage 触发 loop 修正）。
-    """
-    if state.get("structured_output") is not None:
-        return "write_results"
-    return "audit_tools"
+    # 规则校验（混/多 OUTPUT）、参数校验（pydantic）、单 OUTPUT 终止由 audit_tools 负责
+    # 本节点只把 AIMessage 透传，structured_output 不设
+    return {"messages": [response]}
 
 
 # ---------------------------------------------------------------------------
@@ -342,75 +286,172 @@ async def audit_tools(
     state: AuditGraphState,
     runtime: Runtime[AuditContextSchema],
 ) -> dict:
-    """自写 ToolNode：处理 AppendNote / ReplaceInNotes + 回应 OUTPUT 违规。
+    """自写 ToolNode：规则校验 + 参数校验 + 笔记应用 + 单 OUTPUT 终止。
 
-    职责（配对永远成立：每个 tool_call 都对应一个 ToolMessage）：
-    - APPEND / REPLACE：照常应用，统一在循环底部按"失败 OR 最后一个 note"规则附 current_notes
-    - OUTPUT（混调 或 ≥2 个）：不解析，对每个这种 OUTPUT 发 error ToolMessage，
-      "请单独调用一次 audit_output 给出最终结论，不要与笔记工具混调或重复调用"
-      触发 loop 让 LLM 修正（下次应给 [NOTE] 或 [NOTE, NOTE] 或 [OUTPUT]）
+    职责（按 frame 分类）：
+    - 整帧单 OUTPUT（且 args 校验通过）：终止信号。设 structured_output
+      （M9.5 清掉 guidance_injection），不发 ToolMessage。路由到 write_results。
+    - 整帧单 OUTPUT（args 校验失败）：发 error ToolMessage（带字段级
+      validation_errors），不设 structured_output。路由到 audit_llm_call 修正。
+    - 混调 [NOTE, OUTPUT] / 多 OUTPUT：对每个这种 OUTPUT 发 error ToolMessage
+      （"请单独调用一次 audit_output..."），应用 note 工具，不设 structured_output。
+      路由到 audit_llm_call 修正。
+    - 仅 note 工具：应用，返回 ok ToolMessage。不设 structured_output。
+      路由到 audit_llm_call 让 LLM 继续。
+    - 无 tool_calls：防御性兜底，设 default structured_output。路由到 write_results。
+    - max_iter 超限：扫历史最后 OUTPUT args 构造 structured_output，校验失败落 default。
 
-    audit_llm_call 已在源头把"单独一次 OUTPUT"解析为 state.structured_output，
-    路由已走 write_results 分支，本节点不再处理"干净 OUTPUT"。
+    audit_llm_call 出参恒为 {"messages": [response]}（无 structured_output），
+    本节点承担所有校验 + 终止决策。
 
     T11：max_iter 从 runtime.context 取，替代 closure 注入。
     """
     ctx = runtime.context
     max_iter = ctx.max_iter
     last_ai = _last_aimessage(state["messages"])
-    # 防御性：正常流程不可达；双失败降级已在 audit_llm_call 设 structured_output 走 write_results
-    # 此处兜底给一个 default structured_output，杜绝空转回环
+    # 防御性：audit_llm_call 一般情况下 last_ai.tool_calls 非空，如为空则路由到兜底策略
     if last_ai is None or not last_ai.tool_calls:
         return {
             "structured_output": _build_audit_output_default(
-                turn_summary="审查降级：audit_tools 无 tool_call",
+                turn_summary="无该轮摘要（审查降级：无工具调用）",
             ),
         }
 
-    tool_messages: list[ToolMessage] = []
     new_notes = state["session_notes_working"]
+    payload: dict[str, Any] = {}
+
+    # ---- 单 OUTPUT 终止路径：整帧恰好 1 个 audit_output tool_call ----
+    if len(last_ai.tool_calls) == 1 and last_ai.tool_calls[0]["name"] == TOOL_NAME_OUTPUT:
+        tc = last_ai.tool_calls[0]
+        tid = tc["id"]
+        try:
+            structured = AuditOutputSchema.model_validate(tc["args"])
+        except ValidationError as exc:
+            # 单 OUTPUT 但 args 非法：发 error ToolMessage（带字段级 validation_errors）
+            # 触发下一轮 ainvoke 修正。不设 structured_output → 路由到 audit_llm_call。
+            payload = {
+                "error": "AuditOutputSchema args 校验失败，请按 schema 重发",
+                "validation_errors": [
+                    {
+                        "loc": list(err["loc"]),
+                        "msg": err["msg"],
+                        "type": err["type"],
+                    }
+                    for err in exc.errors()
+                ],
+            }
+            iter_count = state["tool_iter_count"] + 1
+            return {
+                "messages": [
+                    ToolMessage(
+                        content=json.dumps(payload, ensure_ascii=False),
+                        tool_call_id=tid,
+                    )
+                ],
+                "session_notes_working": new_notes,
+                "tool_iter_count": iter_count,
+            }
+        else:
+            # 单 OUTPUT 校验通过：
+            # 不发 ToolMessage —— audit_tools 出参 {"structured_output": structured}
+            # 路由到 write_results；不增 tool_iter_count（终止信号，loop 结束）。
+            return {"structured_output": structured}
+
+    # ---- 多 tool_call 路径：混调 / 多 OUTPUT / 纯 note ----
+    tool_messages: list[ToolMessage] = []
 
     note_tcs = [
         tc for tc in last_ai.tool_calls if tc["name"] in (TOOL_NAME_APPEND, TOOL_NAME_REPLACE)
     ]
+
+    output_tcs = [tc for tc in last_ai.tool_calls if tc["name"] == TOOL_NAME_OUTPUT]
+
     last_note_tc = note_tcs[-1] if note_tcs else None
 
-    for tc in last_ai.tool_calls:
-        name, args, tid = tc["name"], tc["args"], tc["id"]
-        if name == TOOL_NAME_OUTPUT:
+    if output_tcs:
+        for tc in output_tcs:
+            name, args, tid = tc["name"], tc["args"], tc["id"]
             # 混调 / 多 OUTPUT 违规：发 error ToolMessage，不解析
             payload = {
-                "error": "请单独调用一次 audit_output 给出最终结论，不要与笔记工具混调或重复调用"
+                "error": "请单独调用一次 AuditOutputSchema 给出最终结论，不要与笔记工具混调或重复调用"
             }
             tool_messages.append(
                 ToolMessage(content=json.dumps(payload, ensure_ascii=False), tool_call_id=tid),
             )
-            continue
+
+    for tc in note_tcs:
+        name, args, tid = tc["name"], tc["args"], tc["id"]
         is_last_note = tc is last_note_tc
         if name == TOOL_NAME_APPEND:
-            new_notes = new_notes + ("\n" if new_notes else "") + args["text"]
-            payload: dict = {"ok": True}
-        elif name == TOOL_NAME_REPLACE:
-            old, new = args["old_str"], args["new_str"]
-            count = new_notes.count(old)
-            if count == 0:
-                payload = {"error": "old_str not found"}
-            elif count >= 2:
+            try:
+                structured = AppendNote.model_validate(args)
+            except ValidationError as exc:
                 payload = {
-                    "error": (f"old_str matches {count} times, extend context to make it unique")
+                    "error": "AppendNote args 校验失败，请按 schema 重发",
+                    "validation_errors": [
+                        {
+                            "loc": list(err["loc"]),
+                            "msg": err["msg"],
+                            "type": err["type"],
+                        }
+                        for err in exc.errors()
+                    ],
                 }
+                tool_messages.append(
+                    ToolMessage(content=json.dumps(payload, ensure_ascii=False), tool_call_id=tid),
+                )
             else:
-                new_notes = new_notes.replace(old, new, 1)
+                new_notes = new_notes + ("\n" if new_notes else "") + args["text"]
                 payload = {"ok": True}
+                if is_last_note:
+                    payload["current_notes"] = new_notes
+                tool_messages.append(
+                    ToolMessage(content=json.dumps(payload, ensure_ascii=False), tool_call_id=tid),
+                )
+        elif name == TOOL_NAME_REPLACE:
+            try:
+                structured = ReplaceInNotes.model_validate(args)
+            except ValidationError as exc:
+                payload = {
+                    "error": "ReplaceInNotes args 校验失败，请按 schema 重发",
+                    "validation_errors": [
+                        {
+                            "loc": list(err["loc"]),
+                            "msg": err["msg"],
+                            "type": err["type"],
+                        }
+                        for err in exc.errors()
+                    ],
+                }
+                tool_messages.append(
+                    ToolMessage(content=json.dumps(payload, ensure_ascii=False), tool_call_id=tid),
+                )
+            else:
+                old, new = args["old_str"], args["new_str"]
+                count = new_notes.count(old)
+                if count == 0:
+                    payload = {"error": "old_str 未找到"}
+                elif count >= 2:
+                    payload = {"error": f"old_str 匹配 {count} 个, 扩展上下文使其唯一"}
+                else:
+                    new_notes = new_notes.replace(old, new)
+                    payload = {"ok": True}
+                if is_last_note:
+                    payload["current_notes"] = new_notes
+                tool_messages.append(
+                    ToolMessage(content=json.dumps(payload, ensure_ascii=False), tool_call_id=tid),
+                )
         else:
-            payload = {"error": f"unknown tool: {name}"}
-        # 统一在循环底部赋值 current_notes：失败响应（LLM 需 state 修复 old_str）
-        # OR 最后一个 note 工具的成功响应
-        if not payload.get("ok") or is_last_note:
-            payload["current_notes"] = new_notes
-        tool_messages.append(
-            ToolMessage(content=json.dumps(payload, ensure_ascii=False), tool_call_id=tid),
-        )
+            logger.error(
+                "audit.undefined_tool_call sid=%s turn=%s name=%s",
+                state["sid"],
+                state["turn_number"],
+                name,
+            )
+            payload = {"error": f"未定义的 tool_call: {name}"}
+            tool_messages.append(
+                ToolMessage(content=json.dumps(payload, ensure_ascii=False), tool_call_id=tid),
+            )
 
     iter_count = state["tool_iter_count"] + 1
     result_dict = {
@@ -427,33 +468,10 @@ async def audit_tools(
             state["turn_number"],
             iter_count,
         )
-        # 最后一条未应用 tool_call 的内容 append 到 notes
-        last_tc = last_ai.tool_calls[-1]
-        fallback_text = last_tc["args"].get("text") or last_tc["args"].get("new_str", "")
-        if fallback_text:
-            new_notes += f"\n[审查 agent 多次尝试修改未果，原始建议如下]\n{fallback_text}"
-            result_dict["session_notes_working"] = new_notes
-        # 扫 message 历史取最后一个 OUTPUT 的 args 构造 structured_output
-        last_output_tc = _find_last_output_tool_call(state["messages"])
-        if last_output_tc is not None:
-            # 校验失败回落 default，避免历史 OUTPUT args 非法时抛
-            try:
-                structured = AuditOutputSchema.model_validate(last_output_tc["args"])
-            except ValidationError as exc:
-                logger.warning(
-                    "audit.max_iter_salvage_validation_failed turn=%s err=%s",
-                    state["turn_number"],
-                    exc,
-                )
-                structured = _build_audit_output_default()
-            else:
-                # 校验通过：强制 guidance_injection=None（守 M9.5）
-                # 保留 dimension_scores / crisis / redline / turn_summary
-                structured.guidance_injection = None
-            result_dict["structured_output"] = structured
-        else:
-            # 历史中无任何 OUTPUT，落回 _build_audit_output_default
-            result_dict["structured_output"] = _build_audit_output_default()
+
+        result_dict["structured_output"] = _build_audit_output_default(
+            turn_summary="无该轮摘要（审查降级：已超过迭代次数）"
+        )
     return result_dict
 
 
@@ -470,16 +488,6 @@ def route_after_tools(state: AuditGraphState) -> Literal["audit_llm_call", "writ
     避免 [NOTE, OUTPUT] 路径下 LLM 持续违规时无意义 loop（修复回环+400 的关键）。
     """
     if state.get("structured_output") is not None:
-        return "write_results"
-    max_iter = state.get("max_iter", 5)
-    if state["tool_iter_count"] >= max_iter:
-        logger.warning(
-            "audit.loop_exceeded sid=%s turn=%s iter=%d max=%d",
-            state["sid"],
-            state["turn_number"],
-            state["tool_iter_count"],
-            max_iter,
-        )
         return "write_results"
     return "audit_llm_call"
 
@@ -545,16 +553,14 @@ def build_audit_graph() -> CompiledStateGraph:
 
     builder.add_edge("__start__", "load_context")
     builder.add_edge("load_context", "audit_llm_call")
-    builder.add_conditional_edges(
-        "audit_llm_call",
-        route_after_llm,
-        {"audit_tools": "audit_tools", "write_results": "write_results"},
-    )
+    # audit_llm_call → audit_tools 直连：
+    # 节点契约保证 audit_tools 必收到 tool_calls(无 tool_calls 由 audit_tools 防御性兜底)
+    builder.add_edge("audit_llm_call", "audit_tools")
     builder.add_conditional_edges(
         "audit_tools",
         route_after_tools,
         {"audit_llm_call": "audit_llm_call", "write_results": "write_results"},
     )
-    builder.add_edge("write_results", END)
+    builder.add_edge("write_results", "__end__")
 
     return builder.compile()  # type: ignore[reportReturnType]
