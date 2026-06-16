@@ -24,7 +24,7 @@ from app.domain.chat.context import (
     build_crisis_context,
     build_redline_context,
     load_active_history_for_assembly,
-    load_recent_active_messages,
+    load_recent_messages,
 )
 from app.domain.chat.prompts import ANCHOR_WINDOW_PREFIX
 from app.core.enums import MessageRole, MessageStatus
@@ -328,7 +328,7 @@ class TestLoadRecentActiveMessages:
         sid = await _seed_session(db_session, child_user.id)
         await _seed_messages(db_session, sid, 15, base_time=datetime(2025, 1, 1, tzinfo=timezone.utc))
 
-        result = await load_recent_active_messages(sid, current_turn=16, db=db_session, limit=20)
+        result = await load_recent_messages(sid, current_turn=16, db=db_session, limit=20)
 
         assert len(result) == 20, f"expected 20 messages, got {len(result)}"
         turns = [m.content for m in result]

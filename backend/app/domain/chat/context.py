@@ -37,11 +37,12 @@ from app.domain.chat.models import Message
 from app.domain.chat.prompts import ANCHOR_WINDOW_PREFIX, SUMMARY_PREFIX
 
 
-async def load_active_messages(
+async def load_active_messages_without_summary(
     sid: UUID,
     db: AsyncSession,
     *,
-    until_turn: int | None = None,
+    from_turn: int | None = None,
+    to_turn: int | None = None,
 ) -> list[Message]:
     """底层共享 helper:查询 session 中 status='active' 的 human/ai 消息。
 
@@ -58,14 +59,16 @@ async def load_active_messages(
         Message.status == "active",
         Message.role != MessageRole.summary,
     )
-    if until_turn is not None:
-        stmt = stmt.where(Message.turn_number < until_turn)
+    if from_turn is not None:
+        stmt = stmt.where(Message.turn_number >= from_turn)
+    if to_turn is not None:
+        stmt = stmt.where(Message.turn_number <= to_turn)
     stmt = stmt.order_by(Message.created_at.asc(), Message.id.asc())
     return list((await db.execute(stmt)).scalars())
 
 
 async def load_active_messages_with_summary(
-    sid: UUID, db: AsyncSession, *, until_turn: int | None = None
+    sid: UUID, db: AsyncSession, *, from_turn: int | None = None, until_turn: int | None = None
 ) -> tuple[list[Message], Message | None]:
     """取 sid 当前 active 的 summary 消息(0 或 1 条)。
 
@@ -78,8 +81,10 @@ async def load_active_messages_with_summary(
         Message.session_id == sid,
         Message.status == MessageStatus.active,
     )
+    if from_turn is not None:
+        stmt = stmt.where(Message.turn_number >= from_turn)
     if until_turn is not None:
-        stmt = stmt.where(Message.turn_number < until_turn)
+        stmt = stmt.where(Message.turn_number <= until_turn)
     stmt = stmt.order_by(Message.created_at.asc(), Message.id.asc())
     rows = list((await db.execute(stmt)).scalars())
     messages: list[Message] = []
@@ -117,7 +122,7 @@ async def load_active_history_for_assembly(
             text = f"Turn {s.get('turn_number', '?')}: {s.get('summary', '')}"
             summaries.append(SystemMessage(content=text))
 
-    rows = await load_active_messages(sid, db, until_turn=current_turn)
+    rows = await load_active_messages_without_summary(sid, db, to_turn=current_turn - 1)
     return [*summaries, *(to_lc_message(m) for m in rows)]
 
 
@@ -130,7 +135,7 @@ async def build_context(sid: UUID, db: AsyncSession) -> list[BaseMessage]:
       将 SystemMessage 注入列表首位
     - session_notes：永不注入主 LLM
     """
-    rows = await load_active_messages(sid, db)
+    rows = await load_active_messages_without_summary(sid, db)
     messages: list[BaseMessage] = [to_lc_message(m) for m in rows]
 
     # rolling_summaries：M6 只读路径，始终 fall through
@@ -151,13 +156,13 @@ async def build_context(sid: UUID, db: AsyncSession) -> list[BaseMessage]:
 # ---------------------------------------------------------------------------
 
 
-async def load_recent_active_messages(
+async def load_recent_messages(
     sid: UUID,
     current_turn: int,
     db: AsyncSession,
     limit: int,
 ) -> list[BaseMessage]:
-    """取当前轮之前最近 n 条 active human/ai 消息（按 created_at 升序）。
+    """取当前轮之前最近 n 条 human/ai 消息（按 created_at 升序）。
 
     语义：``limit`` 直接是消息条数（非"对"数）。若要保留"n 对"行为，
     调用方传入 ``limit = 2 * n``。
@@ -267,7 +272,7 @@ async def build_redline_context(
             text = f"Turn {s.get('turn_number', '?')}: {s.get('summary', '')}"
             summaries.append(SystemMessage(content=text))
 
-    messages = await load_recent_active_messages(
+    messages = await load_recent_messages(
         sid,
         current_turn,
         db,

@@ -224,7 +224,7 @@ async def build_messages_main(
         # 不含本轮 human(until_turn=current_turn 边界过滤) + 不含 summary 行
         # summary 由 load_active_messages_with_summary 拆分返回
         history_rows, summary = await load_active_messages_with_summary(
-            ctx.session_id, db, until_turn=state["turn_number"]
+            ctx.session_id, db, until_turn=state["turn_number"] - 1
         )
         history = [to_lc_message(m) for m in history_rows]
     system_prompt = build_system_prompt(
