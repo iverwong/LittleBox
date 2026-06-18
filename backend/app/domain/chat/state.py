@@ -1,8 +1,9 @@
 """Main dialogue graph state — MainDialogueState TypedDict.
 
-M6 Step 6: replaces the M3 skeleton.
 - messages: session history, managed by add_messages reducer (LangGraph)
-- audit_state: M8 load_audit_state 节点读取 Redis audit:{sid} 填充
+- audit_state: load_audit_state 节点读取 Redis audit:{sid} 填充
+- turn_number: 当前对话轮次，由 me.py 从 sessions.ai_turn_counter+1 填入
+- compression_summary / keep_messages: 图内压缩节点使用的辅助字段
 """
 
 from __future__ import annotations
@@ -29,17 +30,14 @@ class AuditState(TypedDict):
 class MainDialogueState(TypedDict):
     """Per-turn state for the main dialogue LangGraph.
 
-    Scalar fields (generated_token_count / client_alive / etc.) do NOT need
-    Annotated reducers — LangGraph last-write-wins semantics suffices.
+    Scalar fields do NOT need Annotated reducers —
+    LangGraph last-write-wins semantics suffices.
     Only ``messages`` needs add_messages (append-only history).
     """
 
     messages: Annotated[list[BaseMessage], add_messages]
-    audit_state: AuditState  # M8: load_audit_state 节点填充
-    generated_token_count: int
-    client_alive: bool
-    user_stop_requested: bool
-    turn_number: int  # M8: 当前对话轮次，由 me.py 从 sessions.ai_turn_counter+1 填入
+    audit_state: AuditState  # load_audit_state 节点填充
+    turn_number: int  # 当前对话轮次，由 me.py 从 sessions.ai_turn_counter+1 填入
     # 压缩相关
     compression_summary: str | None
     keep_messages: list[BaseMessage] | None

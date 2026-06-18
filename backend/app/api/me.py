@@ -396,7 +396,7 @@ async def chat_stream(
         # 行为不变,见 tests/api/test_chat_stream_control_plane.py (1419 行回归锚)。
         result = await intake_human_message(db, sid, session, req)
 
-        # build_context / build_system_prompt 已由 build_messages_main 节点在图内执行
+        # 历史装配由 build_messages_main 节点在图内执行
         # commit① — user 消息落库(同事务内同步 last_active_at)
         if result.user_msg is not None:
             session.last_active_at = result.user_msg.created_at
@@ -428,9 +428,6 @@ async def chat_stream(
                 "guidance": None,
                 "target_message_id": None,
             },
-            "generated_token_count": 0,
-            "client_alive": True,
-            "user_stop_requested": False,
             "turn_number": result.turn_number,
             "compression_summary": None,
             "keep_messages": None,

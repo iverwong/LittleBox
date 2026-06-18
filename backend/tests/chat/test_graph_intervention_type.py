@@ -139,9 +139,6 @@ async def test_crisis_emits_crisis(concurrent_db_sessions, engine):
         state: MainDialogueState = {
             "messages": [],
             "audit_state": audit,
-            "generated_token_count": 0,
-            "client_alive": True,
-            "user_stop_requested": False,
             "turn_number": 1,
         }
         captured: list[dict] = []
@@ -195,9 +192,6 @@ async def test_guided_emits_guided(concurrent_db_sessions, engine):
         state: MainDialogueState = {
             "messages": [HumanMessage(content="pre-set")],
             "audit_state": audit,
-            "generated_token_count": 0,
-            "client_alive": True,
-            "user_stop_requested": False,
             "turn_number": 1,
         }
         captured: list[dict] = []
@@ -252,9 +246,6 @@ async def test_normal_emits_nothing(concurrent_db_sessions, engine):
         state: MainDialogueState = {
             "messages": [HumanMessage(content="pre-set")],
             "audit_state": audit,
-            "generated_token_count": 0,
-            "client_alive": True,
-            "user_stop_requested": False,
             "turn_number": 1,
         }
         captured: list[dict] = []

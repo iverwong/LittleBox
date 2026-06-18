@@ -73,9 +73,6 @@ def _make_state(
     return {
         "messages": messages or [],
         "audit_state": audit_state or dict(_ALL_FALSE_AUDIT),
-        "generated_token_count": 0,
-        "client_alive": True,
-        "user_stop_requested": False,
         "turn_number": turn_number,
     }
 

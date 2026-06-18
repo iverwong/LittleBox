@@ -57,9 +57,6 @@ def _make_state(turn_number: int = 2) -> MainDialogueState:
     return MainDialogueState(
         messages=[],
         audit_state={},
-        generated_token_count=0,
-        client_alive=True,
-        user_stop_requested=False,
         turn_number=turn_number,
     )
 

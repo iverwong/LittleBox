@@ -1,25 +1,15 @@
-"""build_context：全量 active 对话历史，供 LLM 输入。
+"""对话历史查询 helper：供 LangGraph 节点装配 LLM 输入。
 
-职责边界：
-- 本函数返回对话历史列表：
-  [SystemMessage（rolling-summary，M8 可选）, HumanMessage, AIMessage, ...]
-  按 created_at 升序排列，返回全量 active 消息（无 LIMIT 截断）。
-- 返回列表**不含**主 system prompt。主 prompt（身份 / 安全 / 分级 / 性别 / 年龄）
-  由 `prompts.build_system_prompt(profile)` 独立生成。
-  调用方拼接：[build_system_prompt(...), *build_context(...), HumanMessage(user_content)]
+本模块只提供消息查询与 LangChain 转换函数，不组装 system prompt
+（由 prompts.build_system_prompt 独立生成）。
 
 5 项语义约束：
   1. 仅返回 status='active' 的消息（discarded 行被过滤）
   2. 按 created_at ASC 排序，无 LIMIT
-  3. rolling_summaries 在 M6 为只读路径（始终 fall through）；M8 后 turn_summaries
-     非空时注入 SystemMessage 在列表首位（fallthrough 路径）
+  3. summary 行由 load_active_messages_with_summary 单独提取
+     供 build_system_prompt 注入（不进 history，避免双写）
   4. session_notes 永不注入主 LLM（架构基线 §四「字段消费分工」）
   5. 未知 role 兜底转为 HumanMessage（防御性）
-
-调用方模式：
-    system = build_system_prompt(profile)
-    history = await build_context(session_id, db)
-    llm_messages = [system, *history, HumanMessage(content=new_message)]
 """
 # TODO(M8 cleanup)：rolling_summaries fallback 替换为真实摘要注入
 #   M8 review worker 上线后此文件无需改动；当前 fallback 丢弃摘要上下文。
@@ -33,7 +23,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.enums import MessageRole, MessageStatus
-from app.domain.audit.models import RollingSummary
 from app.domain.chat.models import Message
 from app.domain.chat.prompts import ANCHOR_WINDOW_PREFIX, SUMMARY_PREFIX
 
@@ -98,64 +87,7 @@ async def load_active_messages_with_summary(
     return messages, summary
 
 
-# TODO(日终审查 agent): 此函数当前在 main W1 装配链由 build_messages_main 调用,
-#   后续做日中审查 agent 时复用其 rolling_summaries 注入逻辑。
-#   现行调用点(见 app/domain/chat/graph.py::build_messages_main)正切到
-#   load_active_messages_with_summary 拿 messages 表的 active summary,绕开此处。
-# FIX 这个方法的逻辑需要改
-async def load_active_history_for_assembly(
-    sid: UUID,
-    current_turn: int,
-    db: AsyncSession,
-) -> list[BaseMessage]:
-    """main W1 wrapper 装配链专用:返回不含本轮 human 的历史 + turn_summaries 前缀。
-
-    与 build_context / load_active_messages_with_summary 的职责边界:
-    - build_context: audit 路径专用,含本轮 human,不注入 summary
-    - load_active_messages_with_summary: 取当前 active (h,a) + summary 消息
-      (0 或 1 条 summary)供 build_system_prompt / history 用
-    - load_active_history_for_assembly: main W1 装配链专用,不含本轮 human,
-      前缀含 turn_summaries SystemMessage 列表(从 rolling_summaries 注入)
-    """
-    rs = await db.scalar(select(RollingSummary).where(RollingSummary.session_id == sid).limit(1))
-    summaries: list[SystemMessage] = []
-    if rs and rs.turn_summaries:
-        for s in rs.turn_summaries:
-            text = f"Turn {s.get('turn_number', '?')}: {s.get('summary', '')}"
-            summaries.append(SystemMessage(content=text))
-
-    rows = await load_active_messages_without_summary(sid, db, to_turn=current_turn - 1)
-    return [*summaries, *(to_lc_message(m) for m in rows)]
-
-
-async def build_context(sid: UUID, db: AsyncSession) -> list[BaseMessage]:
-    """返回 sid 所有 active 消息，按 created_at ASC，无 LIMIT。
-
-    - 过滤条件：status='active'（discarded 行排除）
-    - 排序：created_at ASC（全量返回）
-    - rolling_summaries：M6 只读不回写；M8 当 turn_summaries 非空时，
-      将 SystemMessage 注入列表首位
-    - session_notes：永不注入主 LLM
-    """
-    rows = await load_active_messages_without_summary(sid, db)
-    messages: list[BaseMessage] = [to_lc_message(m) for m in rows]
-
-    # rolling_summaries：M6 只读路径，始终 fall through
-    # （M8 review worker 写入后改由非空 turn_summaries 触发注入）
-    sm_stmt = select(RollingSummary.turn_summaries).where(RollingSummary.session_id == sid).limit(1)
-    row = (await db.execute(sm_stmt)).scalar_one_or_none()
-
-    # scalar_one_or_none()：None=无行；[]=空列表（二者均 falsy → fallback）
-    if row:  # 非空列表 → M8 fallthrough；空列表 [] 为 falsy → fallback
-        summary_text = "\n".join(f"Turn {s['turn']}: {s['summary']}" for s in row)
-        messages.insert(0, SystemMessage(content=summary_text))
-
-    return messages
-
-
-# ---------------------------------------------------------------------------
-# M9 三级干预上下文装配函数（§D）
-# ---------------------------------------------------------------------------
+# ---- LangChain 消息转换 ----
 @overload
 async def load_recent_messages(
     sid: UUID, db: AsyncSession, from_turn: int, to_turn: int, *, as_orm: Literal[False]

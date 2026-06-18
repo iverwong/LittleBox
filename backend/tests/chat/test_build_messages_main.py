@@ -4,7 +4,7 @@
 1. 正常路径（guidance=None）：末位 HumanMessage.content == ctx.user_input（透传）
 2. guidance 路径（guidance="..."）：末位 HumanMessage.content 含 STUB_GUIDANCE_WRAPPER 标记
 
-依赖：db_session fixture 可用但 mock load_active_history_for_assembly 避免 DB 查询（C5 隔离铁律）。
+依赖：db_session fixture，mock load_active_messages_with_summary 避免 DB 查询（C5 隔离铁律）。
 """
 from __future__ import annotations
 
@@ -44,8 +44,7 @@ async def test_build_messages_main_assembles_system_and_history():
                                          "crisis_detected": False,
                                          "guidance": None,
                                          "target_message_id": None},
-        "generated_token_count": 0, "client_alive": True,
-        "user_stop_requested": False, "turn_number": 1,
+        "turn_number": 1,
     }
     runtime = SimpleNamespace(context=ctx)
 

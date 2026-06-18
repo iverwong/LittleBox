@@ -1,7 +1,7 @@
-"""build_main_graph 工厂 + route_by_risk 3 分支回归（T15）。
+"""build_main_graph 工厂 + route_by_risk 2 分支回归（T15）。
 
-去重边界（H5）：不重复 5 节点拓扑断言（test_graph.py::test_graph_has_5_nodes 已有），
-仅覆盖工厂调用 + CompiledStateGraph 类型 + 3 分支 keys 完整性。
+去重边界（H5）：不重复 5 节点拓扑断言（test_graph.py 已有），
+仅覆盖工厂调用 + CompiledStateGraph 类型 + 2 分支 keys 完整性。
 """
 from __future__ import annotations
 
@@ -27,9 +27,6 @@ def test_route_by_risk_two_branches():
             "crisis_detected": False,
             "guidance": None,
         },
-        "generated_token_count": 0,
-        "client_alive": True,
-        "user_stop_requested": False,
         "turn_number": 1,
     }
 

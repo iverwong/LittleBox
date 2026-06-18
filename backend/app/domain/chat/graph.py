@@ -198,6 +198,10 @@ async def build_messages_main(
 ) -> dict:
     """W1 wrapper 模式:图内压缩 + system_prompt + history + wrapped HumanMessage。
 
+    注意：pipeline.py 可能在 pre-graph 阶段已执行阻塞压缩并清
+    needs_compression=False 落库。本节点重查 DB 决定是否进图内压缩，
+    两者互为保护路径（pre-graph 成功则本节点不重复压缩）。
+
     装配顺序：
       [system_prompt(含 # 历史会话摘要(压缩) 段), *history(不含本轮),
        HumanMessage(content=format_guidance_wrapper(ctx.user_input, audit.guidance))]

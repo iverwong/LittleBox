@@ -1,8 +1,11 @@
 """段一:LLM consumption 协程。
 
 Phase 2.3 从 `api/me.py` 抽离,在独立 asyncio.Task 中运行,负责:
-compression → thinking 状态机 → graph.astream → stream_graph_to_sse
-帧映射 → commit② 三终态(自然结束 / StopWithAi / StopNoAi)。
+compression → graph.astream 循环 → commit② 三终态(自然结束 / StopWithAi / StopNoAa)。
+
+graph.astream 循环内部嵌套:
+- thinking 状态机（reasoning 信号触发 thinking_start/thinking_end）
+- stream_graph_to_sse 帧映射（per-payload wrapper）
 
 本模块只暴露 `run_llm_pipeline` 一个公开协程,其他均为内部实现。
 """
