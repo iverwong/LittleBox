@@ -147,7 +147,8 @@ async def run_llm_pipeline(
                             to_compress_orm, to_keep_orm = split_for_compression(actives_orm)
                             if to_compress_orm:
                                 c_input = build_compression_messages(
-                                    [to_lc_message(mo) for mo in to_compress_orm]
+                                    None,
+                                    [to_lc_message(mo) for mo in to_compress_orm],
                                 )
                                 c_llm = build_compression_llm(rr.settings)
                                 c_result = await c_llm.ainvoke(c_input)

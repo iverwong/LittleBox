@@ -1,7 +1,7 @@
 """审查图节点 Runtime DI 直接断言（T16 H5）。
 
 去重边界（H5）：不通过整图 ainvoke，直接节点函数级测试：
-- load_context：验证 load_recent_active_messages 与 _load_session_notes_from_pg 均被调用
+- load_context：验证 load_recent_messages 与 _load_session_notes_from_pg 均被调用
 - audit_llm_call：验证 build_audit_llm 被调用时参数 == runtime.context.settings
 """
 
@@ -97,7 +97,7 @@ _TC_REPLACE_MISS = _tc(TOOL_NAME_REPLACE, {"old_str": "不存在的文本", "new
 
 
 async def test_load_context_passes_db_session_factory():
-    """load_context 调 load_recent_active_messages 和 _load_session_notes_from_pg 时使用 ctx.db_session_factory。"""
+    """load_context 调 load_recent_messages 和 _load_session_notes_from_pg 时使用 ctx.db_session_factory。"""
     state = _make_state()
     runtime = _make_fake_runtime()
 
@@ -105,7 +105,7 @@ async def test_load_context_passes_db_session_factory():
     mock_db = AsyncMock()
     mock_session_factory = MagicMock()
 
-    @patch("app.domain.audit.graph.load_recent_active_messages", new=AsyncMock(return_value=[]))
+    @patch("app.domain.audit.graph.load_recent_messages", new=AsyncMock(return_value=[]))
     @patch("app.domain.audit.graph._load_session_notes_from_pg", new=AsyncMock(return_value=""))
     async def _go() -> dict:
         return await load_context(state, runtime)
@@ -127,7 +127,7 @@ async def test_load_context_returns_messages_with_max_iter():
     runtime = _make_fake_runtime()
 
     with (
-        patch("app.domain.audit.graph.load_recent_active_messages", new=AsyncMock(return_value=[])),
+        patch("app.domain.audit.graph.load_recent_messages", new=AsyncMock(return_value=[])),
         patch(
             "app.domain.audit.graph._load_session_notes_from_pg",
             new=AsyncMock(return_value=""),
@@ -293,7 +293,7 @@ class TestLoadContextSeedsWorkingCopy:
         from langchain_core.messages import HumanMessage
 
         with (
-            patch("app.domain.audit.graph.load_recent_active_messages", new=AsyncMock(return_value=[])),
+            patch("app.domain.audit.graph.load_recent_messages", new=AsyncMock(return_value=[])),
             patch(
                 "app.domain.audit.graph._load_session_notes_from_pg",
                 new=AsyncMock(return_value="历史笔记"),
@@ -332,7 +332,7 @@ class TestLoadContextHistorySplit:
         ]
 
         with (
-            patch("app.domain.audit.graph.load_recent_active_messages", new=AsyncMock(return_value=history)),
+            patch("app.domain.audit.graph.load_recent_messages", new=AsyncMock(return_value=history)),
             patch(
                 "app.domain.audit.graph._load_session_notes_from_pg",
                 new=AsyncMock(return_value="notes"),

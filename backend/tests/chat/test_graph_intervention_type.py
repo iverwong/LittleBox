@@ -97,13 +97,31 @@ async def _seed_session(seed_sess: AsyncSession, child: User) -> tuple[uuid4, uu
 
 
 async def _seed_crisis_anchor(seed_sess: AsyncSession, sid: uuid4) -> uuid4:
-    """种子：一条 message 作为 crisis anchor。返回其 id。"""
+    """种子：一条 message 作为 crisis anchor + RollingSummary + AuditRecord。返回 anchor msg id。"""
     msg = Message(
-        session_id=sid, role="human", content="crisis anchor", status="active",
+        session_id=sid, role="human", content="crisis anchor", status="active", turn_number=1,
     )
     seed_sess.add(msg)
     await seed_sess.flush()
-    return msg.id
+    anchor_id = msg.id
+
+    # Seed RollingSummary with crisis_locked_message_id
+    from datetime import datetime, timezone
+    from sqlalchemy import text
+    await seed_sess.execute(
+        text("INSERT INTO rolling_summaries (session_id, last_turn, crisis_locked_message_id, turn_summaries, session_notes, created_at) "
+             "VALUES (:sid, 1, :mid, '[]', '', :now)"),
+        {"sid": sid, "mid": anchor_id, "now": datetime.now(timezone.utc)},
+    )
+
+    # Seed AuditRecord with crisis_topic (model has no turn_summary column)
+    await seed_sess.execute(
+        text("INSERT INTO audit_records (session_id, turn_number, crisis_detected, crisis_topic, guidance_injection, notify_sent, created_at) "
+             "VALUES (:sid, 1, true, 'test crisis topic', '', false, :now)"),
+        {"sid": sid, "now": datetime.now(timezone.utc)},
+    )
+    await seed_sess.commit()
+    return anchor_id
 
 
 # ---------------------------------------------------------------------------

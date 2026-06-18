@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from app.domain.chat.graph import build_messages_main
@@ -51,6 +51,9 @@ async def test_build_messages_main_assembles_system_and_history():
     with (
         patch("app.domain.chat.graph.load_active_messages_with_summary", return_value=(_history(), None)),
         patch("app.domain.chat.graph.to_lc_message", side_effect=lambda m: m),
+        patch("app.domain.chat.graph.get_stream_writer"),
+        patch("app.domain.chat.graph._handle_compress", new_callable=AsyncMock),
+        patch("app.domain.chat.graph.split_for_compression", return_value=([], _history())),
     ):
         result = await build_messages_main(state, runtime)
 
@@ -94,13 +97,16 @@ async def test_build_messages_main_with_guidance():
     with (
         patch("app.domain.chat.graph.load_active_messages_with_summary", return_value=(_history(), None)),
         patch("app.domain.chat.graph.to_lc_message", side_effect=lambda m: m),
+        patch("app.domain.chat.graph.get_stream_writer"),
+        patch("app.domain.chat.graph._handle_compress", new_callable=AsyncMock),
+        patch("app.domain.chat.graph.split_for_compression", return_value=([], _history())),
     ):
         result = await build_messages_main(state, runtime)
 
     msgs = result["messages"]
-    # 末位 HumanMessage.content 含 STUB 标记
+    # 末位 HumanMessage.content 含 GUIDANCE_WRAPPER 标记
     last = msgs[-1]
     assert isinstance(last, HumanMessage)
-    assert "TODO(prompts-content)" in last.content, "guidance 非空时末位 HumanMessage 应含 STUB 标记"
     assert "我想玩游戏" in last.content, "user_input 应在 wrapper 内"
     assert "建议引导到户外活动" in last.content, "guidance 应在 wrapper 内"
+    assert "<guidance>建议引导到户外活动</guidance>" in last.content, "guidance 应被 GUIDANCE_WRAPPER 包裹"

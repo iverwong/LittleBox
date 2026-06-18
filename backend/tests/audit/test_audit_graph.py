@@ -160,7 +160,7 @@ def _run(
     async def _mock_load(*_: Any, **__: Any) -> list:
         return []
 
-    monkeypatch.setattr("app.domain.audit.graph.load_recent_active_messages", _mock_load)
+    monkeypatch.setattr("app.domain.audit.graph.load_recent_messages", _mock_load)
 
     async def _mock_load_notes(*_: Any, **__: Any) -> str:
         return initial_notes
@@ -271,7 +271,7 @@ class TestAuditGraph:
         async def _mock_load(*_: Any, **__: Any) -> list:
             return []
 
-        monkeypatch.setattr("app.domain.audit.graph.load_recent_active_messages", _mock_load)
+        monkeypatch.setattr("app.domain.audit.graph.load_recent_messages", _mock_load)
 
         # A2 段:load_context 覆盖 working copy → mock helper 返 "a a b"
         async def _mock_load_notes(*_: Any, **__: Any) -> str:

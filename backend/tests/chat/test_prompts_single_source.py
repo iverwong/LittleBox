@@ -49,7 +49,7 @@ KNOWN_DOCSTRINGS: dict[tuple[str, int], int] = {
     ("context.py", 1): 17,
     ("context.py", 34): 41,
     ("context.py", 71): 71,
-    ("context.py", 153): 163,  # build_crisis_context
+    ("context.py", 136): 152,  # build_crisis_context docstring
 }
 
 

@@ -164,37 +164,6 @@ class TestAuditOutputSchema:
         )
         assert s.crisis_topic == "提到自残倾向"
 
-    # redline 联动
-    def test_redline_triggered_without_detail_raises(self):
-        with pytest.raises(ValidationError, match="redline_triggered=True"):
-            AuditOutputSchema(
-                dimension_scores=AuditDimensionScores(),
-                redline_triggered=True,
-                redline_detail=None,
-                guidance_injection="ok",
-                turn_summary="ok",
-            )
-
-    def test_redline_not_triggered_with_detail_raises(self):
-        with pytest.raises(ValidationError, match="redline_triggered=False"):
-            AuditOutputSchema(
-                dimension_scores=AuditDimensionScores(),
-                redline_triggered=False,
-                redline_detail="some detail",
-                guidance_injection="ok",
-                turn_summary="ok",
-            )
-
-    def test_redline_triggered_with_detail_ok(self):
-        s = AuditOutputSchema(
-            dimension_scores=AuditDimensionScores(),
-            redline_triggered=True,
-            redline_detail="涉及暴力言论",
-            guidance_injection="ok",
-            turn_summary="ok",
-        )
-        assert s.redline_detail == "涉及暴力言论"
-
 
 class TestAppendNote:
     """text 非空 + max_length=500。"""

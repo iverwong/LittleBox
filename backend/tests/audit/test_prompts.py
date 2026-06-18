@@ -53,7 +53,6 @@ class TestAuditSystemPrompt:
         assert "# 危机(crisis)" in prompt
         assert "# 红线(redline)" in prompt
         assert "crisis_detected" in prompt
-        assert "redline_triggered" in prompt
 
 
 class TestToolSchemas:

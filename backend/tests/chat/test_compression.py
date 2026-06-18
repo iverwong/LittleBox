@@ -48,26 +48,26 @@ class TestCompressionPrompt:
     def test_always_two_messages(self):
         """返回 list 长度恒为 2。"""
         msgs = [AIMessageChunk(content="你好"), AIMessageChunk(content="世界")]
-        result = build_compression_messages(msgs)
+        result = build_compression_messages(None, msgs)
         assert len(result) == 2
 
     def test_empty_history(self):
         """空 history 仍返回 2 条消息。"""
-        result = build_compression_messages([])
+        result = build_compression_messages(None, [])
         assert len(result) == 2
 
     def test_first_is_system(self):
-        result = build_compression_messages([])
+        result = build_compression_messages(None, [])
         assert result[0].type == "system"
         assert "对话压缩助手" in result[0].content
 
     def test_second_is_human(self):
-        result = build_compression_messages([])
+        result = build_compression_messages(None, [])
         assert result[1].type == "human"
 
     def test_system_contains_stub(self):
         """SystemMessage content 包含 COMPRESSION_PROMPT_STUB 关键句（任务 + 输出契约）。"""
-        result = build_compression_messages([])
+        result = build_compression_messages(None, [])
         # 当前实现 prompt 多行版,逐句断言关键短语
         assert "你是对话压缩助手" in result[0].content
         assert "你需要使用第三人称" in result[0].content
@@ -76,7 +76,7 @@ class TestCompressionPrompt:
 
     def test_human_contains_history_xml(self):
         """HumanMessage content 包含 <history> 序列化。"""
-        result = build_compression_messages([
+        result = build_compression_messages(None, [
             HumanMessage(content="你好"),
             AIMessage(content="嗨"),
         ])
@@ -87,7 +87,7 @@ class TestCompressionPrompt:
 
     def test_system_contains_output_contract(self):
         """SystemMessage content 包含 <summary> 输出契约（与任务一同收口到 STUB）。"""
-        result = build_compression_messages([])
+        result = build_compression_messages(None, [])
         assert "<summary>" in result[0].content
 
     def test_last_turn_ai_not_leaked_to_system(self):
@@ -96,7 +96,7 @@ class TestCompressionPrompt:
             HumanMessage(content="问题"),
             AIMessage(content="回复"),
         ]
-        result = build_compression_messages(history)
+        result = build_compression_messages(None, history)
         human_content = result[1].content
         # 末条 AI 回复应出现在 <history> 内
         assert '<turn idx="1" role="assistant">回复</turn>' in human_content

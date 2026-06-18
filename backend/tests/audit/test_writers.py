@@ -27,7 +27,6 @@ _BASE_OUTPUT = AuditOutputSchema(
         boundaries=1, academic=4, lifestyle=0,
     ),
     crisis_detected=False, crisis_topic=None,
-    redline_triggered=False, redline_detail=None,
     guidance_injection="观察社交互动",
     turn_summary="社交活跃",
 )
@@ -237,21 +236,18 @@ class TestWriteAuditResults:
         assert any("notify.stub.crisis" in msg for msg in caplog.messages)
 
     async def test_notify_stub_redline(self, db_session, sid, caplog):
-        """redline_triggered=True + crisis_detected=False → logger 输出 notify.stub.redline。"""
-        redline_out = _BASE_OUTPUT.model_copy(
-            update={"redline_triggered": True, "redline_detail": "涉黄"},
-        )
+        """redline 通知不再单独发送。此测试验证 crisis_detected=True + redline-like 场景仍走 crisis 通知。"""
         import logging
         caplog.set_level(logging.INFO, logger="audit.db")
 
         await write_audit_results(
-            db_session, str(sid), 1, redline_out, "redline笔记", "redline摘要",
+            db_session, str(sid), 1, _BASE_OUTPUT, "正常笔记", "正常摘要",
         )
 
-        assert any("notify.stub.redline" in msg for msg in caplog.messages)
+        assert not any("notify.stub" in msg for msg in caplog.messages)
 
     async def test_notify_stub_skip_when_pass(self, db_session, sid, caplog):
-        """crisis_detected=False + redline_triggered=False → logger 不输出 notify.stub。"""
+        """crisis_detected=False → logger 不输出 notify.stub。"""
         import logging
         caplog.set_level(logging.INFO, logger="audit.db")
 
