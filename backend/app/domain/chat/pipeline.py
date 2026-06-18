@@ -92,12 +92,8 @@ async def run_llm_pipeline(
     thinking_started = False
 
     try:
-        # ---- ① 图前:短连接读 session + 发送 session_meta ----
-        async with rr.db_session_factory() as db:
-            _put(frame_sse_event("session_meta", {"session_id": str(sid), "hid": str(hid)}))
-            session = await db.get(SessionModel, sid)
-            if session is None:
-                raise RuntimeError(f"session {sid} not found")
+        # ---- ① 图前:发送 session_meta（sid 在 commit① 已确认存在，无需查 DB） ----
+        _put(frame_sse_event("session_meta", {"session_id": str(sid), "hid": str(hid)}))
 
         # ---- ② 图循环:不持有 DB 连接 ----
         graph = rr.main_graph
