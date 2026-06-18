@@ -77,10 +77,8 @@ async def write_audit_results(
             dimension_scores=dims,
             crisis_detected=structured_output.crisis_detected,
             crisis_topic=structured_output.crisis_topic,
-            guidance_injection=structured_output.guidance_injection,  # schema→ORM 同名透传
-            redline_triggered=structured_output.redline_triggered,
-            redline_detail=structured_output.redline_detail,
-            notify_sent=False,  # M8 期不发送通知;server_default 不足,ORM 需显式
+            guidance_injection=structured_output.guidance_injection,
+            notify_sent=False,
         )
     )
 
@@ -118,8 +116,7 @@ async def write_audit_results(
     # D-5 决议(D-4A.3 落地):通知桩抽到 domain/notifications/notify_stub.py。
     # 日志格式 "notify.stub.<type> sid=<sid> turn=<turn> target=<target>"
     # 必须与原 logger.info 字面 byte 级一致,关注点 6 硬约束。
-    if structured_output.crisis_detected or structured_output.redline_triggered:
-        notify_type = "crisis" if structured_output.crisis_detected else "redline"
+    if structured_output.crisis_detected:
         from app.domain.notifications.notify_stub import send as notify_send
 
-        notify_send(notify_type, sid, turn_number, target_message_id)
+        notify_send("crisis", sid, turn_number, target_message_id)

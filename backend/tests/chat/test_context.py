@@ -22,7 +22,6 @@ from app.domain.chat.context import (
     to_lc_message,
     build_context,
     build_crisis_context,
-    build_redline_context,
     load_active_history_for_assembly,
     load_recent_messages,
 )
@@ -547,63 +546,3 @@ class TestBuildCrisisContext:
         assert len(lines) >= 5  # 标题 + 4 行
         # 确保逐行 role: content 格式
         assert ": " in lines[1]  # "human: turn1_h1"
-
-
-class TestBuildRedlineContext:
-    """D.2 build_redline_context — 9 条 (编号 7-8)。"""
-
-    @pytest.mark.asyncio
-    async def test_redline_no_summaries_fallback(self, db_session, child_user) -> None:
-        """Given rs 不存在 / turn_summaries 空, When build_redline_context, Then summaries 为 []。
-        Given/When/Then: D17 降级路径。"""
-        sid = await _seed_session(db_session, child_user.id)
-        await _seed_messages(db_session, sid, 3)
-
-        summaries, pairs = await build_redline_context(sid, current_turn=4, db=db_session)
-
-        assert summaries == []
-        assert len(pairs) > 0
-
-    @pytest.mark.asyncio
-    async def test_redline_summaries_window_limits(self, db_session, child_user) -> None:
-        """Given turn_summaries 含 80 条, When build_redline_context, Then summaries 取最近 50 条。
-        Given/When/Then: D17 window=50。"""
-        from app.core.config import settings
-
-        sid = await _seed_session(db_session, child_user.id)
-        await _seed_messages(db_session, sid, 2)
-        # 80 条摘要
-        fake_summaries = [
-            {"turn_number": i, "summary": f"summary_{i}", "created_at": "2025-01-01T00:00:00"}
-            for i in range(80)
-        ]
-        db_session.add(RollingSummary(
-            session_id=sid, last_turn=80, turn_summaries=fake_summaries,
-        ))
-        await db_session.flush()
-
-        summaries, pairs = await build_redline_context(sid, current_turn=3, db=db_session)
-
-        assert len(summaries) == settings.redline_turn_summaries_window  # 50
-        # 最近 50 条（索引 30-79），首条应为 turn30
-        assert "turn_30" in summaries[0].content or "30" in summaries[0].content
-
-    @pytest.mark.asyncio
-    async def test_redline_summaries_before_pairs(self, db_session, child_user) -> None:
-        """Given summaries 非空 + pairs 非空, When build_redline_context, Then summaries 在前 pairs 在后。
-        Given/When/Then: D15/D16 顺序契约。"""
-        sid = await _seed_session(db_session, child_user.id)
-        await _seed_messages(db_session, sid, 5)
-        db_session.add(RollingSummary(
-            session_id=sid, last_turn=5,
-            turn_summaries=[{"turn_number": 1, "summary": "开局", "created_at": "2025-01-01T00:00:00"}],
-        ))
-        await db_session.flush()
-
-        summaries, pairs = await build_redline_context(sid, current_turn=6, db=db_session)
-
-        assert len(summaries) >= 1
-        assert len(pairs) >= 1
-        # summaries[0] 是 SystemMessage, pairs[0] 是 HumanMessage/AIMessage
-        assert isinstance(summaries[0], SystemMessage)
-        assert isinstance(pairs[0], (HumanMessage, AIMessage))

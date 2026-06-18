@@ -116,7 +116,7 @@ class FakeAuditLLM:
         messages: Any,
         **kwargs: Any,
     ) -> AsyncIterator[AIMessageChunk]:
-        """供危机/红线干预 LLM（call_crisis_llm / call_redline_llm）调用。
+        """供危机干预 LLM（call_crisis_llm）调用。
         它们使用与审查图相同的 provider key "audit_deepseek"，
         但调的是 .astream() 而非 .ainvoke()。
         """
@@ -139,8 +139,6 @@ class FakeAuditLLM:
 def make_audit_tool_call(
     crisis_detected: bool = False,
     crisis_topic: str | None = None,
-    redline_triggered: bool = False,
-    redline_detail: str | None = None,
     guidance_injection: str | None = None,
     turn_summary: str = "审查正常",
 ) -> list[dict]:
@@ -150,7 +148,6 @@ def make_audit_tool_call(
     且 args 可通过 AuditOutputSchema.model_validate() 校验。
     AuditOutputSchema 的 model_validator 要求：
       - crisis_detected=True → crisis_topic 非空
-      - redline_triggered=True → redline_detail 非空
 
     注意：args 键 "guidance_injection" 必须与 AuditOutputSchema 当前字段名一致；
     pydantic v2 extra=ignore 会静默丢弃键名不匹配的字段，导致集成测试断言失败。
@@ -164,8 +161,6 @@ def make_audit_tool_call(
         },
         "crisis_detected": crisis_detected,
         "crisis_topic": crisis_topic,
-        "redline_triggered": redline_triggered,
-        "redline_detail": redline_detail,
         "guidance_injection": guidance_injection,
         "turn_summary": turn_summary,
     }

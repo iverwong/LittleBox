@@ -49,17 +49,6 @@ class AuditRecord(BaseMixin, Base):
         nullable=True,
         comment="注入的指引内容",
     )
-    redline_triggered: Mapped[bool] = mapped_column(
-        Boolean,
-        server_default=text("false"),
-        nullable=False,
-        comment="家长红线命中 0/1",
-    )
-    redline_detail: Mapped[Optional[str]] = mapped_column(
-        Text,
-        nullable=True,
-        comment="命中的红线内容",
-    )
     notify_sent: Mapped[bool] = mapped_column(
         Boolean,
         server_default=text("false"),

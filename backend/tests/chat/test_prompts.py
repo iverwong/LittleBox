@@ -18,18 +18,15 @@ from app.domain.chat.prompts import (
     STUB_CRISIS_SYSTEM_PROMPT,
     STUB_GENDER_FEMALE,
     STUB_GENDER_MALE,
-    STUB_REDLINE_SYSTEM_PROMPT,
     STUB_TIER_EARLY_CHILDHOOD,
     STUB_TIER_LATE_CHILDHOOD,
     STUB_TIER_PRE_TEEN,
     STUB_TIER_TEEN,
     STUB_TIER_YOUNG_ADULT,
     build_crisis_system_prompt,
-    build_redline_system_prompt,
     build_system_prompt,
     format_guidance_wrapper,
     format_reentry_wrapper_crisis,
-    format_reentry_wrapper_redline,
 )
 from langchain_core.messages import SystemMessage
 from tests.conftest import make_child_profile_snapshot as make_snapshot
@@ -211,12 +208,12 @@ class TestStubCount:
     """关注点：TODO(prompts-content) slot 计数。"""
 
     def test_todo_content_slots_count(self) -> None:
-        """M9 Step 4：9 个原有 + 5 个新增 = 14。
+        """M9 Step 4：9 个原有 + 3 个新增 = 12。
 
         原有（9）：_identity_block(1) + _safety_block(1) + _tier_block(5) + _gender_block(2)
-        新增（5）：STUB_CRISIS_SYSTEM_PROMPT + STUB_REDLINE_SYSTEM_PROMPT +
-                  STUB_REENTRY_WRAPPER_CRISIS + STUB_REENTRY_WRAPPER_REDLINE +
-                  STUB_GUIDANCE_WRAPPER
+        新增（3）：STUB_CRISIS_SYSTEM_PROMPT +
+                  STUB_REENTRY_WRAPPER_CRISIS +
+                  GUIDANCE_WRAPPER
         """
         import subprocess
 
@@ -227,7 +224,7 @@ class TestStubCount:
             cwd="/app",
         )
         count = int(result.stdout.strip())
-        assert count == 14, f"expected 14 TODO(prompts-content) lines, got {count}"
+        assert count == 11, f"expected 11 TODO(prompts-content) lines, got {count}"
 
 
 class TestM9InterventionPrompts:
@@ -236,45 +233,28 @@ class TestM9InterventionPrompts:
     测试纪律：纯函数，不触 DB / Redis / 任何 fixture。
     """
 
-    # ---- C.1 / C.2: build_crisis_system_prompt / build_redline_system_prompt ----
+    # ---- C.1: build_crisis_system_prompt ----
 
     def test_crisis_system_prompt_has_5_sections(self) -> None:
         """Given age=10 gender=male, When build_crisis_system_prompt, Then 5 段标题存在。"""
-        msg = build_crisis_system_prompt(make_snapshot(age=10, gender="male"))
+        msg = build_crisis_system_prompt(make_snapshot(age=10, gender="male"),
+                                         crisis_topic="测试主题",
+                                         crisis_turn_dialogue="<turn>test</turn>",
+                                         pre_crisis_turn_dialogue="<turn>pre</turn>")
         content = msg.content
         assert isinstance(msg, SystemMessage)
-        assert "# 身份与原则" in content
-        assert "# 安全底线" in content
-        assert "# 对话风格" in content
-        assert "# 关于对方的性别" in content
-        assert "# 当前对话上下文" in content
-        assert STUB_CRISIS_SYSTEM_PROMPT in content
-
-    def test_redline_system_prompt_has_5_sections(self) -> None:
-        """Given age=10 gender=male, When build_redline_system_prompt, Then 5 段标题存在。"""
-        msg = build_redline_system_prompt(make_snapshot(age=10, gender="male"))
-        content = msg.content
-        assert isinstance(msg, SystemMessage)
-        assert "# 身份与原则" in content
-        assert "# 安全底线" in content
-        assert "# 对话风格" in content
-        assert "# 关于对方的性别" in content
-        assert "# 当前对话上下文" in content
-        assert STUB_REDLINE_SYSTEM_PROMPT in content
+        assert "# 当前首要任务（最高优先级）" in content
+        assert "测试主题" in content
 
     def test_crisis_system_prompt_gender_none_omits_section(self) -> None:
-        """Given gender=None, When build_crisis_system_prompt, Then 不含性别段。"""
-        content = build_crisis_system_prompt(make_snapshot(age=10, gender=None)).content
+        """Given gender=None, When build_crisis_system_prompt, Then 性别段不存在。"""
+        content = build_crisis_system_prompt(make_snapshot(age=10, gender=None),
+                                              crisis_topic="测试主题",
+                                              crisis_turn_dialogue="<turn>test</turn>",
+                                              pre_crisis_turn_dialogue="<turn>pre</turn>").content
         assert "# 关于对方的性别" not in content
-        assert "对方今年 10 岁。" in content
 
-    def test_redline_system_prompt_gender_none_omits_section(self) -> None:
-        """Given gender=None, When build_redline_system_prompt, Then 不含性别段。"""
-        content = build_redline_system_prompt(make_snapshot(age=10, gender=None)).content
-        assert "# 关于对方的性别" not in content
-        assert "对方今年 10 岁。" in content
-
-    # ---- C.3 / C.4: format_reentry_wrapper_* ----
+    # ---- C.2: format_reentry_wrapper_crisis ----
 
     def test_format_reentry_wrapper_crisis(self) -> None:
         """Given user_input='hi', When format_reentry_wrapper_crisis, Then 含 STUB 标记。"""
@@ -283,14 +263,7 @@ class TestM9InterventionPrompts:
         assert "TODO(prompts-content)" in result
         assert "hi" in result
 
-    def test_format_reentry_wrapper_redline(self) -> None:
-        """Given user_input='hi', When format_reentry_wrapper_redline, Then 含 STUB 标记。"""
-        result = format_reentry_wrapper_redline("hi")
-        assert isinstance(result, str)
-        assert "TODO(prompts-content)" in result
-        assert "hi" in result
-
-    # ---- C.5: format_guidance_wrapper ----
+    # ---- C.3: format_guidance_wrapper ----
 
     def test_guidance_wrapper_none_passthrough(self) -> None:
         """Given guidance=None, When format_guidance_wrapper, Then 返回原始 user_input。"""
@@ -301,10 +274,9 @@ class TestM9InterventionPrompts:
         assert format_guidance_wrapper("hi", "") == "hi"
 
     def test_guidance_wrapper_with_guidance(self) -> None:
-        """Given guidance non-empty, When format_guidance_wrapper, Then 含 TODO 标记。"""
+        """Given guidance non-empty, When format_guidance_wrapper, Then 包装到 <guidance> 内。"""
         result = format_guidance_wrapper("hi", "be safe")
         assert result != "hi"
-        assert "TODO(prompts-content)" in result
-        assert "hi" in result
-        assert "be safe" in result
+        assert "<guidance>be safe</guidance>" in result
+        assert "<user_input>hi</user_input>" in result
 

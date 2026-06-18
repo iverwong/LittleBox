@@ -1,7 +1,7 @@
-"""build_main_graph 工厂 + route_by_risk 4 分支回归（T15）。
+"""build_main_graph 工厂 + route_by_risk 3 分支回归（T15）。
 
-去重边界（H5）：不重复 7 节点拓扑断言（test_graph.py::test_graph_has_7_nodes 已有），
-仅覆盖工厂调用 + CompiledStateGraph 类型 + 4 分支 keys 完整性。
+去重边界（H5）：不重复 5 节点拓扑断言（test_graph.py::test_graph_has_5_nodes 已有），
+仅覆盖工厂调用 + CompiledStateGraph 类型 + 3 分支 keys 完整性。
 """
 from __future__ import annotations
 
@@ -16,11 +16,8 @@ def test_build_main_graph_returns_compiled():
     assert isinstance(graph, CompiledStateGraph)
 
 
-def test_route_by_risk_four_branches():
-    """route_by_risk 返回 {crisis, redline, guidance, main} 四分支（D-patch0-12）。
-
-    计划 §3 字面 "safe" 判定为计划误差（H2）。
-    """
+def test_route_by_risk_two_branches():
+    """route_by_risk 返回 {crisis, main} 二分枝。"""
     from app.domain.chat.state import MainDialogueState
 
     state: MainDialogueState = {
@@ -28,7 +25,6 @@ def test_route_by_risk_four_branches():
         "audit_state": {
             "crisis_locked": False,
             "crisis_detected": False,
-            "redline_triggered": False,
             "guidance": None,
         },
         "generated_token_count": 0,
@@ -41,22 +37,7 @@ def test_route_by_risk_four_branches():
     state["audit_state"]["crisis_locked"] = True
     assert route_by_risk(state) == "crisis"
 
-    # crisis_detected → crisis
-    state["audit_state"] = {"crisis_locked": False, "crisis_detected": True,
-                            "redline_triggered": False, "guidance": None}
-    assert route_by_risk(state) == "crisis"
-
-    # redline_triggered → redline
-    state["audit_state"] = {"crisis_locked": False, "crisis_detected": False,
-                            "redline_triggered": True, "guidance": None}
-    assert route_by_risk(state) == "redline"
-
-    # guidance non-None → guidance
-    state["audit_state"] = {"crisis_locked": False, "crisis_detected": False,
-                            "redline_triggered": False, "guidance": "引导文案"}
-    assert route_by_risk(state) == "guidance"
-
     # all default → main
     state["audit_state"] = {"crisis_locked": False, "crisis_detected": False,
-                            "redline_triggered": False, "guidance": None}
+                            "guidance": None}
     assert route_by_risk(state) == "main"

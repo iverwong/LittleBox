@@ -127,8 +127,6 @@ def _build_audit_output_default(
         ),
         crisis_detected=False,
         crisis_topic=None,
-        redline_triggered=False,
-        redline_detail=None,
         guidance_injection=guidance_injection,
         turn_summary=turn_summary,
     )

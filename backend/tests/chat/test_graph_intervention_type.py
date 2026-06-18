@@ -1,8 +1,8 @@
 """Graph-node 级 intervention_type 发射测试：真实图 + 真实 route_by_risk，仅 mock LLM astream。
 
 D-patch1-2 补遗 · 6 条收口必办（闸门 A 裁决）全部内置：
-  A. patch 靶点：app.domain.chat.graph.build_main_llm / _crisis_llm / _redline_llm
-  B. audit_state 完整 5 键 AuditState
+  A. patch 靶点：app.domain.chat.graph.build_main_llm / _crisis_llm
+  B. audit_state 完整 AuditState
   C. ChatContextSchema 含真实 settings + db_session_factory + 种子数据
   D. load_audit_state patch 早于 build_main_graph()
   E. FakeLLM 产非空 content + usage_metadata=None + 无 finish_reason/reasoning 污染
@@ -52,15 +52,13 @@ class FakeLLM:
 def _audit(
     crisis_locked: bool = False,
     crisis_detected: bool = False,
-    redline_triggered: bool = False,
     guidance: str | None = None,
     target_message_id: str | None = None,
 ) -> AuditState:
-    """构造完整 5 键 AuditState，与 _all_false_audit_state 同形。"""
+    """构造完整 AuditState。"""
     return {
         "crisis_locked": crisis_locked,
         "crisis_detected": crisis_detected,
-        "redline_triggered": redline_triggered,
         "guidance": guidance,
         "target_message_id": target_message_id,
     }
@@ -160,60 +158,6 @@ async def test_crisis_emits_crisis(concurrent_db_sessions, engine):
     it_idx = next(i for i, p in enumerate(captured) if "intervention_type" in p)
     delta_idx = next(i for i, p in enumerate(captured) if "delta" in p)
     assert it_idx < delta_idx, "intervention_type 必须在首个 delta 之前"
-
-
-# ---------------------------------------------------------------------------
-# Redline 路由：redline_triggered → intervention_type="redline" 先于 delta
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_redline_emits_redline(concurrent_db_sessions, engine):
-    """redline → call_redline_llm 发射 'redline' 且先于 delta。"""
-    sessions = await concurrent_db_sessions(count=1, tables=TABLES)
-    seed_sess = sessions[0]
-
-    child = await _seed_family_child(seed_sess)
-    sid, child_uid = await _seed_session(seed_sess, child)
-    await seed_sess.commit()
-
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    audit = _audit(redline_triggered=True)
-    ctx = make_chat_context(
-        session_id=sid, child_user_id=child_uid, user_input="test",
-        settings=settings, db_session_factory=factory,
-        audit_redis=AsyncMock(),
-        profile=make_child_profile_snapshot(age=8, gender="male"),
-    )
-
-    with (
-        patch("app.domain.chat.graph.load_audit_state", _stub_load_audit(audit)),
-        patch("app.domain.chat.graph.build_redline_llm", return_value=FakeLLM()),
-    ):
-        graph = build_main_graph()
-        state: MainDialogueState = {
-            "messages": [],
-            "audit_state": audit,
-            "generated_token_count": 0,
-            "client_alive": True,
-            "user_stop_requested": False,
-            "turn_number": 1,
-        }
-        captured: list[dict] = []
-        async for payload in graph.astream(state, context=ctx, stream_mode="custom"):
-            captured.append(payload)
-
-    it_payloads = [p for p in captured if "intervention_type" in p]
-    assert len(it_payloads) >= 1, "redline 路由应有 intervention_type payload"
-    assert it_payloads[0]["intervention_type"] == "redline"
-
-    delta_payloads = [p for p in captured if "delta" in p]
-    assert len(delta_payloads) >= 1, "redline 路由应有 delta payload"
-
-    it_idx = next(i for i, p in enumerate(captured) if "intervention_type" in p)
-    delta_idx = next(i for i, p in enumerate(captured) if "delta" in p)
-    assert it_idx < delta_idx, "intervention_type 必须在首个 delta 之前"
-
 
 # ---------------------------------------------------------------------------
 # Guided 路由：guidance="…" → route_by_risk 走 guidance → call_main_llm → "guided"

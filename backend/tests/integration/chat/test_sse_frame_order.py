@@ -1,21 +1,7 @@
 """Step 15 · GREEN：SSE 帧序 — intervention_type 帧应早于首个 delta 帧。
 
-修复后：
-  stream_graph_to_sse 仍然只映射 delta 帧，
-  但 me.py run_llm_pipeline 在解析到 payload.intervention_type 时
-  直接 _put(frame_sse_event("intervention_type", {"type": it_raw})),
-  该 SSE 事件在首个 delta 帧之前被写入队列 → 帧序正确。
-
-两轮协议：
-  Round 1：正常流 → 创建 session + turn=1
-  → 删除 enqueue_audit 写入的 audit:{sid}=pending
-  → set_ready(sid, turn=1, redline_triggered=True)
-  Round 2：load_audit_state(turn=2, expected_turn=1) 读到 ready
-  → route_by_risk → "redline" → call_redline_llm
-  → writer({"intervention_type": "redline"})（graph.py:473）
-  → me.py 收到 payload → _put SSE event → 再后面的 delta 帧
+移除 redline 路由后，帧序仅验证 crisis 介入场景。
 """
-
 from __future__ import annotations
 
 from typing import Any
@@ -32,22 +18,8 @@ pytestmark = [
 ]
 
 
-class TestSseFrameOrderRed:
-    """RED 存档：SSE 帧序红测（__test__=False 不被 pytest 收集）。"""
-    __test__ = False
-
-    async def test_intervention_before_first_delta(
-        self,
-        api_client: Any,
-        integration_runtime: Any,
-        integration_redis: Any,
-    ) -> None:
-        """Round 2 路由到 redline，intervention_type 帧不存在。"""
-        pass
-
-
 class TestSseFrameOrderGreen:
-    """SSE 帧序 GREEN（两轮，手动设 audit ready→redline）。"""
+    """SSE 帧序 GREEN（两轮，手动设 audit ready→crisis）。"""
 
     async def test_intervention_before_first_delta(
         self,
@@ -55,18 +27,11 @@ class TestSseFrameOrderGreen:
         integration_runtime: Any,
         integration_redis: Any,
     ) -> None:
-        """Round 2 路由到 redline，intervention_type 帧应在首个 delta 前出现。
-
-        手动管理 audit 信号（不依赖 arq worker），独立验证 RC2 修复。
-        call_redline_llm 经 _build_role_llm(Role.MAIN) 走注入缝,
-        因此两个 set_test_llm 都是 Role.MAIN 键(主端 fake)。
-        """
+        """Round 2 路由到 crisis，intervention_type 帧应在首个 delta 前出现。"""
         from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
         from app.domain.audit.signals import AuditSignalsManager
 
         child, headers = await seed_integration_child(integration_runtime)
-        set_test_llm(Role.MAIN, FakeMainLLM())
-        # call_redline_llm 走 Role.MAIN 注入缝,干预回复 fake 同键
         set_test_llm(Role.MAIN, FakeMainLLM(["干预回复"]))
 
         try:
@@ -86,7 +51,7 @@ class TestSseFrameOrderGreen:
             import asyncio
             await asyncio.sleep(2.0)  # 等 throttle lock 过期
 
-            # 用 rr.audit_redis（与 load_audit_state 读同实例）
+            # 设 audit ready → crisis
             await integration_runtime.audit_redis.delete(f"audit:{sid}")
             manager = AuditSignalsManager(
                 integration_runtime.audit_redis,
@@ -96,21 +61,20 @@ class TestSseFrameOrderGreen:
                 sid, turn=1,
                 signals=AuditOutputSchema(
                     dimension_scores=AuditDimensionScores(),
-                    crisis_detected=False,
-                    redline_triggered=True,
-                    redline_detail="帧序测试红线触发",
+                    crisis_detected=True,
+                    crisis_topic="危机主题",
                     turn_summary="SSE 帧序验证测试",
                 ),
             )
 
-            # ---- Round 2（应 redline 分支） ----
+            # ---- Round 2（应 crisis 分支） ----
             async with api_client.stream(
                 "POST", "/api/v1/me/chat/stream",
                 json={"content": "第二轮"}, headers=headers,
             ) as resp:
                 events2 = await parse_sse_events(resp)
 
-            # GREEN 断言：intervention_type 帧存在（RC2 修复后）
+            # GREEN 断言：intervention_type 帧存在
             intervention_events = [
                 d for t, d in events2 if t == "intervention_type"
             ]

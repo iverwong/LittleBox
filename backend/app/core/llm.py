@@ -10,12 +10,11 @@
   4. 测试注入缝(状态):_test_llm_overrides 字典(Role → BaseChatModel)
   5. Role 装配 + 韧性:build_role_primary / build_role_fallback /
      wrap_resilience / _build_role_llm
-  6. 公共入口:build_main_llm / build_crisis_llm / build_redline_llm /
-     build_compression_llm
+  6. 公共入口:build_main_llm / build_crisis_llm / build_compression_llm
   7. 测试注入缝(API):set_test_llm / clear_test_llm,仅接受 Role 枚举
   8. 暂留 _build_chat_openai:无生产调用,留给未来 OpenAI 兼容族 adapter
 
-crisis / redline 行为本同 main(流式+思考、不绑工具),复用 Role.MAIN 绑定;
+crisis 行为本同 main(流式+思考、不绑工具),复用 Role.MAIN 绑定;
 audit note-writer 走独立 Role.AUDIT 绑定。
 
 注入缝纪律:
@@ -266,7 +265,7 @@ def _build_role_llm(role: Role, settings: Settings) -> Runnable:
 # ============================================================================
 # 公共入口
 # ============================================================================
-# crisis / redline 复用 Role.MAIN 绑定(行为本同 main:流式+思考、不绑工具),
+# crisis 复用 Role.MAIN 绑定(行为本同 main:流式+思考、不绑工具),
 # 而非 audit note-writer。compression 独立 Role.COMPRESSION 绑定(无思考、
 # temperature=0.3、retry=1)。
 
@@ -286,11 +285,6 @@ def build_crisis_llm(settings: Settings) -> Runnable:
     行为本同 main(接替对话:流式+思考、不绑工具),而非 audit note-writer。
     retry=3 + bailian 兜底。
     """
-    return _build_role_llm(Role.MAIN, settings)
-
-
-def build_redline_llm(settings: Settings) -> Runnable:
-    """redline 干预 LLM(role=MAIN,不复用 audit)。行为同 build_crisis_llm。"""
     return _build_role_llm(Role.MAIN, settings)
 
 

@@ -8,21 +8,16 @@ graph TD;
 	load_audit_state(load_audit_state)
 	build_messages_main(build_messages_main)
 	build_messages_crisis(build_messages_crisis)
-	build_messages_redline(build_messages_redline)
 	call_main_llm(call_main_llm)
 	call_crisis_llm(call_crisis_llm)
-	call_redline_llm(call_redline_llm)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> load_audit_state;
 	build_messages_crisis --> call_crisis_llm;
 	build_messages_main --> call_main_llm;
-	build_messages_redline --> call_redline_llm;
 	load_audit_state -. &nbsp;crisis&nbsp; .-> build_messages_crisis;
-	load_audit_state -. &nbsp;guidance&nbsp; .-> build_messages_main;
-	load_audit_state -. &nbsp;redline&nbsp; .-> build_messages_redline;
+	load_audit_state -. &nbsp;main&nbsp; .-> build_messages_main;
 	call_crisis_llm --> __end__;
 	call_main_llm --> __end__;
-	call_redline_llm --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc

@@ -19,8 +19,7 @@ class AuditState(TypedDict):
 
     crisis_locked: bool  # 危机锁定（sticky）
     crisis_detected: bool  # 本轮危机检测
-    redline_triggered: bool  # 本轮红线检测
-    guidance: str | None  # 引导注入文本
+    guidance: str | None  # 引导注入文本（红线详情也合并至此字段）
     target_message_id: uuid.UUID | None  # M9: 被审查的 ai_msg id（main 图 PG 兜底路径可空）
 
 

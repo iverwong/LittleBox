@@ -8,7 +8,7 @@ provider 工厂，重切为三层正交 code 声明：
 2. **模型档** `MODEL_PROFILES`：按模型族声明 transport / reasoning / tools /
    multimodal 能力。transport 由模型档唯一决定，结构上不可能再分叉。
 3. **role 绑定** `ROLES`：把 endpoint + model + 思考参数 + fallback + 重试次数
-   绑定到 role（main / audit / compression）。crisis / redline 复用
+   绑定到 role（main / audit / compression）。crisis 复用
    `ROLES[Role.MAIN]`，行为同 main（流式 + 思考、不绑工具），而非 audit。
 
 构建链：`role → (endpoint, model) → 模型档给 transport+方言 → 实例化`。
@@ -55,7 +55,7 @@ LLM_REQUEST_TIMEOUT_SECONDS = 60.0
 
 # —— 枚举：把散落字符串固化进类型系统（StrEnum 保留 str 兼容 + 穷尽性 + 防 typo）——
 class Role(StrEnum):
-    """主对话 / 审查 / 压缩三个 role。crisis / redline 复用 main（不另列枚举值）。"""
+    """主对话 / 审查 / 压缩三个 role。crisis 复用 main（不另列枚举值）。"""
 
     MAIN = "main"
     AUDIT = "audit"
@@ -189,7 +189,7 @@ class RoleBinding:
     `fallback` 绑定上的 retry_attempts（COMPRESSION 的 fallback 默认 = 3）
     永不被消费。Step 2/3 不可误读为「兜底也重试 3 次」。若未来要让兜底
     也有自己的重试预算，需把 retry_attempts 上提到 `_build_role_llm`
-    显式读两遍（参见 plan #3 「crisis/redline 重锦到 main」注释）。
+    显式读两遍（参见 plan #3 「crisis 重锦到 main」注释）。
     """
 
     endpoint: EndpointName
@@ -204,7 +204,7 @@ class RoleBinding:
 # 默认模型常量（统一名，避免散落字符串）
 _DSV4 = "deepseek-v4-flash"
 
-# crisis / redline 不在此处单列——它们复用 ROLES[Role.MAIN]
+# crisis 不在此处单列——复用 ROLES[Role.MAIN]
 # （接替对话：流式 + 思考、不绑工具，行为同 main 而非 audit）
 ROLES: dict[Role, RoleBinding] = {
     # main：deepseek→bailian 真兜底（修今日 fallback_provider="deepseek"

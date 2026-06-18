@@ -68,8 +68,6 @@ _AUDIT_OUTPUT = AuditOutputSchema(
     dimension_scores=AuditDimensionScores(),
     crisis_detected=False,
     crisis_topic=None,
-    redline_triggered=False,
-    redline_detail=None,
     guidance_injection="test guidance",
     turn_summary="ok",
 )
@@ -86,7 +84,6 @@ class TestLoadAuditState:
         result = await load_audit_state(state, runtime)
         audit = result.get("audit_state", {})
         assert audit.get("crisis_detected") is False
-        assert audit.get("redline_triggered") is False
         assert audit.get("guidance") is None
 
     async def _do_poll_wait_test(self, kind, turn_number=2, pg_locked=False, **kwargs):
@@ -196,5 +193,4 @@ class TestLoadAuditState:
         mock_pg.assert_not_called()  # 首轮不走 PG
         audit = result.get("audit_state", {})
         assert audit.get("crisis_detected") is False
-        assert audit.get("redline_triggered") is False
         assert audit.get("guidance") is None

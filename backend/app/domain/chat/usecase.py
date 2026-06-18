@@ -78,7 +78,7 @@ async def persist_ai_turn(
         finish_reason: LLM stop reason (stop / length / content_filter / user_stopped)
         content: accumulated text content
         turn_number: 当前轮号（commit① human + commit② ai 共享同号）
-        intervention_type: None=normal, crisis/redline/guided/override
+        intervention_type: None=normal, crisis/guided
 
     Returns:
         The id of the newly inserted AI message row (uuid.UUID).

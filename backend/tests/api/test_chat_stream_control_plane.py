@@ -1228,45 +1228,6 @@ async def test_intervention_type_crisis(lifecycle_ctx):
 
 
 @pytest.mark.asyncio
-async def test_intervention_type_redline(lifecycle_ctx):
-    """redline 路由：ai 行 intervention_type 落库为 redline。"""
-    from uuid import uuid4
-
-    client, headers, child = await lifecycle_setup(lifecycle_ctx)
-    sid = uuid4()
-    lifecycle_ctx.seed_sess.add(
-        SessionModel(id=sid, child_user_id=child.id, title="test"),
-    )
-    await lifecycle_ctx.seed_sess.commit()
-
-    fake_payloads = [
-        {"intervention_type": "redline"},
-        {"delta": "redline response"},
-    ]
-    lifecycle_ctx.rr.main_graph.astream = _make_fake_graph_astream(fake_payloads)
-
-    resp = await client.post(
-        "/api/v1/me/chat/stream",
-        json=make_payload("hello", session_id=str(sid)),
-        headers=headers,
-    )
-    assert resp.status_code == 200
-
-    lifecycle_ctx.assert_sess.expire_all()
-    msgs = (
-        (await lifecycle_ctx.assert_sess.execute(
-            select(Message)
-            .where(Message.session_id == sid)
-            .order_by(Message.created_at),
-        ))
-        .scalars()
-        .all()
-    )
-    assert len(msgs) == 2
-    assert msgs[1].intervention_type == InterventionType.redline
-
-
-@pytest.mark.asyncio
 async def test_intervention_type_guided(lifecycle_ctx):
     """guided 路由：ai 行 intervention_type 落库为 guided。"""
     from uuid import uuid4

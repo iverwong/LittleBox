@@ -26,7 +26,6 @@ from app.core.llm import (
     build_compression_llm,
     build_crisis_llm,
     build_main_llm,
-    build_redline_llm,
     build_role_fallback,
     build_role_primary,
     clear_test_llm,
@@ -585,7 +584,7 @@ class TestBuildBinding:
 # - 注入缝：set_test_llm(Role.MAIN, fake) 短路 build_role_primary；
 #   build_role_fallback 不读 override（语义「主端 fake / 备端 real」不变）
 # - wrap_resilience 链式形态：primary.with_retry().with_fallbacks([fallback])
-# - _build_role_llm / build_main_llm / build_crisis_llm / build_redline_llm /
+# - _build_role_llm / build_main_llm / build_crisis_llm /
 #   build_compression_llm 串联三者,retry 次数取 ROLES[role].retry_attempts
 
 
@@ -733,7 +732,7 @@ def _build_role_llm_for_test(role, settings):
 
 
 class TestBuildMainLlm:
-    """build_main_llm：role=MAIN 入口（crisis/redline 也走此）。"""
+    """build_main_llm：role=MAIN 入口（crisis 也走此）。"""
 
     def test_returns_runnable_with_fallbacks(self) -> None:
         """build_main_llm 返回 RunnableWithFallbacks（retry=3 + bailian 兜底）。"""
@@ -744,7 +743,7 @@ class TestBuildMainLlm:
 
 
 class TestBuildCrisisLlm:
-    """build_crisis_llm：role=MAIN 复用（关注点 #6 crisis/redline 重锦到 main）。"""
+    """build_crisis_llm：role=MAIN 复用（关注点 #6 crisis 重锦到 main）。"""
 
     def test_uses_main_binding(self) -> None:
         """build_crisis_llm 与 build_main_llm 行为一致（同 Role.MAIN 绑定）。"""
@@ -752,17 +751,6 @@ class TestBuildCrisisLlm:
         result = build_crisis_llm(s)
         assert isinstance(result, RunnableWithFallbacks)
         # 关注点 #6 实证:crisis 与 main 走同一 fallback 路径
-        assert len(result.fallbacks) == 1  # type: ignore[attr-defined]
-
-
-class TestBuildRedlineLlm:
-    """build_redline_llm：role=MAIN 复用（同 crisis）。"""
-
-    def test_uses_main_binding(self) -> None:
-        """build_redline_llm 与 build_main_llm 行为一致。"""
-        s = _FakeSettings()
-        result = build_redline_llm(s)
-        assert isinstance(result, RunnableWithFallbacks)
         assert len(result.fallbacks) == 1  # type: ignore[attr-defined]
 
 

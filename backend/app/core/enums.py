@@ -37,13 +37,11 @@ class MessageRole(str, enum.Enum):
 
 class NotificationType(str, enum.Enum):
     crisis = "crisis"
-    redline = "redline"
     daily_summary = "daily_summary"
 
 
 class InterventionType(str, enum.Enum):
     crisis = "crisis"  # 系统硬底线触发的三级接管
-    redline = "redline"  # 家长红线触发的三级接管
     guided = "guided"  # 二级注入提醒后的回复
 
 

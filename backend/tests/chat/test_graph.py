@@ -1,10 +1,10 @@
-"""Tests for the main dialogue graph (7 nodes + 4-branch router).
+"""Tests for the main dialogue graph (5 nodes + 3-branch router).
 
 M6 Step 6 coverage:
 - Graph topology: edges load_audit_state → route_by_risk → assembly → LLM → END
-- 7 nodes + 4 conditional edges (crisis / redline / guidance / main)
-- route_by_risk 5-signal → 4-output priority
-- stub nodes: crisis_llm / redline_llm fall back to main + warning
+- 5 nodes + 3 conditional edges (crisis / guidance / main)
+- route_by_risk 5-signal → 3-output priority
+- stub nodes: crisis_llm falls back to main + warning
 - M8 always routes to "main" (all signals False)
 """
 
@@ -14,7 +14,6 @@ from app.domain.chat.graph import (
     build_main_graph,
     call_crisis_llm,
     call_main_llm,
-    call_redline_llm,
     load_audit_state,
     route_by_risk,
 )
@@ -41,7 +40,6 @@ _FAKE_RUNTIME = _mk_runtime()
 _ALL_FALSE_AUDIT = {
     "crisis_locked": False,
     "crisis_detected": False,
-    "redline_triggered": False,
     "guidance": None,
     "target_message_id": None,
 }
@@ -77,28 +75,26 @@ def test_graph_has_load_audit_state_entry_point():
 
 
 def test_graph_llm_nodes_terminate_at_end():
-    """call_main_llm, call_crisis_llm, call_redline_llm all have edges → __end__."""
+    """call_main_llm, call_crisis_llm all have edges → __end__."""
     graph = main_graph.get_graph()
     # Collect node names that have an edge TO __end__
     nodes_leading_to_end = {e.source for e in graph.edges if e.target == "__end__"}
-    expected = {"call_main_llm", "call_crisis_llm", "call_redline_llm"}
+    expected = {"call_main_llm", "call_crisis_llm"}
     assert expected.issubset(nodes_leading_to_end), (
         f"{expected} not all leading to __end__. Found: {nodes_leading_to_end}"
     )
 
 
-def test_graph_has_7_nodes():
-    """7 个注册节点 + 条件路由（C6：节点拓扑完整性）。"""
+def test_graph_has_5_nodes():
+    """5 个注册节点 + 条件路由。"""
     graph = main_graph.get_graph()
     node_names = set(graph.nodes.keys())
     expected = {
         "load_audit_state",
         "build_messages_main",
         "build_messages_crisis",
-        "build_messages_redline",
         "call_main_llm",
         "call_crisis_llm",
-        "call_redline_llm",
     }
     assert expected.issubset(node_names), (
         f"Missing nodes: {expected - node_names}"
@@ -114,60 +110,20 @@ def test_graph_no_db_write_nodes():
 
 
 # ---------------------------------------------------------------------------
-# G2: route_by_risk — 5 signals → 4 outputs priority
+# G2: route_by_risk — 5 signals → 3 outputs priority
 # ---------------------------------------------------------------------------
 
 
 def test_route_by_risk_crisis_locked_highest_priority():
-    """crisis_locked=true + redline_triggered=true → crisis wins (priority ①)."""
+    """crisis_locked=true → crisis wins."""
     state = _make_state(
         audit_state={
             "crisis_locked": True,
             "crisis_detected": False,
-            "redline_triggered": True,
             "guidance": "some guidance",
         }
     )
     assert route_by_risk(state) == "crisis"
-
-
-def test_route_by_risk_crisis_detected_over_redline():
-    """crisis_detected=true + redline_triggered=true → crisis wins (priority ② > ③)."""
-    state = _make_state(
-        audit_state={
-            "crisis_locked": False,
-            "crisis_detected": True,
-            "redline_triggered": True,
-            "guidance": "some guidance",
-        }
-    )
-    assert route_by_risk(state) == "crisis"
-
-
-def test_route_by_risk_redline_over_guidance():
-    """redline_triggered=true + guidance!=None → redline wins (priority ③ > ④)."""
-    state = _make_state(
-        audit_state={
-            "crisis_locked": False,
-            "crisis_detected": False,
-            "redline_triggered": True,
-            "guidance": "please be careful",
-        }
-    )
-    assert route_by_risk(state) == "redline"
-
-
-def test_route_by_risk_guidance_branch():
-    """guidance!=None, all others false → guidance."""
-    state = _make_state(
-        audit_state={
-            "crisis_locked": False,
-            "crisis_detected": False,
-            "redline_triggered": False,
-            "guidance": "please be encouraging",
-        }
-    )
-    assert route_by_risk(state) == "guidance"
 
 
 def test_route_by_risk_m6_always_main():
@@ -176,7 +132,6 @@ def test_route_by_risk_m6_always_main():
         audit_state={
             "crisis_locked": False,
             "crisis_detected": False,
-            "redline_triggered": False,
             "guidance": None,
         }
     )
@@ -216,7 +171,6 @@ async def test_load_audit_state_m6_returns_all_false():
     audit = result["audit_state"]
     assert audit["crisis_locked"] is False
     assert audit["crisis_detected"] is False
-    assert audit["redline_triggered"] is False
     assert audit["guidance"] is None
 
 
@@ -274,36 +228,6 @@ async def test_crisis_llm_streams_via_writer(monkeypatch):
     deltas = [w for w in written if "delta" in w]
     assert len(deltas) >= 1
     assert deltas[0]["delta"] == "回复"
-
-
-@pytest.mark.asyncio
-async def test_redline_llm_streams_via_writer(monkeypatch):
-    """call_redline_llm 通过 stream writer 输出 delta + finish_reason。"""
-    state = _make_state(
-        messages=[SystemMessage(content="sys"), HumanMessage(content="hi")],
-    )
-    runtime = _make_stub_runtime()
-
-    written: list[dict] = []
-    fake_writer = type("W", (), {"__call__": lambda self, d: written.append(d)})()
-
-    fake_chunk = AIMessageChunk(
-        content="红线回复",
-        response_metadata={"finish_reason": "stop"},
-    )
-
-    class _FakeLLM:
-        async def astream(self, msgs):
-            yield fake_chunk
-
-    monkeypatch.setattr("app.domain.chat.graph.get_stream_writer", lambda: fake_writer)
-    monkeypatch.setattr("app.domain.chat.graph.build_redline_llm", lambda _: _FakeLLM())
-
-    await call_redline_llm(state, runtime)
-
-    deltas = [w for w in written if "delta" in w]
-    assert len(deltas) >= 1
-    assert deltas[0]["delta"] == "红线回复"
 
 
 # ---------------------------------------------------------------------------

@@ -102,6 +102,7 @@ async def load_active_messages_with_summary(
 #   后续做日中审查 agent 时复用其 rolling_summaries 注入逻辑。
 #   现行调用点(见 app/domain/chat/graph.py::build_messages_main)正切到
 #   load_active_messages_with_summary 拿 messages 表的 active summary,绕开此处。
+# FIX 这个方法的逻辑需要改
 async def load_active_history_for_assembly(
     sid: UUID,
     current_turn: int,
@@ -260,31 +261,6 @@ async def build_crisis_context(
         .all()
     )
     return anchor_system, [to_lc_message(m) for m in after_rows]
-
-
-async def build_redline_context(
-    sid: UUID,
-    current_turn: int,
-    db: AsyncSession,
-) -> tuple[list[SystemMessage], list[BaseMessage]]:
-    """红线上下文装配：turn_summaries 前缀 + 最近 active 消息。
-
-    Returns:
-        (summaries_systems, recent_messages)
-        - summaries_systems: 最近 redline_turn_summaries_window 条摘要的 SystemMessage 列表
-        - recent_messages: 最近 redline_context_recent_messages 条 active 消息
-    """
-    rs = await db.scalar(select(RollingSummary).where(RollingSummary.session_id == sid).limit(1))
-    summaries: list[SystemMessage] = []
-    if rs and rs.turn_summaries:
-        # 取最近 redline_turn_summaries_window 条
-        recent = rs.turn_summaries[-settings.redline_turn_summaries_window :]
-        for s in recent:
-            text = f"Turn {s.get('turn_number', '?')}: {s.get('summary', '')}"
-            summaries.append(SystemMessage(content=text))
-
-    messages = []
-    return summaries, messages
 
 
 # ---- LangChain 消息转换 ----

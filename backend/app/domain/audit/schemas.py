@@ -126,14 +126,6 @@ class AuditOutputSchema(BaseModel):
         default=None,
         description="危机主题描述，crisis_detected=True 时必须提供",
     )
-    redline_triggered: bool = Field(
-        default=False,
-        description="是否触发红线话题",
-    )
-    redline_detail: str | None = Field(
-        default=None,
-        description="红线触发详情，redline_triggered=True 时必须提供",
-    )
     guidance_injection: str | None = Field(
         default=None,
         max_length=300,
@@ -150,14 +142,6 @@ class AuditOutputSchema(BaseModel):
             raise ValueError("crisis_detected=True 时 crisis_topic 必须非空")
         if not self.crisis_detected and self.crisis_topic is not None:
             raise ValueError("crisis_detected=False 时 crisis_topic 必须为 None")
-        return self
-
-    @model_validator(mode="after")
-    def _check_redline_consistency(self) -> Self:
-        if self.redline_triggered and self.redline_detail is None:
-            raise ValueError("redline_triggered=True 时 redline_detail 必须非空")
-        if not self.redline_triggered and self.redline_detail is not None:
-            raise ValueError("redline_triggered=False 时 redline_detail 必须为 None")
         return self
 
 

@@ -1,11 +1,13 @@
-"""主对话 LangGraph — 7 节点 + 1 条件路由（4 分支）。
+"""主对话 LangGraph — 5 节点 + 1 条件路由（2 分支）。
 
-图拓扑（M9 主体最终态，patch0 锁死）：
+图拓扑（redline 移除后，guidance 注入）：
     START → load_audit_state → route_by_risk
-    ├─ crisis  → build_messages_crisis  → call_crisis_llm  → END
-    ├─ redline → build_messages_redline → call_redline_llm → END
-    ├─ guidance→ build_messages_main    → call_main_llm    → END
-    └─ main    → build_messages_main    → call_main_llm    → END
+    ├─ crisis → build_messages_crisis → call_crisis_llm → END
+    └─ main   → build_messages_main   → call_main_llm    → END
+
+redline 和 guidance 注入在同一层级处理：两者都在
+load_audit_state 中合并到 guidance 字段，通过 format_guidance_wrapper
+注入下一轮 human 消息，不再走独立 LLM 节点。
 
 周知（T5）：
   - persist_ai_turn / enqueue_audit 为顶层 helper（me.py generator 调用），不在图内
@@ -32,7 +34,7 @@ from sqlalchemy import select, update
 
 from app.core.enums import MessageRole, MessageStatus
 from app.core.history_xml import serialize_history_to_xml
-from app.core.llm import build_compression_llm, build_crisis_llm, build_main_llm, build_redline_llm
+from app.core.llm import build_compression_llm, build_crisis_llm, build_main_llm
 from app.core.llm_extractors import (
     extract_finish_reason,
     extract_reasoning_content,
@@ -49,7 +51,6 @@ from app.domain.chat.compression import (
     split_for_compression,
 )
 from app.domain.chat.context import (
-    build_redline_context,
     load_active_messages_with_summary,
     load_recent_messages,
     to_lc_message,
@@ -58,10 +59,8 @@ from app.domain.chat.context_schema import ChatContextSchema
 from app.domain.chat.models import Message
 from app.domain.chat.prompts import (
     build_crisis_system_prompt,
-    build_redline_system_prompt,
     build_system_prompt,
     format_guidance_wrapper,
-    format_reentry_wrapper_redline,
 )
 from app.domain.chat.state import AuditState, MainDialogueState
 
@@ -101,7 +100,11 @@ async def load_audit_state(
        failed/miss/... → PG 粘性 crisis_locked + 当轮 all-False + 日志
 
     PG 查询 _pg_crisis_fallback 在 ready 和降级分支都执行，(b) 单一来源。
-    """
+
+    红线处理（redline_triggered）：审查 agent 通过 guidance_injection 字段
+    注入提醒，不再走独立 redline LLM 节点。
+
+    PG 查询 _pg_crisis_fallback 在 ready 和降级分支都执行，(b) 单一来源。"""
     ctx = runtime.context
     turn = state.get("turn_number", 1)
 
@@ -126,7 +129,6 @@ async def load_audit_state(
             "audit_state": {
                 "crisis_locked": pg_fb["crisis_locked"],
                 "crisis_detected": result.signals.crisis_detected,
-                "redline_triggered": result.signals.redline_triggered,
                 "guidance": result.signals.guidance_injection or None,
                 "target_message_id": pg_fb["target_message_id"],
             },
@@ -151,7 +153,6 @@ async def load_audit_state(
         "audit_state": {
             "crisis_locked": pg_fb["crisis_locked"],
             "crisis_detected": False,
-            "redline_triggered": False,
             "guidance": None,
             "target_message_id": pg_fb["target_message_id"],
         },
@@ -164,7 +165,6 @@ def _all_false_audit_state() -> dict:
         "audit_state": {
             "crisis_locked": False,
             "crisis_detected": False,
-            "redline_triggered": False,
             "guidance": None,
             "target_message_id": None,
         },
@@ -172,26 +172,23 @@ def _all_false_audit_state() -> dict:
 
 
 def route_by_risk(state: MainDialogueState) -> str:
-    """5 signals → 4 routing outputs (baseline §7.1.1).
+    """路由：crisis_locked → "crisis"，否则 → "main"。
 
-    Priority: crisis_locked (① sticky) > crisis_detected (②) >
-              redline_triggered (③) > guidance (④) > else (⑤ main)
+    guidance 注入不再走独立图分支。redline 和 guidance 都在
+    load_audit_state 中合并到 guidance 字段，由 build_messages_main
+    的 format_guidance_wrapper 注入。
 
-    Args:
-        state["audit_state"]: AuditState with keys crisis_locked / crisis_detected /
-                              redline_triggered / guidance
     Returns:
-        "crisis" | "redline" | "guidance" | "main"
+        "crisis" | "main"
     """
     audit: AuditState = state["audit_state"]
     if audit["crisis_locked"]:
         return "crisis"
-    else:
-        return "main"
+    return "main"
 
 
 # ---------------------------------------------------------------------------
-# 装配节点：3 个 build_messages_*（M9 主体 D 层仅改函数体，拓扑零 diff）
+# 装配节点：2 个 build_messages_*（M9 主体 D 层仅改函数体，拓扑零 diff）
 # ---------------------------------------------------------------------------
 
 
@@ -286,9 +283,7 @@ async def _handle_compress(
             .where(Message.id.in_(to_compress_ids))
             .values(status=MessageStatus.compressed)
         )
-        await db.execute(
-            update(Session).where(Session.id == sid).values(needs_compression=False)
-        )
+        await db.execute(update(Session).where(Session.id == sid).values(needs_compression=False))
         db.add(_summary_obj)
         await db.commit()
 
@@ -459,29 +454,6 @@ async def build_messages_crisis(
     }
 
 
-async def build_messages_redline(
-    state: MainDialogueState,
-    runtime: Runtime[ChatContextSchema],
-) -> dict:
-    """redline 专属装配：redline system prompt → summaries → recent pairs → reentry wrapper。"""
-    ctx = runtime.context
-
-    async with ctx.db_session_factory() as db:
-        summaries_systems, recent_messages = await build_redline_context(
-            ctx.session_id,
-            state["turn_number"],
-            db,
-        )
-    return {
-        "messages": [
-            build_redline_system_prompt(ctx.child_profile),
-            *summaries_systems,
-            *recent_messages,
-            HumanMessage(content=format_reentry_wrapper_redline(ctx.user_input)),
-        ]
-    }
-
-
 # ---------------------------------------------------------------------------
 # LLM 节点（Runtime DI，资源从 runtime.context 获取）
 # ---------------------------------------------------------------------------
@@ -494,13 +466,13 @@ async def _stream_llm_chunks(
     profile: ModelProfile,
     intervention_type: str | None,
 ) -> dict:
-    """3 个 call_*_llm 公共 LLM 流式消费 + chunk 信号派发(G3-1 落点)。
+    """2 个 call_*_llm 公共 LLM 流式消费 + chunk 信号派发(G3-1 落点)。
 
     本节点实现内部私有协程(下划线前缀模块内私有),非 Runnable /
-    非 @traceable,不产新 LangGraph span(节点名仍为 call_main/crisis/
-    redline_llm,LangGraph 节点名取自函数名,G3-5 trace 零变化)。
+    非 @traceable,不产新 LangGraph span(节点名仍为 call_main/crisis_llm,
+    LangGraph 节点名取自函数名,G3-5 trace 零变化)。
 
-    公共行为(verbatim 复原原 3 个 call_*_llm 公共部分,G3-4 行为字节级等价):
+    公共行为(verbatim 复原原 2 个 call_*_llm 公共部分,G3-4 行为字节级等价):
     - 消息消费 state["messages"](list copy)
     - intervention_type emit(emit 时机:在 async for 之前;None 时跳过)
     - async for chunk llm.astream(llm_messages)
@@ -597,41 +569,20 @@ async def call_crisis_llm(
     )
 
 
-async def call_redline_llm(
-    state: MainDialogueState,
-    runtime: Runtime[ChatContextSchema],
-) -> dict:
-    """调 redline 干预 LLM，通过 get_stream_writer() 流式输出 chunk。
-
-    委托 `_stream_llm_chunks` 公共协程。干预类型无条件 emit `"redline"`。
-    """
-    ctx = runtime.context
-    return await _stream_llm_chunks(
-        state,
-        ctx,
-        llm=build_redline_llm(ctx.settings),
-        # redline 复用 main 绑定(Step 3 收口),模型档同步沿用 main。
-        profile=role_profile(Role.MAIN),
-        intervention_type="redline",
-    )
-
-
 # ---------------------------------------------------------------------------
 # 图工厂（替换模块级 _builder + main_graph 单例）
 # ---------------------------------------------------------------------------
 
 
 def build_main_graph() -> CompiledStateGraph:
-    """构建主对话图（7 节点 + 4 分支条件路由）。"""
+    """构建主对话图（5 节点 + 2 分支条件路由）。"""
     builder = StateGraph(MainDialogueState, context_schema=ChatContextSchema)
 
     builder.add_node("load_audit_state", load_audit_state)
     builder.add_node("build_messages_main", build_messages_main)
     builder.add_node("build_messages_crisis", build_messages_crisis)
-    builder.add_node("build_messages_redline", build_messages_redline)
     builder.add_node("call_main_llm", call_main_llm)
     builder.add_node("call_crisis_llm", call_crisis_llm)
-    builder.add_node("call_redline_llm", call_redline_llm)
 
     builder.add_edge("__start__", "load_audit_state")
 
@@ -640,17 +591,13 @@ def build_main_graph() -> CompiledStateGraph:
         route_by_risk,
         {
             "crisis": "build_messages_crisis",
-            "redline": "build_messages_redline",
-            "guidance": "build_messages_main",
             "main": "build_messages_main",
         },
     )
 
     builder.add_edge("build_messages_main", "call_main_llm")
     builder.add_edge("build_messages_crisis", "call_crisis_llm")
-    builder.add_edge("build_messages_redline", "call_redline_llm")
     builder.add_edge("call_main_llm", "__end__")
     builder.add_edge("call_crisis_llm", "__end__")
-    builder.add_edge("call_redline_llm", "__end__")
 
     return builder.compile()  # type: ignore[reportReturnType]

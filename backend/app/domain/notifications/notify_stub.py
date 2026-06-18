@@ -1,4 +1,7 @@
-"""通知桩(D-5,Phase 4.5):audit 域危机/红线通知的占位实现。
+"""通知桩(D-5,Phase 4.5):audit 域危机通知的占位实现。
+
+M10+ 替换为真实推送(APNs / 极光 / 微信模板消息等)时,只改本文件 send()
+实现,不动调用方(audit/usecase.py)。
 
 M10+ 替换为真实推送(APNs / 极光 / 微信模板消息等)时,只改本文件 send()
 实现,不动调用方(audit/usecase.py)。
@@ -25,7 +28,7 @@ def send(
     """发送通知桩(占位实现)。
 
     Args:
-        notify_type: "crisis" 或 "redline"
+        notify_type: "crisis"
         session_id:  触发通知的 session UUID
         turn_number: 触发通知的 turn 号
         target_message_id: 触发通知的目标 message UUID(可空)

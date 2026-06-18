@@ -28,7 +28,6 @@ from app.core.llm import (
     build_compression_llm,
     build_crisis_llm,
     build_main_llm,
-    build_redline_llm,
     build_role_fallback,
     build_role_primary,
     clear_test_llm,
@@ -178,7 +177,7 @@ class TestBuildRoleFallback:
 
 
 # ---------------------------------------------------------------------------
-# T3: build_main_llm / build_crisis_llm / build_redline_llm / build_compression_llm
+# T3: build_main_llm / build_crisis_llm / build_compression_llm
 # ---------------------------------------------------------------------------
 
 
@@ -194,7 +193,7 @@ class TestBuildMainLlm:
 
 
 class TestBuildCrisisLlm:
-    """build_crisis_llm 走 Role.MAIN 绑定(关注点 6:crisis/redline 复用 main,不复用 audit)。"""
+    """build_crisis_llm 走 Role.MAIN 绑定(关注点 6:crisis 复用 main,不复用 audit)。"""
 
     def test_uses_main_binding_not_audit(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """crisis 走 MAIN 绑定(关注点 6),非 AUDIT。"""
@@ -210,26 +209,6 @@ class TestBuildCrisisLlm:
         build_crisis_llm(_FakeSettings())
         assert called_with == [Role.MAIN], (
             f"crisis 应走 MAIN 绑定(关注点 6),实际 {called_with}"
-        )
-
-
-class TestBuildRedlineLlm:
-    """build_redline_llm 走 Role.MAIN 绑定(同 crisis)。"""
-
-    def test_uses_main_binding_not_audit(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Given settings When build_redline_llm Then _build_role_llm 被调以 Role.MAIN。"""
-        from app.core.llm import _build_role_llm
-
-        called_with: list[Role] = []
-
-        def spy(role: Role, settings: Any) -> Any:
-            called_with.append(role)
-            return _build_role_llm(role, settings)
-
-        monkeypatch.setattr("app.core.llm._build_role_llm", spy)
-        build_redline_llm(_FakeSettings())
-        assert called_with == [Role.MAIN], (
-            f"redline 应走 MAIN 绑定(关注点 6),实际 {called_with}"
         )
 
 

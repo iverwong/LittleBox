@@ -37,6 +37,7 @@ def build_audit_system_prompt(child_profile: ChildProfileSnapshot, max_iter: int
     else:
         gender = "孩子"
 
+    # TODO 后续接实际 childprofile
     redline = "无配置"
 
     emotional = 5
@@ -177,9 +178,8 @@ def _signal_guidelines() -> str:
     return """\
 # 信号判断标准
 - **危机信号**（crisis_detected）：子账号表达自残、自杀、被虐待、被严重霸凌等紧急安全威胁。
-- **红线信号**（redline_triggered）：色情内容、暴力煽动、违法活动引导、仇恨言论等违规行为。
+- **红线信号**：色情内容、暴力煽动、违法活动引导、仇恨言论等违规行为。
 - 两者可同时触发，也可只触发其一。
-- 触发时必须在对应 detail / topic 字段中描述具体内容。
 
 # 文体指引
 session_notes 采用自由叙事风格，不强求固定骨架/章节。重点记录：

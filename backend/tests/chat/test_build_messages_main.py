@@ -42,7 +42,6 @@ async def test_build_messages_main_assembles_system_and_history():
     state: MainDialogueState = {
         "messages": [], "audit_state": {"crisis_locked": False,
                                          "crisis_detected": False,
-                                         "redline_triggered": False,
                                          "guidance": None,
                                          "target_message_id": None},
         "generated_token_count": 0, "client_alive": True,

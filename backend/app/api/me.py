@@ -425,7 +425,6 @@ async def chat_stream(
             "audit_state": {
                 "crisis_locked": False,
                 "crisis_detected": False,
-                "redline_triggered": False,
                 "guidance": None,
                 "target_message_id": None,
             },
