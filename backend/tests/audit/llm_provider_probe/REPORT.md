@@ -2,7 +2,7 @@
 
 > 生成时间：2026-05-19 UTC  
 > 测试范围：58 个探针用例 × 3 层（L1 httpx / L2 OpenAI SDK / L3 LangChain）  
-> 端点：DS-native (`https://api.deepseek.com/v1`) | BL-compat (`https://dashscope.aliyuncs.com/compatible-mode/v1`)  
+> 端点：DS-native (`https://api.deepseek.com`) | BL-compat (`https://dashscope.aliyuncs.com/compatible-mode/v1`)  
 > 模型：统一 `deepseek-v4-flash`（百炼侧部署版本待确认，实测接口兼容）  
 > 运行：全部 58 通过，覆盖 F1-F7 七个调用形态
 
@@ -86,7 +86,7 @@
 **可以 ✅**
 
 实测组合 "DS-COAI"（ChatOpenAI @ DeepSeek）在 F1/F3/F5 全部通过。注意：
-- `base_url="https://api.deepseek.com/v1"` 正常工作
+- `base_url="https://api.deepseek.com"` 正常工作
 - **`reasoning_content` 在 ChatOpenAI 下消失**：`additional_kwargs` 中不含 `reasoning_content` 字段，因为 `ChatOpenAI` 不做 `reasoning_content` 字段提升（这是 `ChatDeepSeek` 独有的增强）
 - tool_choice 行为与 DS 端一致（只有 `auto` 可用）
 

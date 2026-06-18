@@ -206,7 +206,7 @@ async def test_threshold_sets_needs_compression_flag(lifecycle_ctx):
         for p in [
             {"delta": "x"},
             {"finish_reason": "stop"},
-            {"usage_metadata": {"input_tokens": 300_000, "output_tokens": 200_001, "total_tokens": 500_001}},
+            {"usage_metadata": {"input_tokens": 600_000, "output_tokens": 200_001, "total_tokens": 800_001}},
         ]:
             yield p
 
@@ -218,7 +218,7 @@ async def test_threshold_sets_needs_compression_flag(lifecycle_ctx):
 
     session_after = await lifecycle_ctx.assert_sess.get(SessionModel, sid)
     assert session_after.context_size_tokens is not None, "context_size_tokens should be set"
-    total_usage = 300_000 + 200_001
+    total_usage = 600_000
     assert session_after.context_size_tokens == total_usage, (
         f"expected {total_usage}, got {session_after.context_size_tokens}"
     )
@@ -253,7 +253,7 @@ async def test_context_size_tokens_snapshot_not_accumulate(lifecycle_ctx):
     await resp.aclose()
 
     s1 = await lifecycle_ctx.assert_sess.get(SessionModel, sess_uuid)
-    assert s1.context_size_tokens == 150_000
+    assert s1.context_size_tokens == 100_000
 
     # 清除 throttle 锁，避免第二轮被限频
     await lifecycle_ctx.redis_client.delete(f"chat:throttle:{child.id}")
@@ -275,7 +275,7 @@ async def test_context_size_tokens_snapshot_not_accumulate(lifecycle_ctx):
     await resp.aclose()
 
     s2 = await lifecycle_ctx.assert_sess.get(SessionModel, sess_uuid)
-    assert s2.context_size_tokens == 500_000, "should be round2's snapshot, NOT cumulative 650k"
+    assert s2.context_size_tokens == 400_000, "should be round2's input_tokens snapshot"
 
 
 @pytest.mark.asyncio

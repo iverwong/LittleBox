@@ -22,7 +22,7 @@ ARTIFACTS_DIR = Path(__file__).parent / "artifacts"
 ARTIFACTS_DIR.mkdir(exist_ok=True)
 
 # ── 端点常量 ──────────────────────────────────────────
-DS_BASE_URL = "https://api.deepseek.com/v1"
+DS_BASE_URL = "https://api.deepseek.com"
 BL_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 # ── 共享工具定义（F2/F3/F4 共用） ──────────────────────

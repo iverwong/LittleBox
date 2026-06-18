@@ -197,7 +197,7 @@ async def run_llm_pipeline(
                         intervention_type=last_intervention_type,
                     )
                     if usage_meta:
-                        _usage_total = usage_meta["input_tokens"] + usage_meta["output_tokens"]
+                        _usage_total = usage_meta["input_tokens"]
                         session.context_size_tokens = _usage_total
                         if _usage_total >= CONTEXT_COMPRESS_THRESHOLD_TOKENS:
                             session.needs_compression = True
@@ -232,7 +232,7 @@ async def run_llm_pipeline(
                     intervention_type=last_intervention_type,
                 )
                 if usage_meta:
-                    _usage_total = usage_meta["input_tokens"] + usage_meta["output_tokens"]
+                    _usage_total = usage_meta["input_tokens"]
                     session.context_size_tokens = _usage_total
                     if _usage_total >= CONTEXT_COMPRESS_THRESHOLD_TOKENS:
                         session.needs_compression = True

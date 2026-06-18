@@ -124,9 +124,9 @@ class TestEndpointsStructure:
     def test_deepseek_base_url_is_pure_string_literal(self) -> None:
         """DEEPSEEK base_url 必须是裸字符串（闸门 B 关注点 5）。"""
         ep = ENDPOINTS[EndpointName.DEEPSEEK]
-        assert ep.base_url == "https://api.deepseek.com/v1"
+        assert ep.base_url == "https://api.deepseek.com"
         # 防尾随字符：长度等于标准长度
-        assert len(ep.base_url) == len("https://api.deepseek.com/v1")
+        assert len(ep.base_url) == len("https://api.deepseek.com")
         # 防误粘的 markdown 链接语法
         assert "](http" not in ep.base_url
         assert " " not in ep.base_url
@@ -470,12 +470,12 @@ class TestAdapterChatDeepseekKwargs:
 
         monkeypatch.setattr(ChatDeepSeek, "__init__", mock_init)
 
-        _adapter_chat_deepseek("sk-ds-test", "https://api.deepseek.com/v1", ROLES[Role.MAIN])
+        _adapter_chat_deepseek("sk-ds-test", "https://api.deepseek.com", ROLES[Role.MAIN])
 
         # 关注点 2 实证:不读实例属性,直接断言构造入参
         assert "temperature" not in captured, "main role 端不应传 temperature(走服务端默认)"
         assert captured["api_key"] == "sk-ds-test"
-        assert captured["api_base"] == "https://api.deepseek.com/v1"
+        assert captured["api_base"] == "https://api.deepseek.com"
         assert captured["model"] == "deepseek-v4-flash"
         assert captured["timeout"] == LLM_REQUEST_TIMEOUT_SECONDS
         assert captured["max_retries"] == 0
@@ -493,7 +493,7 @@ class TestAdapterChatDeepseekKwargs:
 
         monkeypatch.setattr(ChatDeepSeek, "__init__", mock_init)
 
-        _adapter_chat_deepseek("sk-ds-test", "https://api.deepseek.com/v1", ROLES[Role.COMPRESSION])
+        _adapter_chat_deepseek("sk-ds-test", "https://api.deepseek.com", ROLES[Role.COMPRESSION])
 
         assert captured["temperature"] == 0.3
         # 关注点 2 实证:extra_body 真不含 reasoning_effort(不是读了默认 dict 的伪存在)
@@ -543,7 +543,7 @@ class TestBuildBinding:
         s = _FakeSettings()
         llm = _build_binding(ROLES[Role.MAIN], s)
         # ChatDeepSeek.api_base 字段(继承自 BaseChatOpenAI)
-        assert llm.api_base == "https://api.deepseek.com/v1"  # type: ignore[attr-defined]
+        assert llm.api_base == "https://api.deepseek.com"  # type: ignore[attr-defined]
 
     def test_main_fallback_uses_bailian_endpoint(self) -> None:
         """_build_binding(ROLES[MAIN].fallback) 走 bailian 端点(真兜底路径)。"""

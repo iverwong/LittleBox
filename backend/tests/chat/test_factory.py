@@ -109,7 +109,7 @@ class TestBuildRolePrimary:
 
         build_role_primary(Role.MAIN, _FakeSettings())
 
-        assert captured.get("api_base") == "https://api.deepseek.com/v1"
+        assert captured.get("api_base") == "https://api.deepseek.com"
         assert captured.get("api_key") == "sk-ds-test"
         assert captured.get("model") == "deepseek-v4-flash"
         assert captured.get("extra_body") == {
@@ -235,7 +235,7 @@ class TestChatDeepSeekThinkingParams:
         """ChatDeepSeek(api_base=..., model=..., extra_body={...}) 实例化后 extra_body 字段可读。"""
         llm = ChatDeepSeek(
             api_key="sk-test",
-            api_base="https://api.deepseek.com/v1",
+            api_base="https://api.deepseek.com",
             model="deepseek-v4-flash",
             extra_body={
                 "thinking": {"type": "enabled"},

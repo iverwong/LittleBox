@@ -115,7 +115,7 @@ class Endpoint:
 ENDPOINTS: dict[EndpointName, Endpoint] = {
     EndpointName.DEEPSEEK: Endpoint(
         EndpointName.DEEPSEEK,
-        "https://api.deepseek.com/v1",
+        "https://api.deepseek.com",
         lambda s: s.deepseek_api_key,
     ),
     EndpointName.BAILIAN: Endpoint(
