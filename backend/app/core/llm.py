@@ -67,7 +67,7 @@ if TYPE_CHECKING:
 # 与 test_multiround_reasoning 强依赖此时序假设)。
 # TODO: langchain-deepseek upstream PR 合入后移除本 monkeypatch。
 
-_VERIFIED_LCO_VERSIONS = ("1.2.",)  # 当前已验证版本前缀
+_VERIFIED_LCO_VERSIONS = ("1.2.", "1.3.")  # 当前已验证版本前缀
 _lco_version = _metadata.version("langchain-openai")
 assert any(_lco_version.startswith(v) for v in _VERIFIED_LCO_VERSIONS), (
     f"langchain-openai 版本 {_lco_version} 未经验证,"

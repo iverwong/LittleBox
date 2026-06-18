@@ -24,6 +24,7 @@
 # TODO(M8 cleanup)：rolling_summaries fallback 替换为真实摘要注入
 #   M8 review worker 上线后此文件无需改动；当前 fallback 丢弃摘要上下文。
 
+from typing import Literal, overload
 from uuid import UUID
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -68,7 +69,7 @@ async def load_active_messages_without_summary(
 
 
 async def load_active_messages_with_summary(
-    sid: UUID, db: AsyncSession, *, from_turn: int | None = None, until_turn: int | None = None
+    sid: UUID, db: AsyncSession, *, from_turn: int | None = None, to_turn: int | None = None
 ) -> tuple[list[Message], Message | None]:
     """取 sid 当前 active 的 summary 消息(0 或 1 条)。
 
@@ -83,8 +84,8 @@ async def load_active_messages_with_summary(
     )
     if from_turn is not None:
         stmt = stmt.where(Message.turn_number >= from_turn)
-    if until_turn is not None:
-        stmt = stmt.where(Message.turn_number <= until_turn)
+    if to_turn is not None:
+        stmt = stmt.where(Message.turn_number <= to_turn)
     stmt = stmt.order_by(Message.created_at.asc(), Message.id.asc())
     rows = list((await db.execute(stmt)).scalars())
     messages: list[Message] = []
@@ -154,21 +155,30 @@ async def build_context(sid: UUID, db: AsyncSession) -> list[BaseMessage]:
 # ---------------------------------------------------------------------------
 # M9 三级干预上下文装配函数（§D）
 # ---------------------------------------------------------------------------
+@overload
+async def load_recent_messages(
+    sid: UUID, db: AsyncSession, from_turn: int, to_turn: int, *, as_orm: Literal[False]
+) -> list[BaseMessage]: ...
+
+
+@overload
+async def load_recent_messages(
+    sid: UUID, db: AsyncSession, from_turn: int, to_turn: int, *, as_orm: Literal[True]
+) -> list[Message]: ...
 
 
 async def load_recent_messages(
-    sid: UUID,
-    current_turn: int,
-    db: AsyncSession,
-    limit: int,
-) -> list[BaseMessage]:
-    """取当前轮之前最近 n 条 human/ai 消息（按 created_at 升序）。
+    sid: UUID, db: AsyncSession, from_turn: int, to_turn: int, *, as_orm: bool = False
+) -> list[BaseMessage] | list[Message]:
+    """取 ``[from_turn, to_turn]`` 范围内 human/ai 消息（按 created_at 升序）。
 
-    语义：``limit`` 直接是消息条数（非"对"数）。若要保留"n 对"行为，
-    调用方传入 ``limit = 2 * n``。
+    语义：返回指定 turn_number 闭区间内的所有 human/ai 消息（无 LIMIT 截断），
+    调用方按需自行取末尾 n 条 / 倒推偏移。``from_turn``/``to_turn`` 均为
+    闭区间端点（SQL BETWEEN 语义）。
 
-    SQL：WHERE turn_number < current_turn AND role IN ('human','ai')
-    ORDER BY created_at DESC LIMIT n → Python reversed() 升序。
+    SQL：WHERE turn_number BETWEEN from_turn AND to_turn
+        AND role IN ('human','ai')
+    ORDER BY created_at ASC, id ASC → Python 升序。
     """
     rows = (
         (
@@ -176,17 +186,18 @@ async def load_recent_messages(
                 select(Message)
                 .where(
                     Message.session_id == sid,
-                    Message.turn_number < current_turn,
+                    Message.turn_number.between(from_turn, to_turn),
                     Message.role.in_([MessageRole.human, MessageRole.ai]),
                 )
-                .order_by(Message.created_at.desc(), Message.id.desc())
-                .limit(limit)
+                .order_by(Message.created_at.asc(), Message.id.asc())
             )
         )
         .scalars()
         .all()
     )
-    return [to_lc_message(m) for m in reversed(rows)]
+    if as_orm:
+        return list(rows)
+    return [to_lc_message(m) for m in rows]
 
 
 async def build_crisis_context(
@@ -272,12 +283,7 @@ async def build_redline_context(
             text = f"Turn {s.get('turn_number', '?')}: {s.get('summary', '')}"
             summaries.append(SystemMessage(content=text))
 
-    messages = await load_recent_messages(
-        sid,
-        current_turn,
-        db,
-        limit=settings.redline_context_recent_messages,
-    )
+    messages = []
     return summaries, messages
 
 

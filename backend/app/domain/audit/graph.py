@@ -198,7 +198,9 @@ async def load_context(
     ctx = runtime.context
     sid = ctx.session_id
     async with ctx.db_session_factory() as db:
-        history = await load_recent_messages(sid, state["turn_number"] + 1, db, 8)
+        history = await load_recent_messages(
+            sid, db, state["turn_number"] - 9, state["turn_number"] - 1
+        )
         session_notes = await _load_session_notes_from_pg(sid, db)
     prior_turns = history[:-2]  # 前 3 轮 = 6 条消息
     current_turn = history[-2:]  # 当前 1 轮 = 2 条消息
