@@ -68,9 +68,9 @@ def extract_usage(chunk: AIMessageChunk) -> dict | None:
     if um is None:
         return None
     return {
-        "input_tokens": um.get("input_tokens", 0) if isinstance(um, dict) else um.input_tokens,
-        "output_tokens": um.get("output_tokens", 0) if isinstance(um, dict) else um.output_tokens,
-        "total_tokens": um.get("total_tokens", 0) if isinstance(um, dict) else um.total_tokens,
+        "input_tokens": um["input_tokens"],
+        "output_tokens": um["output_tokens"],
+        "total_tokens": um["total_tokens"],
     }
 
 
