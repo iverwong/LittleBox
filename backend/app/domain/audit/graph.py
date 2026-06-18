@@ -176,11 +176,12 @@ async def load_context(
     state: AuditGraphState,
     runtime: Runtime[AuditContextSchema],
 ) -> dict:
-    """从 PG 读近 N 轮消息 + 历史 session_notes + 构造首帧 messages。
+    """从 PG 读近 4 轮消息 + 历史 session_notes + 构造首帧 messages。
 
-    切分规则：最近 8 条（4 轮 H/A）拆成"前 3 轮（6 条）"和"当前 1 轮（2 条）"
-    两段，分别用 serialize_history_to_xml 包装为单条 HumanMessage 嵌入 prompt，
-    避免 chat template 把多轮 H/A 末帧视为 generation prefix 触发续写。
+    切分规则：最近 8 条（4 轮 H/A：from_turn=N-3 到 to_turn=N）拆成
+    "前 3 轮（6 条）"和"当前 1 轮（2 条）"两段，分别用 serialize_history_to_xml
+    包装为单条 HumanMessage 嵌入 prompt，避免 chat template 把多轮 H/A 末帧
+    视为 generation prefix 触发续写。
 
     session_notes 从 PG 读 + seed 到 working copy：worker.py:153 仍 seed 空串，
     但实际历史由本节点注入（避免跨轮被静默覆盖）。
@@ -192,7 +193,7 @@ async def load_context(
     sid = ctx.session_id
     async with ctx.db_session_factory() as db:
         history = await load_recent_messages(
-            sid, db, state["turn_number"] - 9, state["turn_number"] - 1, as_orm=False
+            sid, db, state["turn_number"] - 3, state["turn_number"], as_orm=False
         )
         session_notes = await _load_session_notes_from_pg(sid, db)
     prior_turns = history[:-2]  # 前 3 轮 = 6 条消息
@@ -206,7 +207,7 @@ async def load_context(
                 content=(
                     f"以下是该会话最近 3 轮历史对话：\n{prior_xml}\n\n"
                     f"以下是当前轮次对话：\n{current_xml}\n\n"
-                    f"当前 session_notes：\n{session_notes}"
+                    f"当前 session_notes：\n<session_notes>{session_notes}</session_notes>"
                 )
             ),
         ],
