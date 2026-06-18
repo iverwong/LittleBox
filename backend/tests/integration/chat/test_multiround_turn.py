@@ -13,7 +13,6 @@ import json
 from typing import Any
 
 import pytest
-from app.core.llm import clear_test_llm, set_test_llm
 from app.core.llm_topology import Role
 
 from ._helpers import (
@@ -54,6 +53,7 @@ class TestMultiroundTurnGreen:
         integration_runtime: Any,
         integration_redis: Any,
         arq_worker: Any,
+        llm_override: Any,
     ) -> None:
         """验证 turn_number 在多轮间的 round-trip。
 
@@ -61,75 +61,72 @@ class TestMultiroundTurnGreen:
         第 2 轮 load_audit_state 读到 ready → route 走 main。
         """
         child, headers = await seed_integration_child(integration_runtime)
-        set_test_llm(Role.MAIN, FakeMainLLM())
-        set_test_llm(
+        llm_override(Role.MAIN, FakeMainLLM())
+        llm_override(
             Role.AUDIT,
             FakeAuditLLM(tool_calls=make_audit_tool_call()),
         )
-        try:
-            # ---- Round 1（turn 1） ----
-            async with api_client.stream(
-                "POST",
-                "/api/v1/me/chat/stream",
-                json={"content": "第一轮消息"},
-                headers=headers,
-            ) as resp:
-                events1 = await parse_sse_events(resp)
 
-            # 从 session_meta 中提取 sid
-            sid = None
-            for t, d in events1:
-                if t == "session_meta":
-                    sid = d["session_id"]
-                    break
-            assert sid is not None, "session_meta 应有 sid"
+        # ---- Round 1（turn 1） ----
+        async with api_client.stream(
+            "POST",
+            "/api/v1/me/chat/stream",
+            json={"content": "第一轮消息"},
+            headers=headers,
+        ) as resp:
+            events1 = await parse_sse_events(resp)
 
-            import asyncio
-            await asyncio.sleep(0.05)
+        # 从 session_meta 中提取 sid
+        sid = None
+        for t, d in events1:
+            if t == "session_meta":
+                sid = d["session_id"]
+                break
+        assert sid is not None, "session_meta 应有 sid"
 
-            # Drain worker — 应消费 1 个 job（入队名已修复）
-            processed = await arq_worker()
-            assert processed == 1, (
-                f"drain 应消费 1 个 audit job，实际 {processed}"
-            )
+        import asyncio
+        await asyncio.sleep(0.05)
 
-            # 等待 throttle lock 过期
-            await asyncio.sleep(2.0)
+        # Drain worker — 应消费 1 个 job（入队名已修复）
+        processed = await arq_worker()
+        assert processed == 1, (
+            f"drain 应消费 1 个 audit job，实际 {processed}"
+        )
 
-            # 检查 Redis 中 audit:{sid} key（worker 已写入 ready）
-            audit_key = f"audit:{sid}"
-            audit_raw = await integration_runtime.audit_redis.get(audit_key)
+        # 等待 throttle lock 过期
+        await asyncio.sleep(2.0)
 
-            # ---- Round 2（turn 2） ----
-            async with api_client.stream(
-                "POST",
-                "/api/v1/me/chat/stream",
-                json={"content": "第二轮消息"},
-                headers=headers,
-            ) as resp:
-                events2 = await parse_sse_events(resp)
+        # 检查 Redis 中 audit:{sid} key（worker 已写入 ready）
+        audit_key = f"audit:{sid}"
+        audit_raw = await integration_runtime.audit_redis.get(audit_key)
 
-            # GREEN 断言：应无干预帧（默认值路由到 main，无干预信号）
-            intervention_frames = [
-                d for t, d in events2
-                if t == "intervention_type"
-            ]
-            assert len(intervention_frames) == 0, (
-                f"应无干预帧（main 路由），实际 {len(intervention_frames)} 个干预帧"
-            )
+        # ---- Round 2（turn 2） ----
+        async with api_client.stream(
+            "POST",
+            "/api/v1/me/chat/stream",
+            json={"content": "第二轮消息"},
+            headers=headers,
+        ) as resp:
+            events2 = await parse_sse_events(resp)
 
-            # 辅助验证：audit:{sid} key 存在（worker 已处理）
-            assert audit_raw is not None, (
-                "audit:{} key 不存在 —— enqueue_audit 可能未调用".format(sid)
-            )
-            # payload 中的 status 应为 ready（worker 已消费）
-            payload = json.loads(audit_raw)
-            assert payload.get("status") == "ready", (
-                f"status 应为 'ready'（worker 已消费），实际 {payload.get('status')!r}"
-            )
-            assert payload.get("signals") is not None, (
-                "ready 状态下 signals 不应为 None"
-            )
+        # GREEN 断言：应无干预帧（默认值路由到 main，无干预信号）
+        intervention_frames = [
+            d for t, d in events2
+            if t == "intervention_type"
+        ]
+        assert len(intervention_frames) == 0, (
+            f"应无干预帧（main 路由），实际 {len(intervention_frames)} 个干预帧"
+        )
 
-        finally:
-            clear_test_llm()
+        # 辅助验证：audit:{sid} key 存在（worker 已处理）
+        assert audit_raw is not None, (
+            "audit:{} key 不存在 —— enqueue_audit 可能未调用".format(sid)
+        )
+        # payload 中的 status 应为 ready（worker 已消费）
+        payload = json.loads(audit_raw)
+        assert payload.get("status") == "ready", (
+            f"status 应为 'ready'（worker 已消费），实际 {payload.get('status')!r}"
+        )
+        assert payload.get("signals") is not None, (
+            "ready 状态下 signals 不应为 None"
+        )

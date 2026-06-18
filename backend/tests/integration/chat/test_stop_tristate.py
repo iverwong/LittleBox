@@ -19,7 +19,6 @@ import json
 from typing import Any
 
 import pytest
-from app.core.llm import clear_test_llm
 from app.domain.chat.stream_signals import running_streams
 
 from ._helpers import seed_integration_child
@@ -71,15 +70,13 @@ class TestStopTristateRed:
             yield {"finish_reason": "stop"}
 
         integration_runtime.main_graph.astream = _fake_astream
-        try:
-            resp = await api_client.post(
-                "/api/v1/me/chat/stream",
-                json={"content": "测试 stop"},
-                headers=headers,
-            )
-            assert resp.status_code == 200
-        finally:
-            clear_test_llm()
+
+        resp = await api_client.post(
+            "/api/v1/me/chat/stream",
+            json={"content": "测试 stop"},
+            headers=headers,
+        )
+        assert resp.status_code == 200
 
         events = _parse_sse(resp.text)
 
@@ -142,15 +139,13 @@ class TestStopTristateRed:
             yield {"finish_reason": "stop"}
 
         integration_runtime.main_graph.astream = _fake_astream
-        try:
-            resp = await api_client.post(
-                "/api/v1/me/chat/stream",
-                json={"content": "测试 stop"},
-                headers=headers,
-            )
-            assert resp.status_code == 200
-        finally:
-            clear_test_llm()
+
+        resp = await api_client.post(
+            "/api/v1/me/chat/stream",
+            json={"content": "测试 stop"},
+            headers=headers,
+        )
+        assert resp.status_code == 200
 
         events = _parse_sse(resp.text)
 

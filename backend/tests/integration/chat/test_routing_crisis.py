@@ -12,7 +12,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from app.core.llm import clear_test_llm, set_test_llm
 from app.core.llm_topology import Role
 
 from ._helpers import (
@@ -51,6 +50,7 @@ class TestCrisisRoutingGreen:
         api_client: Any,
         integration_runtime: Any,
         arq_worker: Any,
+        llm_override: Any,
     ) -> None:
         """第 2 轮应发 crisis intervention_type 帧。
 
@@ -59,60 +59,57 @@ class TestCrisisRoutingGreen:
           - Round 2：load_audit_state 读到 crisis → route_by_risk → crisis 分支
         """
         child, headers = await seed_integration_child(integration_runtime)
-        set_test_llm(Role.MAIN, FakeMainLLM())
-        set_test_llm(
+        llm_override(Role.MAIN, FakeMainLLM())
+        llm_override(
             Role.AUDIT,
             FakeAuditLLM(tool_calls=make_audit_tool_call(
                 crisis_detected=True,
                 crisis_topic="self-harm risk",
             )),
         )
-        try:
-            # ---- Round 1 ----
-            async with api_client.stream(
-                "POST",
-                "/api/v1/me/chat/stream",
-                json={"content": "我今天很难过"},
-                headers=headers,
-            ) as resp:
-                await parse_sse_events(resp)
 
-            import asyncio
-            await asyncio.sleep(0.05)
+        # ---- Round 1 ----
+        async with api_client.stream(
+            "POST",
+            "/api/v1/me/chat/stream",
+            json={"content": "我今天很难过"},
+            headers=headers,
+        ) as resp:
+            await parse_sse_events(resp)
 
-            # Drain — 入队名修复后应消费 1 个 job
-            processed = await arq_worker()
-            assert processed == 1, (
-                f"drain 应消费 1 个 audit job，实际 {processed}"
-            )
+        import asyncio
+        await asyncio.sleep(0.05)
 
-            # 等待 throttle lock（1.5s TTL）过期，否则 Round 2 被 429
-            await asyncio.sleep(2.0)
+        # Drain — 入队名修复后应消费 1 个 job
+        processed = await arq_worker()
+        assert processed == 1, (
+            f"drain 应消费 1 个 audit job，实际 {processed}"
+        )
 
-            # ---- Round 2 ----
-            async with api_client.stream(
-                "POST",
-                "/api/v1/me/chat/stream",
-                json={"content": "我觉得很孤独"},
-                headers=headers,
-            ) as resp:
-                events2 = await parse_sse_events(resp)
+        # 等待 throttle lock（1.5s TTL）过期，否则 Round 2 被 429
+        await asyncio.sleep(2.0)
 
-            # GREEN 断言：存在 crisis 干预帧
-            crisis_frames = [
-                d for t, d in events2
-                if t == "intervention_type"
-                and d.get("type") == "crisis"
-            ]
-            assert len(crisis_frames) > 0, (
-                f"GREEN: 应发出 crisis intervention_type 帧。\n"
-                f"实际事件类型：{set(t for t, _ in events2)}"
-            )
+        # ---- Round 2 ----
+        async with api_client.stream(
+            "POST",
+            "/api/v1/me/chat/stream",
+            json={"content": "我觉得很孤独"},
+            headers=headers,
+        ) as resp:
+            events2 = await parse_sse_events(resp)
 
-            # GREEN 断言：流正常结束
-            assert any(t == "end" for t, _ in events2), (
-                "crisis 分支流应正常结束（有 end 帧）"
-            )
+        # GREEN 断言：存在 crisis 干预帧
+        crisis_frames = [
+            d for t, d in events2
+            if t == "intervention_type"
+            and d.get("type") == "crisis"
+        ]
+        assert len(crisis_frames) > 0, (
+            f"GREEN: 应发出 crisis intervention_type 帧。\n"
+            f"实际事件类型：{set(t for t, _ in events2)}"
+        )
 
-        finally:
-            clear_test_llm()
+        # GREEN 断言：流正常结束
+        assert any(t == "end" for t, _ in events2), (
+            "crisis 分支流应正常结束（有 end 帧）"
+        )

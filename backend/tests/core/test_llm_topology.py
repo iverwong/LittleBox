@@ -28,8 +28,6 @@ from app.core.llm import (
     build_main_llm,
     build_role_fallback,
     build_role_primary,
-    clear_test_llm,
-    set_test_llm,
     wrap_resilience,
 )
 from app.core.llm_topology import (
@@ -654,19 +652,16 @@ class TestBuildRoleFallback:
         assert fb is not None
         assert fb.api_base == "https://dashscope.aliyuncs.com/compatible-mode/v1"  # type: ignore[attr-defined]
 
-    def test_fallback_does_not_check_override(self) -> None:
+    def test_fallback_does_not_check_override(self, llm_override: Any) -> None:
         """关注点 2 实证：build_role_fallback 不读 _test_llm_overrides（主端 fake / 备端 real）。"""
         s = _FakeSettings()
         fake = _FakeRunnable()
-        set_test_llm(Role.AUDIT, fake)
-        try:
-            # 即使 AUDIT role 被 override,build_role_fallback 仍走真 bailian
-            fb = build_role_fallback(Role.AUDIT, s)
-            assert fb is not None
-            assert fb is not fake  # 不是 override
-            assert isinstance(fb, ChatDeepSeek)
-        finally:
-            clear_test_llm()
+        llm_override(Role.AUDIT, fake)
+        # 即使 AUDIT role 被 override,build_role_fallback 仍走真 bailian
+        fb = build_role_fallback(Role.AUDIT, s)
+        assert fb is not None
+        assert fb is not fake  # 不是 override
+        assert isinstance(fb, ChatDeepSeek)
 
 
 class TestWrapResilience:
@@ -768,15 +763,11 @@ class TestBuildCompressionLlm:
 class TestInjectionSeamRoleKey:
     """注入缝:_test_llm_overrides 键为 Role 枚举;set/clear 仅接受 Role。"""
 
-    def teardown_method(self) -> None:
-        """每测试后清理 override,避免跨测试泄漏。"""
-        clear_test_llm()
-
-    def test_set_role_enum_short_circuits_primary(self) -> None:
+    def test_set_role_enum_short_circuits_primary(self, llm_override: Any) -> None:
         """set_test_llm(Role.MAIN, fake) → build_role_primary(MAIN) 返回 fake。"""
         s = _FakeSettings()
         fake = _FakeRunnable()
-        set_test_llm(Role.MAIN, fake)
+        llm_override(Role.MAIN, fake)
         result = build_role_primary(Role.MAIN, s)
         assert result is fake
 
@@ -788,43 +779,48 @@ class TestInjectionSeamRoleKey:
         (override 失效、回落真 LLM,难诊断)。显式 isinstance 守卫在 setup 阶段立即
         抛出,任何漏改立即可见。
         """
+        from app.core.llm import set_test_llm
+
         with pytest.raises(TypeError, match="仅接受 Role"):
             set_test_llm("deepseek", _FakeRunnable())  # type: ignore[arg-type]
 
     def test_clear_role_string_raises_type_error(self) -> None:
         """clear_test_llm("字符串") 抛 TypeError(对称守卫)。"""
+        from app.core.llm import clear_test_llm
+
         with pytest.raises(TypeError, match="仅接受 Role"):
             clear_test_llm("audit_deepseek")  # type: ignore[arg-type]
 
-    def test_clear_role_enum_removes_only_that_role(self) -> None:
+    def test_clear_role_enum_removes_only_that_role(self, llm_override: Any) -> None:
         """clear_test_llm(Role.MAIN) 只清 Role.MAIN,Role.AUDIT 仍 override。"""
+        from app.core.llm import clear_test_llm
+
         s = _FakeSettings()
         fake_main = _FakeRunnable()
         fake_audit = _FakeRunnable()
-        set_test_llm(Role.MAIN, fake_main)
-        set_test_llm(Role.AUDIT, fake_audit)
+        llm_override(Role.MAIN, fake_main)
+        llm_override(Role.AUDIT, fake_audit)
         clear_test_llm(Role.MAIN)
         # MAIN 恢复真实装配
         assert build_role_primary(Role.MAIN, s) is not fake_main
         # AUDIT 仍 override
         assert build_role_primary(Role.AUDIT, s) is fake_audit
 
-    def test_clear_all_clears_everything(self) -> None:
+    def test_clear_all_clears_everything(self, llm_override: Any) -> None:
         """clear_test_llm() 不带参 → 清空全部。"""
-        set_test_llm(Role.MAIN, _FakeRunnable())
-        set_test_llm(Role.AUDIT, _FakeRunnable())
+        from app.core.llm import clear_test_llm
+
+        llm_override(Role.MAIN, _FakeRunnable())
+        llm_override(Role.AUDIT, _FakeRunnable())
         clear_test_llm()
         assert _test_llm_overrides == {}
 
-    def test_overrides_dict_uses_role_keys(self) -> None:
+    def test_overrides_dict_uses_role_keys(self, llm_override: Any) -> None:
         """_test_llm_overrides 键为 Role 枚举,非字符串(关注点 2 实证)。"""
-        set_test_llm(Role.MAIN, _FakeRunnable())
-        set_test_llm(Role.AUDIT, _FakeRunnable())
-        try:
-            assert Role.MAIN in _test_llm_overrides
-            assert Role.AUDIT in _test_llm_overrides
-            # 不应有字符串 key
-            assert "deepseek" not in _test_llm_overrides
-            assert "audit_deepseek" not in _test_llm_overrides
-        finally:
-            clear_test_llm()
+        llm_override(Role.MAIN, _FakeRunnable())
+        llm_override(Role.AUDIT, _FakeRunnable())
+        assert Role.MAIN in _test_llm_overrides
+        assert Role.AUDIT in _test_llm_overrides
+        # 不应有字符串 key
+        assert "deepseek" not in _test_llm_overrides
+        assert "audit_deepseek" not in _test_llm_overrides

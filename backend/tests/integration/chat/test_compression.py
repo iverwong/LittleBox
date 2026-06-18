@@ -30,7 +30,6 @@ from typing import Any
 
 import pytest
 from app.core.enums import MessageRole, MessageStatus
-from app.core.llm import clear_test_llm, set_test_llm
 from app.core.llm_topology import Role
 from app.domain.chat.models import Message
 from sqlalchemy import select
@@ -71,6 +70,7 @@ class TestCompressionRed:
         api_client: Any,
         integration_runtime: Any,
         integration_redis: Any,
+        llm_override: Any,
     ) -> None:
         """两轮压缩链路：翻标志 → 触发压缩 → 帧 + DB 验证。
 
@@ -78,7 +78,7 @@ class TestCompressionRed:
         """
         child, headers = await seed_integration_child(integration_runtime)
         # 第 1 轮 LLM 报告超大 usage → 翻 needs_compression
-        set_test_llm(
+        llm_override(
             Role.MAIN,
             FakeMainLLM(
                 chunks=["第一轮回复"],
@@ -89,105 +89,102 @@ class TestCompressionRed:
                 },
             ),
         )
-        set_test_llm(Role.COMPRESSION, _FakeCompressionLLM())
+        llm_override(Role.COMPRESSION, _FakeCompressionLLM())
 
         sid: str | None = None
 
-        try:
-            # ---- Round 1 ----
-            async with api_client.stream(
-                "POST",
-                "/api/v1/me/chat/stream",
-                json={"content": "第一轮消息"},
-                headers=headers,
-            ) as resp:
-                events1 = await parse_sse_events(resp)
+        # ---- Round 1 ----
+        async with api_client.stream(
+            "POST",
+            "/api/v1/me/chat/stream",
+            json={"content": "第一轮消息"},
+            headers=headers,
+        ) as resp:
+            events1 = await parse_sse_events(resp)
 
-            # 从 session_meta 获取 sid
-            for t, d in events1:
-                if t == "session_meta":
-                    sid = d["session_id"]
-                    break
-            assert sid is not None, "应有 session_meta 帧"
+        # 从 session_meta 获取 sid
+        for t, d in events1:
+            if t == "session_meta":
+                sid = d["session_id"]
+                break
+        assert sid is not None, "应有 session_meta 帧"
 
-            import asyncio
+        import asyncio
 
-            # 等待 throttle lock（1.5s TTL）过期，否则 Round 2 会被 429 拦截
-            await asyncio.sleep(2.0)
+        # 等待 throttle lock（1.5s TTL）过期，否则 Round 2 会被 429 拦截
+        await asyncio.sleep(2.0)
 
-            # ---- Round 2 应触发 compression ----
-            set_test_llm(
-                Role.MAIN,
-                FakeMainLLM(
-                    chunks=["第二轮回复，这是压缩后的新对话。"],
-                ),
+        # ---- Round 2 应触发 compression ----
+        llm_override(
+            Role.MAIN,
+            FakeMainLLM(
+                chunks=["第二轮回复，这是压缩后的新对话。"],
+            ),
+        )
+
+        async with api_client.stream(
+            "POST",
+            "/api/v1/me/chat/stream",
+            json={"content": "第二轮消息"},
+            headers=headers,
+        ) as resp:
+            events2 = await parse_sse_events(resp)
+
+        # 等待段一收口
+        if str(sid) in integration_runtime._chat_tasks:
+            task = integration_runtime._chat_tasks.get(str(sid))
+            if task and not task.done():
+                await task
+
+        # RED 断言 ①：第二轮应有 compression_start 帧
+        has_compression_start = any(
+            t == "compression_start" for t, _ in events2
+        )
+        assert has_compression_start, (
+            "RED: 第二轮无 compression_start 帧。\n"
+            "可能原因：needs_compression 标志虽翻正但段一未检测到。"
+        )
+
+        # RED 断言 ②：第二轮应有 compression_end 帧
+        has_compression_end = any(
+            t == "compression_end" for t, _ in events2
+        )
+        assert has_compression_end, (
+            "RED: 第二轮无 compression_end 帧。压缩流程可能中断。"
+        )
+
+        # RED 断言 ③：DB 中应有 summary 行
+        sid_uuid = uuid.UUID(sid)
+        async with integration_runtime.db_session_factory() as db:
+            summary_result = await db.execute(
+                select(Message).where(
+                    Message.session_id == sid_uuid,
+                    Message.role == MessageRole.summary,
+                    Message.status == MessageStatus.active,
+                )
+            )
+            summary_row = summary_result.scalar_one_or_none()
+            assert summary_row is not None, (
+                "RED: 压缩后应有 summary 行。"
+            )
+            assert len(summary_row.content) > 0, (
+                "RED: summary 行内容不应为空。"
             )
 
-            async with api_client.stream(
-                "POST",
-                "/api/v1/me/chat/stream",
-                json={"content": "第二轮消息"},
-                headers=headers,
-            ) as resp:
-                events2 = await parse_sse_events(resp)
-
-            # 等待段一收口
-            if str(sid) in integration_runtime._chat_tasks:
-                task = integration_runtime._chat_tasks.get(str(sid))
-                if task and not task.done():
-                    await task
-
-            # RED 断言 ①：第二轮应有 compression_start 帧
-            has_compression_start = any(
-                t == "compression_start" for t, _ in events2
-            )
-            assert has_compression_start, (
-                "RED: 第二轮无 compression_start 帧。\n"
-                "可能原因：needs_compression 标志虽翻正但段一未检测到。"
-            )
-
-            # RED 断言 ②：第二轮应有 compression_end 帧
-            has_compression_end = any(
-                t == "compression_end" for t, _ in events2
-            )
-            assert has_compression_end, (
-                "RED: 第二轮无 compression_end 帧。压缩流程可能中断。"
-            )
-
-            # RED 断言 ③：DB 中应有 summary 行
-            sid_uuid = uuid.UUID(sid)
-            async with integration_runtime.db_session_factory() as db:
-                summary_result = await db.execute(
-                    select(Message).where(
+            # RED 断言 ④：旧消息应被标记为 compressed
+            from sqlalchemy import func as _func
+            compressed_count: int = (
+                await db.execute(
+                    select(_func.count(Message.id)).where(
                         Message.session_id == sid_uuid,
-                        Message.role == MessageRole.summary,
-                        Message.status == MessageStatus.active,
+                        Message.status == MessageStatus.compressed,
                     )
                 )
-                summary_row = summary_result.scalar_one_or_none()
-                assert summary_row is not None, (
-                    "RED: 压缩后应有 summary 行。"
-                )
-                assert len(summary_row.content) > 0, (
-                    "RED: summary 行内容不应为空。"
-                )
+            ).scalar_one()
+            # 第 1 轮 human + ai 至少 2 条应被压缩
+            assert compressed_count >= 2, (
+                f"RED: 应有 ≥2 条消息被压缩，实际 {compressed_count}"
+            )
 
-                # RED 断言 ④：旧消息应被标记为 compressed
-                from sqlalchemy import func as _func
-                compressed_count: int = (
-                    await db.execute(
-                        select(_func.count(Message.id)).where(
-                            Message.session_id == sid_uuid,
-                            Message.status == MessageStatus.compressed,
-                        )
-                    )
-                ).scalar_one()
-                # 第 1 轮 human + ai 至少 2 条应被压缩
-                assert compressed_count >= 2, (
-                    f"RED: 应有 ≥2 条消息被压缩，实际 {compressed_count}"
-                )
-
-        finally:
-            clear_test_llm()
-            if sid:
-                await integration_redis.delete(f"chat:lock:{sid}")
+        if sid:
+            await integration_redis.delete(f"chat:lock:{sid}")

@@ -16,7 +16,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from app.core.llm import clear_test_llm, set_test_llm
 from app.core.llm_topology import Role
 
 from ._helpers import (
@@ -55,60 +54,58 @@ class TestGuidanceRoutingGreen:
         api_client: Any,
         integration_runtime: Any,
         arq_worker: Any,
+        llm_override: Any,
     ) -> None:
         """第 2 轮应发 guided intervention_type 帧。"""
         child, headers = await seed_integration_child(integration_runtime)
-        set_test_llm(Role.MAIN, FakeMainLLM())
-        set_test_llm(
+        llm_override(Role.MAIN, FakeMainLLM())
+        llm_override(
             Role.AUDIT,
             FakeAuditLLM(tool_calls=make_audit_tool_call(
                 guidance_injection="试试和信任的成年人聊聊",
                 turn_summary="同伴冲突",
             )),
         )
-        try:
-            # ---- Round 1 ----
-            async with api_client.stream(
-                "POST",
-                "/api/v1/me/chat/stream",
-                json={"content": "我最近和同学吵架了"},
-                headers=headers,
-            ) as resp:
-                await parse_sse_events(resp)
 
-            import asyncio
-            await asyncio.sleep(0.05)
+        # ---- Round 1 ----
+        async with api_client.stream(
+            "POST",
+            "/api/v1/me/chat/stream",
+            json={"content": "我最近和同学吵架了"},
+            headers=headers,
+        ) as resp:
+            await parse_sse_events(resp)
 
-            processed = await arq_worker()
-            assert processed == 1, (
-                f"drain 应消费 1 个 audit job，实际 {processed}"
-            )
+        import asyncio
+        await asyncio.sleep(0.05)
 
-            # 等待 throttle lock 过期
-            await asyncio.sleep(2.0)
+        processed = await arq_worker()
+        assert processed == 1, (
+            f"drain 应消费 1 个 audit job，实际 {processed}"
+        )
 
-            # ---- Round 2 ----
-            async with api_client.stream(
-                "POST",
-                "/api/v1/me/chat/stream",
-                json={"content": "我应该怎么处理"},
-                headers=headers,
-            ) as resp:
-                events2 = await parse_sse_events(resp)
+        # 等待 throttle lock 过期
+        await asyncio.sleep(2.0)
 
-            guidance_frames = [
-                d for t, d in events2
-                if t == "intervention_type"
-                and d.get("type") == "guided"
-            ]
-            assert len(guidance_frames) > 0, (
-                f"GREEN: 应发出 guided intervention_type 帧。\n"
-                f"实际事件类型：{set(t for t, _ in events2)}"
-            )
+        # ---- Round 2 ----
+        async with api_client.stream(
+            "POST",
+            "/api/v1/me/chat/stream",
+            json={"content": "我应该怎么处理"},
+            headers=headers,
+        ) as resp:
+            events2 = await parse_sse_events(resp)
 
-            assert any(t == "end" for t, _ in events2), (
-                "guidance 分支流应正常结束"
-            )
+        guidance_frames = [
+            d for t, d in events2
+            if t == "intervention_type"
+            and d.get("type") == "guided"
+        ]
+        assert len(guidance_frames) > 0, (
+            f"GREEN: 应发出 guided intervention_type 帧。\n"
+            f"实际事件类型：{set(t for t, _ in events2)}"
+        )
 
-        finally:
-            clear_test_llm()
+        assert any(t == "end" for t, _ in events2), (
+            "guidance 分支流应正常结束"
+        )

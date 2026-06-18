@@ -30,8 +30,6 @@ from app.core.llm import (
     build_main_llm,
     build_role_fallback,
     build_role_primary,
-    clear_test_llm,
-    set_test_llm,
 )
 from app.core.llm_topology import (
     ENDPOINTS,
@@ -351,28 +349,24 @@ class TestAuditLlmRetry:
 class TestInjectionSeamRoleKey:
     """set_test_llm(Role, fake) → build_role_primary(Role, ...) 返 fake(短路 _build_binding)。"""
 
-    def teardown_method(self) -> None:
-        """每测试后清理 override,避免跨测试泄漏。"""
-        clear_test_llm()
-
-    def test_set_role_main_short_circuits_primary(self) -> None:
+    def test_set_role_main_short_circuits_primary(self, llm_override: Any) -> None:
         """Given set_test_llm(Role.MAIN, fake) When build_role_primary(MAIN) Then 返 fake。"""
         fake = object()  # 任何对象均可,build_role_primary 直接返回
-        set_test_llm(Role.MAIN, fake)
+        llm_override(Role.MAIN, fake)
         result = build_role_primary(Role.MAIN, _FakeSettings())
         assert result is fake
 
-    def test_set_role_audit_short_circuits_primary(self) -> None:
+    def test_set_role_audit_short_circuits_primary(self, llm_override: Any) -> None:
         """Given set_test_llm(Role.AUDIT, fake) When build_role_primary(AUDIT) Then 返 fake。"""
         fake = object()
-        set_test_llm(Role.AUDIT, fake)
+        llm_override(Role.AUDIT, fake)
         result = build_role_primary(Role.AUDIT, _FakeSettings())
         assert result is fake
 
-    def test_set_role_compression_short_circuits_primary(self) -> None:
+    def test_set_role_compression_short_circuits_primary(self, llm_override: Any) -> None:
         """set_test_llm(Role.COMPRESSION) 短路 build_role_primary。"""
         fake = object()
-        set_test_llm(Role.COMPRESSION, fake)
+        llm_override(Role.COMPRESSION, fake)
         result = build_role_primary(Role.COMPRESSION, _FakeSettings())
         assert result is fake
 
@@ -381,29 +375,35 @@ class TestInjectionSeamRoleKey:
 
         漏改字符串 → 立即 TypeError,避免「override 静默失效回落真 LLM」暗坑。
         """
+        from app.core.llm import set_test_llm
+
         with pytest.raises(TypeError, match="仅接受 Role"):
             set_test_llm("deepseek", object())  # type: ignore[arg-type]
 
     def test_clear_role_string_raises_type_error(self) -> None:
         """clear_test_llm("字符串") 抛 TypeError(对称守卫)。"""
+        from app.core.llm import clear_test_llm
+
         with pytest.raises(TypeError, match="仅接受 Role"):
             clear_test_llm("audit_deepseek")  # type: ignore[arg-type]
 
-    def test_clear_specific_role_keeps_others(self) -> None:
+    def test_clear_specific_role_keeps_others(self, llm_override: Any) -> None:
         """clear_test_llm(MAIN) 不影响 AUDIT override。"""
+        from app.core.llm import clear_test_llm
+
         fake_main = object()
         fake_audit = object()
-        set_test_llm(Role.MAIN, fake_main)
-        set_test_llm(Role.AUDIT, fake_audit)
+        llm_override(Role.MAIN, fake_main)
+        llm_override(Role.AUDIT, fake_audit)
         clear_test_llm(Role.MAIN)
         assert build_role_primary(Role.MAIN, _FakeSettings()) is not fake_main
         assert build_role_primary(Role.AUDIT, _FakeSettings()) is fake_audit
 
-    def test_clear_all_clears_everything(self) -> None:
+    def test_clear_all_clears_everything(self, llm_override: Any) -> None:
         """Given set_test_llm 多次 When clear_test_llm() 无参 Then 全部清空。"""
-        from app.core.llm import _test_llm_overrides
+        from app.core.llm import _test_llm_overrides, clear_test_llm
 
-        set_test_llm(Role.MAIN, object())
-        set_test_llm(Role.AUDIT, object())
+        llm_override(Role.MAIN, object())
+        llm_override(Role.AUDIT, object())
         clear_test_llm()
         assert _test_llm_overrides == {}

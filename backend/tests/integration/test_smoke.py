@@ -86,6 +86,7 @@ class TestInfrastructureSmoke:
     async def test_arq_worker_enqueue_drain(
         self,
         integration_runtime,
+        llm_override: Any,
     ) -> None:
         """arq worker enqueue→drain round-trip（关注点 4 命门）。
 
@@ -97,7 +98,6 @@ class TestInfrastructureSmoke:
           4. 审计图 write_results 正常落库（需 DB 中有 family + user + session）
         """
         from app.core.enums import SessionStatus, UserRole
-        from app.core.llm import clear_test_llm, set_test_llm
         from app.core.llm_topology import Role
         from app.domain.accounts.models import Family, User
         from app.domain.audit.signals import AuditSignalsManager
@@ -149,7 +149,7 @@ class TestInfrastructureSmoke:
         )
 
         try:
-            set_test_llm(Role.AUDIT, _SmokeAuditLLM())
+            llm_override(Role.AUDIT, _SmokeAuditLLM())
 
             async with rr.db_session_factory() as db:
                 await enqueue_audit(
@@ -167,5 +167,4 @@ class TestInfrastructureSmoke:
                 f"arq_worker drain 应消费 ≥1 job，实际 {processed}"
             )
         finally:
-            clear_test_llm()
             await worker.close()

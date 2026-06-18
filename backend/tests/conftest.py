@@ -543,6 +543,29 @@ async def rate_limit_parent(db_session: AsyncSession) -> tuple:
     return user, pw
 
 
+# ---------- function scope：LLM override 生命周期管理（Phase 8）----------
+
+
+@pytest.fixture(autouse=True)
+def llm_override():
+    """Autouse fixture: guards against leaked LLM overrides + ensures cleanup.
+
+    At test start, asserts _test_llm_overrides is empty (fail-fast if a prior
+    test leaked overrides). At test end, unconditionally clears all overrides.
+    Yields set_test_llm for tests that need to inject a fake LLM.
+    """
+    from app.core.llm import _test_llm_overrides, clear_test_llm, set_test_llm
+
+    assert not _test_llm_overrides, (
+        f"LLM override leak detected: {_test_llm_overrides!r}. "
+        "A prior test set but did not clear test LLM overrides."
+    )
+
+    yield set_test_llm
+
+    clear_test_llm()
+
+
 # ---------- session scope：真库行数兜底（M6-patch T4 防御） ----------
 
 _GUARD_TABLES = [
