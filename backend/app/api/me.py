@@ -433,6 +433,8 @@ async def chat_stream(
             "client_alive": True,
             "user_stop_requested": False,
             "turn_number": result.turn_number,
+            "compression_summary": None,
+            "keep_messages": None,
         }
 
         # ★ stop event 注册必须在 create_task 之前（避免 race）

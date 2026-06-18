@@ -16,19 +16,23 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
+    BaseMessage,
     HumanMessage,
 )
 from langchain_core.runnables import Runnable
 from langgraph.config import get_stream_writer
 from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
-from sqlalchemy import select
+from sqlalchemy import select, update
 
-from app.core.llm import build_crisis_llm, build_main_llm, build_redline_llm
+from app.core.enums import MessageRole, MessageStatus
+from app.core.history_xml import serialize_history_to_xml
+from app.core.llm import build_compression_llm, build_crisis_llm, build_main_llm, build_redline_llm
 from app.core.llm_extractors import (
     extract_finish_reason,
     extract_reasoning_content,
@@ -36,21 +40,27 @@ from app.core.llm_extractors import (
     role_profile,
 )
 from app.core.llm_topology import ModelProfile, Role
+from app.core.models import AuditRecord, Session
 from app.domain.audit.models import RollingSummary
 from app.domain.audit.signals import AuditSignalsManager
+from app.domain.chat.compression import (
+    build_compression_messages,
+    extract_compression_summary,
+    split_for_compression,
+)
 from app.domain.chat.context import (
-    build_crisis_context,
     build_redline_context,
     load_active_messages_with_summary,
+    load_recent_messages,
     to_lc_message,
 )
 from app.domain.chat.context_schema import ChatContextSchema
+from app.domain.chat.models import Message
 from app.domain.chat.prompts import (
     build_crisis_system_prompt,
     build_redline_system_prompt,
     build_system_prompt,
     format_guidance_wrapper,
-    format_reentry_wrapper_crisis,
     format_reentry_wrapper_redline,
 )
 from app.domain.chat.state import AuditState, MainDialogueState
@@ -174,13 +184,10 @@ def route_by_risk(state: MainDialogueState) -> str:
         "crisis" | "redline" | "guidance" | "main"
     """
     audit: AuditState = state["audit_state"]
-    if audit["crisis_locked"] or audit["crisis_detected"]:
+    if audit["crisis_locked"]:
         return "crisis"
-    if audit["redline_triggered"]:
-        return "redline"
-    if audit["guidance"] is not None:
-        return "guidance"
-    return "main"
+    else:
+        return "main"
 
 
 # ---------------------------------------------------------------------------
@@ -192,45 +199,56 @@ async def build_messages_main(
     state: MainDialogueState,
     runtime: Runtime[ChatContextSchema],
 ) -> dict:
-    """W1 wrapper 模式:system_prompt + active (h,a) + 末位 wrapped HumanMessage。
+    """W1 wrapper 模式:图内压缩 + system_prompt + history + wrapped HumanMessage。
 
     装配顺序：
-      [system_prompt(含 # 历史会话摘要(压缩) 段), *active_messages(不含本轮,不含 summary),
+      [system_prompt(含 # 历史会话摘要(压缩) 段), *history(不含本轮),
        HumanMessage(content=format_guidance_wrapper(ctx.user_input, audit.guidance))]
 
+    压缩逻辑与 crisis 路径复用相同 _handle_compress 函数。
+    发射 compression_start/end payload，由 pipeline.py 图循环转发为 SSE 帧。
+
     职责边界：
-    - history 不含本轮 human(load_active_messages 的 until_turn 边界过滤)
-    - history 不含 summary 行(避免与 system prompt 段双写)
-    - active summary 走 load_active_messages_with_summary 注入 build_system_prompt 的
-      # 历史会话摘要(压缩) 段
+    - history 不含本轮 human(to_turn 边界过滤),不含 summary 行
+    - summary 由 load_active_messages_with_summary 拆分注入 build_system_prompt
     - wrapper 仅作用于 LLM 输入装配层,不回写 messages 表
-    - compression 路径([app/domain/chat/pipeline.py])时 messages 已预装
-      [sp, *history](不含本轮 human),本节点只 append 末位 wrapped human
-      —— add_messages reducer 是 append-only,不能返整列表,否则会重复
-    - build_context(audit 路径用)保留不删
     """
     ctx = runtime.context
+    sid = ctx.session_id
     audit = state.get("audit_state", {})
     guidance = audit.get("guidance")
 
-    # compression 路径:[app/domain/chat/pipeline.py] 已预装 initial_state['messages']
-    # 只追加末位 wrapped human,由 add_messages reducer 接到已预装列表末尾
-    if state.get("messages"):
-        return {
-            "messages": [HumanMessage(content=format_guidance_wrapper(ctx.user_input, guidance))]
-        }
-
     async with ctx.db_session_factory() as db:
-        # 不含本轮 human(until_turn=current_turn 边界过滤) + 不含 summary 行
-        # summary 由 load_active_messages_with_summary 拆分返回
-        history_rows, summary = await load_active_messages_with_summary(
-            ctx.session_id, db, until_turn=state["turn_number"] - 1
+        needs_compression = await db.scalar(
+            select(Session.needs_compression).where(Session.id == sid)
         )
-        history = [to_lc_message(m) for m in history_rows]
-    system_prompt = build_system_prompt(
-        ctx.child_profile,
-        summary.content if summary is not None else None,
-    )
+
+        history_rows, summary_orm = await load_active_messages_with_summary(
+            ctx.session_id, db, to_turn=state["turn_number"] - 1
+        )
+
+        if needs_compression:
+            to_compress_orm, to_keep_orm = split_for_compression(history_rows)
+            writer = get_stream_writer()
+            writer({"compression_start": {}})
+
+            to_compress = [to_lc_message(mo) for mo in to_compress_orm]
+            to_compress_ids = [mo.id for mo in to_compress_orm]
+            old_summary = to_lc_message(summary_orm) if summary_orm else None
+
+            new_summary = await _handle_compress(
+                ctx, sid, old_summary, to_compress, to_compress_ids
+            )
+
+            history = [to_lc_message(mo) for mo in to_keep_orm]
+            summary_content = new_summary
+
+            writer({"compression_end": {}})
+        else:
+            summary_content = summary_orm.content if summary_orm else None
+            history = [to_lc_message(mo) for mo in history_rows]
+
+    system_prompt = build_system_prompt(ctx.child_profile, summary_content)
 
     return {
         "messages": [
@@ -241,32 +259,203 @@ async def build_messages_main(
     }
 
 
+async def _handle_compress(
+    ctx: ChatContextSchema,
+    sid: UUID,
+    summary: BaseMessage | None,
+    to_compress: list[BaseMessage],
+    to_compress_ids: list[UUID],
+) -> str:
+    c_input = build_compression_messages(
+        summary,
+        to_compress,
+    )
+    c_llm = build_compression_llm(ctx.settings)
+    c_result = await c_llm.ainvoke(c_input)
+    raw = c_result.content if hasattr(c_result, "content") else str(c_result)
+    new_summary = extract_compression_summary(raw)
+    _summary_obj = Message(
+        session_id=sid,
+        role=MessageRole.summary,
+        status=MessageStatus.active,
+        content=new_summary,
+    )
+    async with ctx.db_session_factory() as db:
+        await db.execute(
+            update(Message)
+            .where(Message.id.in_(to_compress_ids))
+            .values(status=MessageStatus.compressed)
+        )
+        await db.execute(
+            update(Session).where(Session.id == sid).values(needs_compression=False)
+        )
+        db.add(_summary_obj)
+        await db.commit()
+
+    return new_summary
+
+
+async def _build_crisis_context(
+    ctx: ChatContextSchema,
+    sid: UUID,
+    crisis_message_turn: int,
+    current_turn: int,
+    guidance: str | None,
+    summary: str | None = None,
+    keep_messages: list[BaseMessage] = [],
+) -> list[BaseMessage]:
+    """构建风险态上下文
+
+    1. 获取审查agent输出的风险主题
+    2. 获取N-3到N+3轮次的消息
+    3. 按风险轮次前后进行拆分
+
+    Args:
+        ctx (ChatContextSchema): langchain 图上下文
+        db (AsyncSession): 数据库连接
+        sid (UUID): session id
+        crisis_message_turn (int): 风险触发轮次
+        current_turn (int): 当前对话轮次
+        guidance (str | None): audit 注入内容
+        summary (str | None, optional): 压缩摘要. Defaults to None.
+        keep_messages (list[BaseMessage], optional): 保留的对话，直接传入messages. Defaults to [].
+
+    Raises:
+        ValueError: crisis_topic 与 crisis_locked 表示的语义不一致时触发，crisis_locked 为 True 时，
+        crisis_topic 应该不为 None
+
+    Returns:
+        list[BaseMessage]: 返回[sys, human, ai, ... , human]结构的messages
+    """
+    async with ctx.db_session_factory() as db:
+        # 查crisis_topic
+        crisis_topic = await db.scalar(
+            select(AuditRecord.crisis_topic).where(
+                AuditRecord.session_id == sid,
+                AuditRecord.turn_number == crisis_message_turn,
+            )
+        )
+        if crisis_topic is None:
+            raise ValueError("crisis_topic 为空，但 audit 状态 crisis_locked 查询为 True")
+        # 查messages，不包括最新 human
+        messages_orm = await load_recent_messages(
+            sid,
+            db,
+            crisis_message_turn - 3,
+            min(crisis_message_turn + 3, current_turn - 1),
+            as_orm=True,
+        )
+        # 分隔
+        pre_messages: list[BaseMessage] = []
+        crisis_messages: list[BaseMessage] = []
+        post_messages: list[BaseMessage] = []
+        for mo in messages_orm:
+            if mo.turn_number < crisis_message_turn:
+                pre_messages.append(to_lc_message(mo))
+            elif mo.turn_number == crisis_message_turn:
+                crisis_messages.append(to_lc_message(mo))
+            else:
+                post_messages.append(to_lc_message(mo))
+
+    return [
+        build_crisis_system_prompt(
+            ctx.child_profile,
+            crisis_topic,
+            serialize_history_to_xml(crisis_messages),
+            serialize_history_to_xml(pre_messages),
+            serialize_history_to_xml(post_messages),
+            summary,
+        ),
+        *keep_messages,
+        HumanMessage(content=format_guidance_wrapper(ctx.user_input, guidance)),
+    ]
+
+
 async def build_messages_crisis(
     state: MainDialogueState,
     runtime: Runtime[ChatContextSchema],
 ) -> dict:
-    """crisis 专属装配：crisis system prompt → anchor_window → after_anchor → reentry wrapper。"""
-    ctx = runtime.context
-    audit = state.get("audit_state", {})
+    """根据会话情况构建风险 agent 所需的 messages
 
-    target_mid = audit.get("target_message_id")
-    assert target_mid is not None, (
-        "M9 Step 8 前 target_message_id 由 audit 节点必填；None 表示 PG 兜底或 Redis 信号尚未就绪"
-    )
+    1. 获取会话的压缩标志和风险触发轮次
+    2. 检验风险触发轮次不为空
+    3. 根据压缩态拼装最终 messages
+    """
+    ctx = runtime.context
+    sid = ctx.session_id
+    audit = state.get("audit_state", {})
+    guidance = audit.get("guidance")
+    current_turn = state["turn_number"]
 
     async with ctx.db_session_factory() as db:
-        anchor_system, after_anchor = await build_crisis_context(
-            ctx.session_id,
-            db,
-            target_mid,
+        needs_compression = await db.scalar(
+            select(Session.needs_compression).where(Session.id == sid)
         )
+        crisis_message_turn = await db.scalar(
+            select(Message.turn_number)
+            .join(RollingSummary, RollingSummary.crisis_locked_message_id == Message.id)
+            .where(RollingSummary.session_id == sid)
+        )
+        if crisis_message_turn is None:
+            raise ValueError(
+                "crisis_locked_message_id 为空，但 audit 状态 crisis_locked 查询为 True"
+            )
+
+        messages_orm, summary_orm = await load_active_messages_with_summary(
+            sid, db, from_turn=crisis_message_turn + 4, to_turn=current_turn - 1
+        )
+        keep_messages = [to_lc_message(mo) for mo in messages_orm]
+        summary_content = summary_orm.content if summary_orm else None
+
+        # 路由标记：连接内决策 + DB 写操作，连接外只走纯值数据流。
+        to_compress: list[BaseMessage] = []
+        to_compress_ids: list[UUID] = []
+        to_keep: list[BaseMessage] = []
+        old_summary: BaseMessage | None = None
+        if needs_compression and current_turn - crisis_message_turn > 3:
+            to_compress_orm, to_keep_orm = split_for_compression(messages_orm)
+            to_compress = [to_lc_message(mo) for mo in to_compress_orm]
+            to_compress_ids = [mo.id for mo in to_compress_orm]
+            to_keep = [to_lc_message(mo) for mo in to_keep_orm]
+            old_summary = to_lc_message(summary_orm) if summary_orm else None
+            action = "compress"
+        elif needs_compression:
+            # crisis 触发后 3 轮内不压缩，但必须清零标志避免下轮误进。
+            await db.execute(
+                update(Session).where(Session.id == sid).values(needs_compression=False)
+            )
+            await db.commit()
+            action = "keep"
+        else:
+            action = "keep"
+
+    if action == "compress":
+        writer = get_stream_writer()
+        writer({"compression_start": {}})
+        new_summary = await _handle_compress(ctx, sid, old_summary, to_compress, to_compress_ids)
+        writer({"compression_end": {}})
+        return {
+            "messages": await _build_crisis_context(
+                ctx,
+                sid,
+                crisis_message_turn,
+                current_turn,
+                guidance,
+                new_summary,
+                to_keep,
+            )
+        }
+
     return {
-        "messages": [
-            build_crisis_system_prompt(ctx.child_profile),
-            anchor_system,
-            *after_anchor,
-            HumanMessage(content=format_reentry_wrapper_crisis(ctx.user_input)),
-        ]
+        "messages": await _build_crisis_context(
+            ctx,
+            sid,
+            crisis_message_turn,
+            current_turn,
+            guidance,
+            summary_content,
+            keep_messages,
+        )
     }
 
 

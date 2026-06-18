@@ -100,7 +100,7 @@ class Message(BaseMixin, Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     intervention_type: Mapped[Optional[InterventionType]] = mapped_column(
         nullable=True,
-        comment="null=正常回复, crisis=危机接管, redline=红线接管, guided=二级注入后回复",
+        comment="null=正常回复, crisis=危机接管, guided=二级注入后回复",
     )
     status: Mapped[MessageStatus] = mapped_column(
         default=MessageStatus.active,
@@ -116,8 +116,7 @@ class Message(BaseMixin, Base):
         default=0,
         server_default="0",
         nullable=False,
-        comment="对话轮次编号。human/ai 同轮共享同号；summary/discarded 行保持 0。"
-        "由 Step 3 commit①/commit② 与 backfill SQL 共同维护",
+        comment="对话轮次编号。human/ai 同轮共享同号；summary 行与共同发送的 human 匹配。",
     )
 
     # relationships

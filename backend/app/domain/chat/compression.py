@@ -33,7 +33,7 @@ def split_for_compression(
     """把 active 消息切分为 (to_compress, to_keep)。
 
     切分规则:
-    - 末尾 `keep_recent_pairs * 2` 条进入 to_keep(原状 active,直接进 history)
+    - 末尾 `keep_recent_pairs` 对 human, ai 进入 to_keep(原状 active,直接进 history)
     - 其余进入 to_compress(待送 LLM 压成一段 summary)
     - 若总长 ≤ `keep_recent_pairs * 2`,全部进 to_compress,to_keep 为空
       ——已到这一步说明已超 token 阈值,即便轮数少也必须压,不留原会话。
@@ -53,7 +53,9 @@ def split_for_compression(
     return list(actives[:-keep_n]), list(actives[-keep_n:])
 
 
-def build_compression_messages(history: list[BaseMessage]) -> list[BaseMessage]:
+def build_compression_messages(
+    last_summary: BaseMessage | None, history: list[BaseMessage]
+) -> list[BaseMessage]:
     """构建压缩调用的 messages。返回 list 长度恒为 2。
 
     - SystemMessage: 角色定位及输入输出说明
@@ -61,7 +63,7 @@ def build_compression_messages(history: list[BaseMessage]) -> list[BaseMessage]:
     """
     history_xml = serialize_history_to_xml(history, include_system=False)
     return [
-        build_compression_prompt(),
+        build_compression_prompt(last_summary),
         HumanMessage(content=history_xml),
     ]
 

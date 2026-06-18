@@ -41,3 +41,6 @@ class MainDialogueState(TypedDict):
     client_alive: bool
     user_stop_requested: bool
     turn_number: int  # M8: 当前对话轮次，由 me.py 从 sessions.ai_turn_counter+1 填入
+    # 压缩相关
+    compression_summary: str | None
+    keep_messages: list[BaseMessage] | None
