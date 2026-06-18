@@ -5,7 +5,7 @@ graph.astream 循环 → commit② 三终态(自然结束 / StopWithAi / StopNoA
 
 graph.astream 循环内部嵌套:
 - thinking 状态机（reasoning 信号触发 thinking_start/thinking_end）
-- stream_graph_to_sse 帧映射（per-payload wrapper）
+- delta 帧 emit
 
 本模块只暴露 `run_llm_pipeline` 一个公开协程,其他均为内部实现。
 
@@ -31,7 +31,6 @@ from app.domain.chat.models import Session as SessionModel
 from app.domain.chat.stream import (
     ChatStreamState,
     frame_sse_event,
-    stream_graph_to_sse,
 )
 from app.domain.chat.stream_signals import running_streams
 from app.domain.chat.usecase import enqueue_audit, persist_ai_turn
@@ -149,7 +148,7 @@ async def run_llm_pipeline(
             # intervention_type 信号(graph 终端节点在首 delta 前发射)。
             # 此处 payload 是 graph 终端节点在 LLM .astream() 之前写入的单次路由帧,
             # 严格早于后续 delta chunk 帧。_put 在此发射 SSE 事件后,
-            # 待第一个 delta 到达(如果有)才通过 stream_graph_to_sse 映射。
+            # 待第一个 delta 到达(如果有)之后才发射 delta 帧。
             it_raw = payload.get("intervention_type")
             if it_raw:
                 try:
@@ -166,18 +165,9 @@ async def run_llm_pipeline(
             if fr:
                 last_finish_reason = fr
 
-            # single-delta wrapper → stream_graph_to_sse 映射
-            async def _wrap():
-                yield payload
-
-            try:
-                async for frame in stream_graph_to_sse(_wrap()):
-                    _put(frame)
-            except Exception:
-                logger.exception(
-                    "stream_graph_to_sse mapping failed",
-                    extra={"sid": str(sid)},
-                )
+            # delta 帧:直接发射 SSE 帧(不再经过 _wrap + stream_graph_to_sse)
+            if d:
+                _put(frame_sse_event("delta", {"content": d}))
 
         # ---- ③ 图后:短连接做 commit② ----
         async with rr.db_session_factory() as db:

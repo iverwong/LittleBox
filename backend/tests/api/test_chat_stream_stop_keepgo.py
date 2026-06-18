@@ -358,75 +358,13 @@ async def test_stop_with_ai(lifecycle_ctx):
 
 
 # ---------------------------------------------------------------------------
-# S3: KeepGo (不 cancel) — ConnectionError at yield, LLM stream continues
+# S3: KeepGo (不 cancel) — 保护在 graph 循环内遇到 ConnectionError 时仍延续
 # ---------------------------------------------------------------------------
 #
-# Key design: mock stream_graph_to_sse to raise ConnectionError after the
-# first successful delta.  The stream_generator's inner try/except catches it,
-# sets client_alive=False, and continues consuming the graph stream.
+# M9-patch3: delta 帧改为 pipeline 循环内直接 frame_sse_event + _put,
+# 不再经过 stream_graph_to_sse async-generator, 因此 graph 循环内无
+# delta 相关异步边界可抛 ConnectionError。该场景不再可测,移除。
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_keepgo_connection_error(lifecycle_ctx):
-    """ConnectionError at SSE yield → LLM stream continues, all chunks consumed, DB written."""
-    client, headers, child = await lifecycle_setup(lifecycle_ctx)
-
-    consumed_count = 0
-    fake_payloads = [
-        {"delta": "你"},
-        {"delta": "好"},
-        {"delta": "！"},
-        {"finish_reason": "stop"},
-    ]
-
-    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
-        nonlocal consumed_count
-        for p in fake_payloads:
-            consumed_count += 1
-            yield p
-
-    sse_call_count = 0
-
-    async def mock_stream_to_sse(payloads):
-        nonlocal sse_call_count
-        sse_call_count += 1
-        async for p in payloads:
-            if sse_call_count >= 2:
-                raise ConnectionError("mock client disconnect")
-            yield _make_delta_frame(p.get("delta", ""))
-
-    lifecycle_ctx.rr.main_graph.astream = fake_astream
-    with patch("app.domain.chat.pipeline.stream_graph_to_sse", mock_stream_to_sse):
-        body = make_payload(content="Hi")
-        resp = await client.post(
-            "/api/v1/me/chat/stream", json=body, headers=headers,
-        )
-        assert resp.status_code == 200
-        await resp.aclose()
-
-    assert consumed_count == len(fake_payloads), (
-        f"Expected {len(fake_payloads)} chunks consumed, got {consumed_count}"
-    )
-
-    frames = _parse_sse_frames(resp.text)
-    frame_types = [f["type"] for f in frames]
-    assert "session_meta" in frame_types
-
-    sid = frames[0]["data"]["session_id"]
-
-    # DB: accumulated = "你好！" (all deltas concatenated), finish_reason = "stop"
-    lifecycle_ctx.assert_sess.expire_all()
-    msgs = (
-        (await lifecycle_ctx.assert_sess.execute(
-            select(Message).where(Message.session_id == sid).order_by(Message.created_at),
-        ))
-        .scalars()
-        .all()
-    )
-    assert len(msgs) == 2, f"Expected 2 rows (human + ai), got {len(msgs)}"
-    ai_msg = msgs[1]
-    assert ai_msg.role == MessageRole.ai
     assert ai_msg.content == "你好！", f"Expected '你好！', got '{ai_msg.content}'"
     assert ai_msg.finish_reason == "stop"
 
