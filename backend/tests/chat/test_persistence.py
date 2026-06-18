@@ -290,6 +290,8 @@ async def test_enqueue_audit_sets_pending_and_enqueues(db_session, child_user):
             gender="unknown",
             birth_date=date(2013, 1, 1),
             age=12,
+            sensitivity=None,
+            custom_redlines=None,
         )
         await enqueue_audit(
             mock_arq_pool, mock_redis, sid, db_session,

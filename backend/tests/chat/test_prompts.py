@@ -15,14 +15,6 @@ from unittest.mock import patch
 import pytest
 from app.core.time import age_at
 from app.domain.chat.prompts import (
-    STUB_CRISIS_SYSTEM_PROMPT,
-    STUB_GENDER_FEMALE,
-    STUB_GENDER_MALE,
-    STUB_TIER_EARLY_CHILDHOOD,
-    STUB_TIER_LATE_CHILDHOOD,
-    STUB_TIER_PRE_TEEN,
-    STUB_TIER_TEEN,
-    STUB_TIER_YOUNG_ADULT,
     build_crisis_system_prompt,
     build_system_prompt,
     format_guidance_wrapper,
@@ -204,29 +196,6 @@ class TestBuildSystemPrompt:
         assert positions == sorted(positions)
 
 
-class TestStubCount:
-    """关注点：TODO(prompts-content) slot 计数。"""
-
-    def test_todo_content_slots_count(self) -> None:
-        """M9 Step 4：9 个原有 + 3 个新增 = 12。
-
-        原有（9）：_identity_block(1) + _safety_block(1) + _tier_block(5) + _gender_block(2)
-        新增（3）：STUB_CRISIS_SYSTEM_PROMPT +
-                  STUB_REENTRY_WRAPPER_CRISIS +
-                  GUIDANCE_WRAPPER
-        """
-        import subprocess
-
-        result = subprocess.run(
-            ["grep", "-c", "TODO(prompts-content)", "app/domain/chat/prompts.py"],
-            capture_output=True,
-            text=True,
-            cwd="/app",
-        )
-        count = int(result.stdout.strip())
-        assert count == 11, f"expected 11 TODO(prompts-content) lines, got {count}"
-
-
 class TestM9InterventionPrompts:
     """M9 Step 4：三级干预 STUB prompt + format_* wrapper 纯函数测试。
 
@@ -257,7 +226,7 @@ class TestM9InterventionPrompts:
     # ---- C.2: format_reentry_wrapper_crisis ----
 
     def test_format_reentry_wrapper_crisis(self) -> None:
-        """Given user_input='hi', When format_reentry_wrapper_crisis, Then 含 STUB 标记。"""
+        """Given user_input='hi', When format_reentry_wrapper_crisis, Then 含内联 TODO 标记。"""
         result = format_reentry_wrapper_crisis("hi")
         assert isinstance(result, str)
         assert "TODO(prompts-content)" in result

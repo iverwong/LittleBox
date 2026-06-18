@@ -47,6 +47,8 @@ def _make_fake_runtime() -> object:
         gender="unknown",
         birth_date=date(2013, 1, 1),
         age=12,
+        sensitivity=None,
+        custom_redlines=None,
     )
     ctx = AuditContextSchema(
         session_id=SID,
@@ -112,10 +114,8 @@ async def test_load_context_passes_db_session_factory():
 
     result = await _go()
 
-    # load_context 返回 dict 含 messages、max_iter、session_notes_working
+    # load_context 返回 dict 含 messages、session_notes_working
     assert "messages" in result
-    assert "max_iter" in result
-    assert result["max_iter"] == 5
     assert result.get("session_notes_working") == ""
     # history 空时 messages 长度恒为 2 (System + Human)
     assert len(result["messages"]) == 2
@@ -136,8 +136,6 @@ async def test_load_context_returns_messages_with_max_iter():
         result = await load_context(state, runtime)
 
     assert "messages" in result
-    assert "max_iter" in result
-    assert result["max_iter"] == 5
     # A2 段:load_context 覆盖 session_notes_working,空 helper 返 ""
     assert result.get("session_notes_working") == ""
     # B 段:history 走 XML 包装后 messages 长度恒为 2 (System + Human)

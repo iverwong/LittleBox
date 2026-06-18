@@ -24,6 +24,8 @@ class TestAuditSystemPrompt:
             gender="unknown",
             birth_date=date(2013, 1, 1),
             age=12,
+            sensitivity=None,
+            custom_redlines=None,
         )
         return build_audit_system_prompt(profile, max_iter=5).content
 
@@ -51,7 +53,7 @@ class TestAuditSystemPrompt:
     def test_contains_signal_guidelines(self):
         prompt = self._prompt()
         assert "# 危机(crisis)" in prompt
-        assert "# 红线(redline)" in prompt
+        assert "红线未配置则不触发" in prompt
         assert "crisis_detected" in prompt
 
 

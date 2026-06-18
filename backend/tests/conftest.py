@@ -470,11 +470,14 @@ def make_child_profile_snapshot(
     gender: str = "male",
     birth_date: date | None = None,
     age: int = 8,
+    sensitivity: dict | None = None,
+    custom_redlines: str | None = None,
 ) -> ChildProfileSnapshot:
     """内存级 ChildProfileSnapshot 工厂，测试用。
 
     默认值与既有测试 fixture 兼容（age=8, gender='male'）。
     birth_date 默认 None：仅 age 用于 prompt 落档时不影响测试断言。
+    sensitivity/custom_redlines 默认 None：兼容旧测试（audit 全用默认值）。
     """
     return ChildProfileSnapshot(
         child_user_id=child_user_id or uuid.uuid4(),
@@ -482,6 +485,8 @@ def make_child_profile_snapshot(
         gender=gender,
         birth_date=birth_date,
         age=age,
+        sensitivity=sensitivity,
+        custom_redlines=custom_redlines,
     )
 
 

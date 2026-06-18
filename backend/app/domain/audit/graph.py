@@ -57,11 +57,6 @@ TOOL_NAME_REPLACE = "ReplaceInNotes"
 TOOL_NAME_OUTPUT = "AuditOutputSchema"
 
 
-def _has_audit_output(response: AIMessage) -> bool:
-    """检查模型的响应中是否调用了 audit_output 工具（D11 v3 post-processing）。"""
-    return any(tc["name"] == TOOL_NAME_OUTPUT for tc in (response.tool_calls or []))
-
-
 def _find_last_output_tool_call(messages: list[BaseMessage]) -> Any:
     """从 messages 历史反向查找最近的 AuditOutputSchema tool_call。
 
@@ -197,7 +192,7 @@ async def load_context(
     sid = ctx.session_id
     async with ctx.db_session_factory() as db:
         history = await load_recent_messages(
-            sid, db, state["turn_number"] - 9, state["turn_number"] - 1
+            sid, db, state["turn_number"] - 9, state["turn_number"] - 1, as_orm=False
         )
         session_notes = await _load_session_notes_from_pg(sid, db)
     prior_turns = history[:-2]  # 前 3 轮 = 6 条消息
@@ -216,7 +211,6 @@ async def load_context(
             ),
         ],
         "session_notes_working": session_notes,
-        "max_iter": ctx.max_iter,  # D-patch0-7：路由函数妥协
     }
 
 

@@ -305,7 +305,12 @@ async def test_compression_progress_fired_when_flag_true(lifecycle_ctx):
     mock_llm.ainvoke.return_value.content = "压缩摘要"
 
     async def fake_astream(initial_state, stream_mode="custom", **kwargs):
-        for p in [{"delta": "回复"}, {"finish_reason": "stop"}]:
+        for p in [
+            {"compression_start": True},
+            {"compression_end": True},
+            {"delta": "回复"},
+            {"finish_reason": "stop"},
+        ]:
             yield p
 
     lifecycle_ctx.rr.main_graph.astream = fake_astream
@@ -324,13 +329,7 @@ async def test_compression_progress_fired_when_flag_true(lifecycle_ctx):
     assert any(f["type"] == "compression_end" for f in frames), (
         "compression_end should be emitted"
     )
-    # 验证 active → compressed + new summary
-    msgs = (await lifecycle_ctx.assert_sess.execute(
-        select(Message).where(Message.session_id == sid).order_by(Message.created_at)
-    )).scalars().all()
-    assert any(m.role == MessageRole.summary for m in msgs), "summary message should exist"
-    session = await lifecycle_ctx.assert_sess.get(SessionModel, sid)
-    assert session.needs_compression is False, "flag reset after compression"
+    # M9-patch2: 压缩由 graph 图内节点负责，mock 图不实际落库。
 
 
 @pytest.mark.asyncio
@@ -360,7 +359,11 @@ async def test_compression_failure_keeps_flag(api_client, auth_headers_child, db
     mock_llm.ainvoke.side_effect = RuntimeError("模拟压缩失败")
 
     async def fake_astream(initial_state, stream_mode="custom", **kwargs):
-        for p in [{"delta": "回复"}, {"finish_reason": "stop"}]:
+        for p in [
+            {"compression_start": True},
+            {"delta": "回复"},
+            {"finish_reason": "stop"},
+        ]:
             yield p
 
     app.state.resources.main_graph.astream = fake_astream
@@ -373,13 +376,13 @@ async def test_compression_failure_keeps_flag(api_client, auth_headers_child, db
         await resp.aclose()
 
     frames = _parse_sse_frames(resp.text)
-    assert any(f["type"] == "error" for f in frames), "error frame should be emitted on compression failure"
-    error_frame = next(f for f in frames if f["type"] == "error")
-    assert error_frame["data"].get("code") == "CompressionError", (
-        f"Expected CompressionError, got {error_frame}"
+    # M9-patch2: 压缩由 graph 图内节点负责，pipeline 仅透传 compression_start/end。
+    # 此 mock 场景中 graph 发出 compression_start 但不发出 compression_end，
+    # pipeline 仍正常转发后续 delta。
+    assert any(f["type"] == "compression_start" for f in frames), (
+        "compression_start should be emitted"
     )
-    session = await db_session.get(SessionModel, sid)
-    assert session.needs_compression is True, "flag should stay True after failure"
+    # session.needs_compression 等状态由 graph 压缩节点管理，mock 不修改 DB。
 
 
 @pytest.mark.asyncio

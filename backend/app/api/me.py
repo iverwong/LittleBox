@@ -389,6 +389,8 @@ async def chat_stream(
             gender=child_profile.gender.value,
             birth_date=child_profile.birth_date,
             age=age_at(child_profile.birth_date, tz="Asia/Shanghai"),
+            sensitivity=child_profile.sensitivity,
+            custom_redlines=child_profile.custom_redlines,
         )
 
         # ---- decision matrix O + first-turn / subsequent-turn transaction ----
@@ -457,12 +459,6 @@ async def chat_stream(
                 queue=queue,
                 state=state,
                 stop_event=stop_event,
-                protected_id=result.protected_id,
-                # 与 ctx.user_input 同源:Row 3/5 用 req.content,Row 6 复用孤儿用 regen_user_input。
-                # 透传原语字符串而非 ORM 对象,避免跨 session 边界 detached 风险。
-                protected_content=(
-                    result.regen_user_input if result.regen_user_input is not None else req.content
-                ),
             ),
             name=f"chat-llm-{sid}",
         )

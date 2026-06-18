@@ -8,7 +8,6 @@ Phase 2.4 从 `api/me.py::chat_stream` 抽离。决策矩阵 7 row 行为完全
 - `hid` —— human 消息 ID,用于 session_meta 事件
 - `user_msg` —— 本轮新增的 human message(用于 commit① last_active_at 同步)
 - `regen_user_input` —— Row 6 复用孤儿行时喂入 ctx.user_input 的原始文本
-- `protected_id` —— 压缩保护 id(Row 1 为 None,其他为 user_msg.id 或 last_msg.id)
 - `turn_number` —— M9 turn 号,commit① human + commit② ai 共享同号
 """
 
@@ -34,7 +33,6 @@ class TurnIntakeResult:
     hid: UUID
     user_msg: Message | None
     regen_user_input: str | None
-    protected_id: UUID | None
     turn_number: int
 
 
@@ -151,15 +149,9 @@ async def intake_human_message(
         # 不存在"非孤儿"次态——见 docstring。
         raise AssertionError(f"unreachable: unexpected last_msg.role={last_msg.role!r}")
 
-    # Row 1 (last_msg is None) 无旧消息可压缩,protected_id 置 None
-    protected_id: UUID | None = None
-    if last_msg is not None:
-        protected_id = user_msg.id if user_msg is not None else last_msg.id
-
     return TurnIntakeResult(
         hid=hid,
         user_msg=user_msg,
         regen_user_input=regen_user_input,
-        protected_id=protected_id,
         turn_number=turn_number,
     )

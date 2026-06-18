@@ -4,70 +4,17 @@
 
 当前内容：
 - build_system_prompt — 主对话 5 段 system prompt（年龄 + 性别驱动）
-- COMPRESSION_PROMPT_STUB — M8 上下文压缩 prompt 占位
-- build_compression_prompt — 同上，返回 SystemMessage 包装
+- build_compression_prompt — 上下文压缩 prompt，返回 SystemMessage
 - build_crisis_system_prompt — 危机接管 system prompt（tier/gender 复用主对话分段）
 - format_reentry_wrapper_crisis — crisis 重入 wrapper（{user_input} 占位）
 - format_guidance_wrapper — 引导注入 wrapper（{user_input} + {guidance} 占位）
-
-12 个 prompt 占位 slot 待专人审核后填充。
 """
 
 from langchain_core.messages import BaseMessage, SystemMessage
 
 from app.domain.accounts.schemas import ChildProfileSnapshot
 
-# ---- Stub constants (stable, assertable in tests) ----
-STUB_IDENTITY = "[STUB identity]"
-STUB_SAFETY = "[STUB safety]"
-STUB_TIER_EARLY_CHILDHOOD = "[STUB tier:early_childhood]"
-STUB_TIER_LATE_CHILDHOOD = "[STUB tier:late_childhood]"
-STUB_TIER_PRE_TEEN = "[STUB tier:pre_teen]"
-STUB_TIER_TEEN = "[STUB tier:teen]"
-STUB_TIER_YOUNG_ADULT = "[STUB tier:young_adult]"
-STUB_GENDER_MALE = "[STUB gender:male]"
-STUB_GENDER_FEMALE = "[STUB gender:female]"
-# Total: 12 prompt slots
-
-# compute_age 已迁至 core/time.py::age_at
-
-
-def _identity_block() -> str:
-    # TODO(prompts-content): identity & dialogue principles template
-    return STUB_IDENTITY
-
-
-def _safety_block() -> str:
-    # TODO(prompts-content): jailbreak resistance template
-    return STUB_SAFETY
-
-
-def _tier_block(age: int) -> str:
-    if age <= 5:
-        # TODO(prompts-content): early_childhood (3-5)
-        return STUB_TIER_EARLY_CHILDHOOD
-    if age <= 9:
-        # TODO(prompts-content): late_childhood (6-9)
-        return STUB_TIER_LATE_CHILDHOOD
-    if age <= 13:
-        # TODO(prompts-content): pre_teen (10-13)
-        return STUB_TIER_PRE_TEEN
-    if age <= 18:
-        # TODO(prompts-content): teen (14-18)
-        return STUB_TIER_TEEN
-    # TODO(prompts-content): young_adult (19-21, incl. "20+")
-    return STUB_TIER_YOUNG_ADULT
-
-
-def _gender_block(gender: str | None) -> str | None:
-    if gender == "male":
-        # TODO(prompts-content): male gender block
-        return STUB_GENDER_MALE
-    if gender == "female":
-        # TODO(prompts-content): female gender block
-        return STUB_GENDER_FEMALE
-    # unknown / None → omit entire section
-    return None
+# ---- compute_age 已迁至 core/time.py::age_at ----
 
 
 def build_system_prompt(
@@ -93,7 +40,7 @@ def build_system_prompt(
     return SystemMessage(
         content=f"""\
 # 身份与原则
-你是“小盒子”，一个面向青少年儿童的AI伙伴。
+你是"小盒子"，一个面向青少年儿童的AI伙伴。
 你需要结合对方年龄、性别、心理等情况，担任一个安全、可信、温暖、有分寸的对话对象。
 你更像一个靠谱的大朋友或陪伴者，而不是老师、家长或心理医生。
 
@@ -169,30 +116,14 @@ def build_compression_prompt(last_summary: BaseMessage | None) -> SystemMessage:
 
 SUMMARY_PREFIX = "[历史对话摘要]\n"
 
-# ---- M8 上下文压缩 prompt 任务说明（与审查关注点解耦，不含情绪 / 风险 / 安全语境） ----
-
-COMPRESSION_PROMPT_STUB = (
-    "你是对话压缩助手："
-    "你需要使用第三人称把 <history>...</history> 包裹的对话压缩为一段简短叙述。"
-    "并输出使用 <summary>…</summary> 包裹的总结内容。"
-)
-
 
 # ---- M9 crisis anchor_window 前缀（§D.1，供 context.py 引用） ----
 
 ANCHOR_WINDOW_PREFIX = "[anchor 窗口]"
 
-# ---- M9 三级干预 STUB prompt + wrapper（12 个 TODO slot 中新增的 3 个） ----
 
-# C.1
-STUB_CRISIS_SYSTEM_PROMPT = (
-    "# TODO(prompts-content): crisis 接管身份与安全底线\n[STUB crisis intervention system prompt]"
-)
+# ---- M9 三级干预 STUB prompt + wrapper ----
 
-# C.2
-STUB_REENTRY_WRAPPER_CRISIS = "TODO(prompts-content): crisis 重入 wrapper\n用户输入：{user_input}"
-
-# C.3（guidance 为空时透传 user_input，不包装）
 GUIDANCE_WRAPPER = """<guidance>{guidance}</guidance>
 
 ---
@@ -224,7 +155,7 @@ def build_crisis_system_prompt(
     return SystemMessage(
         content=f"""\
 # 身份与原则
-你是“小盒子”，一个面向青少年儿童的AI伙伴。
+你是"小盒子"，一个面向青少年儿童的AI伙伴。
 你需要结合对方年龄、性别、心理等情况，担任一个安全、可信、温暖、有分寸的对话对象。
 你更像一个靠谱的大朋友或陪伴者，而不是老师、家长或心理医生。
 
@@ -303,7 +234,7 @@ def build_crisis_system_prompt(
 
 def format_reentry_wrapper_crisis(user_input: str) -> str:
     """crisis 重入 wrapper：包装用户输入后送入 crisis LLM。"""
-    return STUB_REENTRY_WRAPPER_CRISIS.format(user_input=user_input)
+    return f"TODO(prompts-content): crisis 重入 wrapper\n用户输入：{user_input}"
 
 
 def format_guidance_wrapper(user_input: str, guidance: str | None) -> str:

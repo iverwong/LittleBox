@@ -126,6 +126,8 @@ def _make_fake_runtime(max_iter: int = 5) -> object:
         gender="unknown",
         birth_date=date(2013, 1, 1),
         age=12,
+        sensitivity=None,
+        custom_redlines=None,
     )
     ctx = AuditContextSchema(
         session_id=SID,

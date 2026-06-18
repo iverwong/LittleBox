@@ -1,13 +1,16 @@
 """段一:LLM consumption 协程。
 
 Phase 2.3 从 `api/me.py` 抽离,在独立 asyncio.Task 中运行,负责:
-compression → graph.astream 循环 → commit② 三终态(自然结束 / StopWithAi / StopNoAa)。
+graph.astream 循环 → commit② 三终态(自然结束 / StopWithAi / StopNoAa)。
 
 graph.astream 循环内部嵌套:
 - thinking 状态机（reasoning 信号触发 thinking_start/thinking_end）
 - stream_graph_to_sse 帧映射（per-payload wrapper）
 
 本模块只暴露 `run_llm_pipeline` 一个公开协程,其他均为内部实现。
+
+M9-patch2: 压缩逻辑已迁入 graph.py 图内压缩节点,删除图前阻塞压缩;
+DB 会话拆分:图前短连接读 session,图循环不持有连接,图后短连接 commit②。
 """
 
 from __future__ import annotations
@@ -18,16 +21,13 @@ from typing import Any
 from uuid import UUID
 
 from redis.asyncio import Redis
-from sqlalchemy import select
 
-from app.core.enums import InterventionType, MessageRole, MessageStatus
+from app.core.enums import InterventionType
 from app.core.locks import release_session_lock
 from app.core.runtime import RuntimeResources
-from app.domain.chat.compression import CONTEXT_COMPRESS_THRESHOLD_TOKENS, split_for_compression
+from app.domain.chat.compression import CONTEXT_COMPRESS_THRESHOLD_TOKENS
 from app.domain.chat.context_schema import ChatContextSchema
-from app.domain.chat.models import Message
 from app.domain.chat.models import Session as SessionModel
-from app.domain.chat.prompts import build_system_prompt
 from app.domain.chat.stream import (
     ChatStreamState,
     frame_sse_event,
@@ -52,15 +52,16 @@ async def run_llm_pipeline(
     queue: asyncio.Queue,
     state: ChatStreamState,
     stop_event: asyncio.Event,
-    protected_id: UUID | None = None,
-    protected_content: str | None = None,
 ) -> None:
     """段一:LLM consumption 协程,在独立 asyncio.Task 中运行。
 
     M9-patch1 解耦后,以下业务逻辑从 HTTP StreamingResponse generator
-    迁入本函数(§7.3 清单 1-8):compression → thinking 状态机 →
+    迁入本函数(§7.3 清单 1-8):thinking 状态机 →
     graph.astream → stream_graph_to_sse 帧映射 → commit② 三终态
     (自然结束 / StopWithAi / StopNoAi)。
+
+    M9-patch2: 删除图前阻塞压缩(图内压缩节点覆盖);DB 会话拆为三段
+    (图前短连接 → 图循环不持连接 → 图后短连接 commit②)。
 
     accumulated 语义(关注点 #4):以段一全量产出为准,不受段二
     客户端送达影响。即使客户端断连,commit② 仍将完整 accumulated
@@ -91,245 +92,111 @@ async def run_llm_pipeline(
     thinking_started = False
 
     try:
+        # ---- ① 图前:短连接读 session + 发送 session_meta ----
         async with rr.db_session_factory() as db:
+            _put(frame_sse_event("session_meta", {"session_id": str(sid), "hid": str(hid)}))
+            session = await db.get(SessionModel, sid)
+            if session is None:
+                raise RuntimeError(f"session {sid} not found")
+
+        # ---- ② 图循环:不持有 DB 连接 ----
+        graph = rr.main_graph
+        async for payload in graph.astream(
+            initial_state,
+            context=ctx,  # type: ignore[arg-type]
+            stream_mode="custom",
+            config={
+                "run_name": "main_chat",
+                "metadata": {
+                    "session_id": str(ctx.session_id),
+                    "child_id": str(ctx.child_user_id),
+                    "turn_number": turn_number,
+                },
+                "tags": ["main_chat"],
+            },
+        ):
+            if stop_event.is_set():
+                user_stopped = True
+                break
+            if payload.get("usage_metadata"):
+                usage_meta = payload["usage_metadata"]
+
+            # compression 信号(图内压缩节点发射)
+            cs = payload.get("compression_start")
+            if cs is not None:
+                _put(frame_sse_event("compression_start", {}))
+                continue
+
+            ce = payload.get("compression_end")
+            if ce is not None:
+                _put(frame_sse_event("compression_end", {}))
+                continue
+
+            # reasoning 信号(关注点 #5:段一无 client_alive 门控,
+            # 帧无条件入队;段二 yield 时通过捕捉 ConnectionError 自行退役)
+            if payload.get("reasoning"):
+                if not thinking_started:
+                    thinking_started = True
+                    _put(frame_sse_event("thinking_start", {}))
+                continue
+
+            d = payload.get("delta", "")
+            if d:
+                has_emitted_content = True
+                accumulated += d
+
+            # 首个非空 delta → 收 thinking
+            if d and thinking_started:
+                thinking_started = False
+                _put(frame_sse_event("thinking_end", {}))
+
+            # intervention_type 信号(graph 终端节点在首 delta 前发射)。
+            # 此处 payload 是 graph 终端节点在 LLM .astream() 之前写入的单次路由帧,
+            # 严格早于后续 delta chunk 帧。_put 在此发射 SSE 事件后,
+            # 待第一个 delta 到达(如果有)才通过 stream_graph_to_sse 映射。
+            it_raw = payload.get("intervention_type")
+            if it_raw:
+                try:
+                    last_intervention_type = InterventionType(it_raw)
+                    _put(frame_sse_event("intervention_type", {"type": it_raw}))
+                except ValueError:
+                    logger.warning(
+                        "unknown intervention_type %r, falling back to None",
+                        it_raw,
+                    )
+                    last_intervention_type = None
+
+            fr = payload.get("finish_reason")
+            if fr:
+                last_finish_reason = fr
+
+            # single-delta wrapper → stream_graph_to_sse 映射
+            async def _wrap():
+                yield payload
+
             try:
-                # 第一帧:session_meta
-                _put(frame_sse_event("session_meta", {"session_id": str(sid), "hid": str(hid)}))
+                async for frame in stream_graph_to_sse(_wrap()):
+                    _put(frame)
+            except Exception:
+                logger.exception(
+                    "stream_graph_to_sse mapping failed",
+                    extra={"sid": str(sid)},
+                )
 
-                # 重新加载 session(段一有自己独立的 db session)
-                session = await db.get(SessionModel, sid)
-                if session is None:
-                    raise RuntimeError(f"session {sid} not found")
+        # ---- ③ 图后:短连接做 commit② ----
+        async with rr.db_session_factory() as db:
+            session = await db.get(SessionModel, sid)
+            if session is None:
+                raise RuntimeError(f"session {sid} not found in commit②")
 
-                # ---- 阻塞压缩检查 ----
-                if session.needs_compression:
-                    try:
-                        _put(frame_sse_event("compression_start", {}))
-
-                        from app.core.llm import build_compression_llm
-                        from app.domain.chat.compression import (
-                            build_compression_messages,
-                            extract_compression_summary,
-                        )
-                        from app.domain.chat.context import to_lc_message
-
-                        if protected_id is None:
-                            raise RuntimeError(
-                                "compression triggered but no prior message to protect; "
-                                "this should not happen in production"
-                            )
-
-                        # 提到压缩块顶端:仅在 actives_orm 非空时真正赋值,
-                        # 但 L175 复用需要它已在 scope 中,故先 None 声明。
-                        summary: str | None = None
-                        _summary_obj: Message | None = None
-                        to_keep_orm: list = []
-
-                        actives_orm = (
-                            (
-                                await db.execute(
-                                    select(Message)
-                                    .where(
-                                        Message.session_id == sid,
-                                        Message.status == MessageStatus.active,
-                                        Message.id != protected_id,
-                                    )
-                                    .order_by(Message.created_at.asc(), Message.id.asc())
-                                )
-                            )
-                            .scalars()
-                            .all()
-                        )
-
-                        if actives_orm:
-                            # 末尾 N 对 (h,a) 留原状 active,直接进 history;
-                            # 其余送 LLM 压成一段 summary。详见 compression.split_for_compression。
-                            to_compress_orm, to_keep_orm = split_for_compression(actives_orm)
-                            if to_compress_orm:
-                                c_input = build_compression_messages(
-                                    None,
-                                    [to_lc_message(mo) for mo in to_compress_orm],
-                                )
-                                c_llm = build_compression_llm(rr.settings)
-                                c_result = await c_llm.ainvoke(c_input)
-                                raw = (
-                                    c_result.content
-                                    if hasattr(c_result, "content")
-                                    else str(c_result)
-                                )
-                                summary = extract_compression_summary(raw)
-                                for mo in to_compress_orm:
-                                    mo.status = MessageStatus.compressed
-                                # 命名 + flush:让 server_default 填充 id / created_at,
-                                # 之后在 initial_state 构造处直接复用本对象,不再回 DB 二次 SELECT
-                                _summary_obj = Message(
-                                    session_id=sid,
-                                    role=MessageRole.summary,
-                                    status=MessageStatus.active,
-                                    content=summary,
-                                )
-                                db.add(_summary_obj)
-                                await db.flush()
-                            else:
-                                # 切分后 to_compress 为空,无可压内容(防御分支)。
-                                logger.warning(
-                                    "compression noop for session %s: \
-                                        nothing to compress after split",
-                                    sid,
-                                )
-                        else:
-                            logger.warning(
-                                "compression noop for session %s: no messages to compress", sid
-                            )
-
-                        session.needs_compression = False
-                        await db.commit()
-
-                        # 手动构造 initial_state["messages"]
-                        # 注意:本轮 protected human 不在这里 append——
-                        # build_messages_main 节点会通过 add_messages reducer
-                        # 把它(以及可能的 guidance 包装)接到末尾,避免 reducer
-                        # 把本节点返回的整列表再 append 一遍导致重复。
-                        _sp = build_system_prompt(ctx.child_profile, summary)
-                        _new_hist: list = []
-
-                        # 切分后保留的最近 N 对 (h,a),原状 active 注入 history
-                        # 顺序: created_at ASC → 自然接在 summary 之后
-                        for mo in to_keep_orm:
-                            _new_hist.append(to_lc_message(mo))
-
-                        initial_state["messages"] = [_sp, *_new_hist]
-
-                        _put(frame_sse_event("compression_end", {}))
-                    except Exception:
-                        logger.exception("compression failed for session %s", sid)
-                        _put(
-                            frame_sse_event(
-                                "error",
-                                {"message": "压缩失败,请重试", "code": "CompressionError"},
-                            )
-                        )
-
-                # ---- 图谱主循环 ----
-                graph = rr.main_graph
-                async for payload in graph.astream(
-                    initial_state,
-                    context=ctx,  # type: ignore[arg-type]
-                    stream_mode="custom",
-                    # LangSmith trace 配置:按 session_id / child_id 过滤 trace。
-                    # 当前调用点原本无 config,无既有键需合并(无 checkpointer /
-                    # callbacks / configurable 既有键)。
-                    config={
-                        "run_name": "main_chat",
-                        "metadata": {
-                            "session_id": str(ctx.session_id),
-                            "child_id": str(ctx.child_user_id),
-                            "turn_number": turn_number,
-                        },
-                        "tags": ["main_chat"],
-                    },
-                ):
-                    if stop_event.is_set():
-                        user_stopped = True
-                        break
-                    if payload.get("usage_metadata"):
-                        usage_meta = payload["usage_metadata"]
-
-                    # reasoning 信号(关注点 #5:段一无 client_alive 门控,
-                    # 帧无条件入队;段二 yield 时通过捕捉 ConnectionError 自行退役)
-                    if payload.get("reasoning"):
-                        if not thinking_started:
-                            thinking_started = True
-                            _put(frame_sse_event("thinking_start", {}))
-                        continue
-
-                    d = payload.get("delta", "")
-                    if d:
-                        has_emitted_content = True
-                        accumulated += d
-
-                    # 首个非空 delta → 收 thinking
-                    if d and thinking_started:
-                        thinking_started = False
-                        _put(frame_sse_event("thinking_end", {}))
-
-                    # intervention_type 信号(graph 终端节点在首 delta 前发射)。
-                    # 此处 payload 是 graph 终端节点在 LLM .astream() 之前写入的单次路由帧,
-                    # 严格早于后续 delta chunk 帧。_put 在此发射 SSE 事件后,
-                    # 待第一个 delta 到达(如果有)才通过 stream_graph_to_sse 映射。
-                    it_raw = payload.get("intervention_type")
-                    if it_raw:
-                        try:
-                            last_intervention_type = InterventionType(it_raw)
-                            _put(frame_sse_event("intervention_type", {"type": it_raw}))
-                        except ValueError:
-                            logger.warning(
-                                "unknown intervention_type %r, falling back to None",
-                                it_raw,
-                            )
-                            last_intervention_type = None
-
-                    fr = payload.get("finish_reason")
-                    if fr:
-                        last_finish_reason = fr
-
-                    # single-delta wrapper → stream_graph_to_sse 映射
-                    async def _wrap():
-                        yield payload
-
-                    try:
-                        async for frame in stream_graph_to_sse(_wrap()):
-                            _put(frame)
-                    except Exception:
-                        logger.exception(
-                            "stream_graph_to_sse mapping failed",
-                            extra={"sid": str(sid)},
-                        )
-
-                # ---- commit② 三终态(关注点 #1) ----
-                if user_stopped:
-                    if has_emitted_content:
-                        # StopWithAi:persist_ai_turn 写 ai 行 + 自增 → usage 记账 → commit → audit
-                        aid = await persist_ai_turn(
-                            db,
-                            sid,
-                            content=accumulated,
-                            finish_reason="user_stopped",
-                            turn_number=turn_number,
-                            intervention_type=last_intervention_type,
-                        )
-                        if usage_meta:
-                            _usage_total = usage_meta["input_tokens"] + usage_meta["output_tokens"]
-                            session.context_size_tokens = _usage_total
-                            if _usage_total >= CONTEXT_COMPRESS_THRESHOLD_TOKENS:
-                                session.needs_compression = True
-                        await db.commit()
-                        await enqueue_audit(
-                            rr.arq_pool,
-                            rr.audit_redis,
-                            sid,
-                            db,
-                            turn_number,
-                            child_user_id,
-                            aid,
-                            ctx.child_profile,
-                        )
-                        _put(
-                            frame_sse_event(
-                                "stopped",
-                                {"finish_reason": "user_stopped", "aid": str(aid)},
-                            )
-                        )
-                    else:
-                        # StopNoAi:不写 ai 行、不发 audit、不带 aid 的 stopped 帧
-                        _put(frame_sse_event("stopped", {"finish_reason": "user_stopped"}))
-                else:
-                    # 自然结束:persist_ai_turn 写 ai 行 + 自增 → usage 记账 → commit → audit
+            if user_stopped:
+                if has_emitted_content:
+                    # StopWithAi:persist_ai_turn 写 ai 行 + 自增 → usage 记账 → commit → audit
                     aid = await persist_ai_turn(
                         db,
                         sid,
                         content=accumulated,
-                        finish_reason=last_finish_reason,
+                        finish_reason="user_stopped",
                         turn_number=turn_number,
                         intervention_type=last_intervention_type,
                     )
@@ -351,15 +218,49 @@ async def run_llm_pipeline(
                     )
                     _put(
                         frame_sse_event(
-                            "end",
-                            {"finish_reason": last_finish_reason, "aid": str(aid)},
+                            "stopped",
+                            {"finish_reason": "user_stopped", "aid": str(aid)},
                         )
                     )
+                else:
+                    # StopNoAi:不写 ai 行、不发 audit、不带 aid 的 stopped 帧
+                    _put(frame_sse_event("stopped", {"finish_reason": "user_stopped"}))
+            else:
+                # 自然结束:persist_ai_turn 写 ai 行 + 自增 → usage 记账 → commit → audit
+                aid = await persist_ai_turn(
+                    db,
+                    sid,
+                    content=accumulated,
+                    finish_reason=last_finish_reason,
+                    turn_number=turn_number,
+                    intervention_type=last_intervention_type,
+                )
+                if usage_meta:
+                    _usage_total = usage_meta["input_tokens"] + usage_meta["output_tokens"]
+                    session.context_size_tokens = _usage_total
+                    if _usage_total >= CONTEXT_COMPRESS_THRESHOLD_TOKENS:
+                        session.needs_compression = True
+                await db.commit()
+                await enqueue_audit(
+                    rr.arq_pool,
+                    rr.audit_redis,
+                    sid,
+                    db,
+                    turn_number,
+                    child_user_id,
+                    aid,
+                    ctx.child_profile,
+                )
+                _put(
+                    frame_sse_event(
+                        "end",
+                        {"finish_reason": last_finish_reason, "aid": str(aid)},
+                    )
+                )
 
-            except Exception as e:
-                logger.exception("llm pipeline error", extra={"sid": str(sid)})
-                await db.rollback()
-                _put(frame_sse_event("error", {"message": str(e), "code": "InternalError"}))
+    except Exception as e:
+        logger.exception("llm pipeline error", extra={"sid": str(sid)})
+        _put(frame_sse_event("error", {"message": str(e), "code": "InternalError"}))
 
     finally:
         running_streams.pop(str(sid), None)

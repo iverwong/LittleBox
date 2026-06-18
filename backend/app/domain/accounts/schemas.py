@@ -90,3 +90,5 @@ class ChildProfileSnapshot:
     gender: str
     birth_date: date
     age: int
+    sensitivity: dict | None
+    custom_redlines: str | None

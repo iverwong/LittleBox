@@ -10,7 +10,6 @@ from app.domain.chat.compression import (
     extract_compression_summary,
     split_for_compression,
 )
-from app.domain.chat.prompts import COMPRESSION_PROMPT_STUB
 from app.core.llm_extractors import extract_usage
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 

@@ -34,6 +34,8 @@ def _fake_child_profile_dict() -> dict:
         "gender": "unknown",
         "birth_date": date(2013, 1, 1),
         "age": 12,
+        "sensitivity": None,
+        "custom_redlines": None,
     }
 
 _AUDIT_OUTPUT = AuditOutputSchema(

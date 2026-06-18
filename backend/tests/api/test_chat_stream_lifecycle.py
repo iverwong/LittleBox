@@ -164,7 +164,6 @@ async def test_client_disconnect_keeps_bg_task_running(lifecycle_ctx):
             child_user_id=child.id, turn_number=1,
             initial_state={"messages": []}, ctx=ctx,
             queue=queue, state=state, stop_event=stop_event,
-            protected_id=None,
         ),
         name=f"chat-llm-{sid}",
     )
@@ -245,7 +244,6 @@ async def test_queue_full_triggers_flow_pause_and_headless_continuation(lifecycl
             child_user_id=child.id, turn_number=1,
             initial_state={"messages": []}, ctx=ctx,
             queue=queue, state=state, stop_event=stop_event,
-            protected_id=None,
         ),
         name=f"chat-llm-{sid}",
     )

@@ -21,40 +21,9 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.enums import MessageRole, MessageStatus
 from app.domain.chat.models import Message
-from app.domain.chat.prompts import ANCHOR_WINDOW_PREFIX, SUMMARY_PREFIX
-
-
-async def load_active_messages_without_summary(
-    sid: UUID,
-    db: AsyncSession,
-    *,
-    from_turn: int | None = None,
-    to_turn: int | None = None,
-) -> list[Message]:
-    """底层共享 helper:查询 session 中 status='active' 的 human/ai 消息。
-
-    主动过滤掉 role=summary 的消息(压缩产物行),由 load_active_messages_with_summary
-    单独取 summary 供 main W1 wrapper 注入 build_system_prompt —— 避免 summary
-    同时出现在 history 与 system prompt 两处的双写。
-
-    Args:
-        until_turn: 非 None 时只返回 turn_number < until_turn 的行
-                    (用于 main W1 装配链,排除本轮 human)
-    """
-    stmt = select(Message).where(
-        Message.session_id == sid,
-        Message.status == "active",
-        Message.role != MessageRole.summary,
-    )
-    if from_turn is not None:
-        stmt = stmt.where(Message.turn_number >= from_turn)
-    if to_turn is not None:
-        stmt = stmt.where(Message.turn_number <= to_turn)
-    stmt = stmt.order_by(Message.created_at.asc(), Message.id.asc())
-    return list((await db.execute(stmt)).scalars())
+from app.domain.chat.prompts import SUMMARY_PREFIX
 
 
 async def load_active_messages_with_summary(
@@ -131,68 +100,6 @@ async def load_recent_messages(
     if as_orm:
         return list(rows)
     return [to_lc_message(m) for m in rows]
-
-
-async def build_crisis_context(
-    sid: UUID,
-    db: AsyncSession,
-    target_message_id: UUID,
-) -> tuple[SystemMessage, list[BaseMessage]]:
-    """crisis 上下文装配：anchor_window（绕 status） + after_anchor（仅 active）。
-
-    anchor_window：anchor 及其之前 N 对（2N 条），绕过 status 过滤
-    （物理原文段，不应被压缩/丢弃截断）。
-    after_anchor：anchor 之后所有 active 行，不限条数。
-
-    Returns:
-        (anchor_system, after_anchor)
-        - anchor_system: SystemMessage(content="[anchor 窗口]\\nrole: content\\n...")
-        - after_anchor: 剩余 active 消息列表（HumanMessage/AIMessage）
-    """
-    anchor = await db.scalar(select(Message).where(Message.id == target_message_id))
-    if anchor is None:
-        raise ValueError(f"crisis anchor not found: {target_message_id}")
-
-    n = settings.crisis_context_recent_messages  # 默认 10 条（5 对）
-
-    # anchor_window：绕 status，以 created_at 切分
-    aw_rows = (
-        (
-            await db.execute(
-                select(Message)
-                .where(
-                    Message.session_id == sid,
-                    Message.created_at <= anchor.created_at,
-                )
-                .order_by(Message.created_at.desc())
-                .limit(n)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    anchor_text_lines = [f"{m.role.value}: {m.content}" for m in reversed(aw_rows)]
-    anchor_system = SystemMessage(
-        content=ANCHOR_WINDOW_PREFIX + "\n" + "\n".join(anchor_text_lines)
-    )
-
-    # after_anchor：仅 active，anchor 之后
-    after_rows = (
-        (
-            await db.execute(
-                select(Message)
-                .where(
-                    Message.session_id == sid,
-                    Message.created_at > anchor.created_at,
-                    Message.status == "active",
-                )
-                .order_by(Message.created_at.asc(), Message.id.asc())
-            )
-        )
-        .scalars()
-        .all()
-    )
-    return anchor_system, [to_lc_message(m) for m in after_rows]
 
 
 # ---- LangChain 消息转换 ----
