@@ -1,13 +1,13 @@
 """所有 LLM prompt 字符串单一来源 = 本文件。
 
-外部仅通过 import 函数 / 常量访问，禁止在其他模块内联 prompt 字面量。
+外部仅通过 import 函数 / 常量访问,禁止在其他模块内联 prompt 字面量。
 
-当前内容：
-- build_system_prompt — 主对话 5 段 system prompt（年龄 + 性别驱动）
-- build_compression_prompt — 上下文压缩 prompt，返回 SystemMessage
-- build_crisis_system_prompt — 危机接管 system prompt（tier/gender 复用主对话分段）
-- format_reentry_wrapper_crisis — crisis 重入 wrapper（{user_input} 占位）
-- format_guidance_wrapper — 引导注入 wrapper（{user_input} + {guidance} 占位）
+当前内容:
+- build_system_prompt — 主对话 system prompt(年龄 + 性别驱动)
+- build_compression_prompt — 上下文压缩 prompt,返回 SystemMessage
+- build_crisis_system_prompt — 危机接管 system prompt(tier / gender 复用主对话分段)
+- format_reentry_wrapper_crisis — crisis 重入 wrapper({user_input} 模板字段)
+- format_guidance_wrapper — 引导注入 wrapper({user_input} + {guidance} 模板字段)
 """
 
 from langchain_core.messages import BaseMessage, SystemMessage
@@ -15,20 +15,23 @@ from langchain_core.messages import BaseMessage, SystemMessage
 from app.core.enums import Gender
 from app.domain.accounts.schemas import ChildProfileSnapshot
 
-# ---- compute_age 已迁至 core/time.py::age_at ----
+# compute_age 见 core/time.py::age_at(本模块不再本地化年龄计算)
 
 
 def build_system_prompt(
     profile: ChildProfileSnapshot, compression_summary: str | None = None
 ) -> SystemMessage:
-    """创建主对话系统提示词
+    """构造主对话系统提示词。
+
+    按 child profile 的年龄 / 性别填充对话对象段落;可选注入压缩会话摘要,
+    用于让模型在 history 截断后仍持有先前后文。
 
     Args:
-        profile (ChildProfileSnapshot): 孩子账户配置裁剪
-        compression_summary (Message | None): 压缩会话摘要，为空则不注入
+        profile: 孩子账户配置快照(年龄 / 性别 / nickname / 生日 / 灵敏度 / 自定义红线)。
+        compression_summary: 压缩会话摘要,空则不注入对应段落。
 
     Returns:
-        SystemMessage: 组件后的系统提示词
+        组装后的 SystemMessage。
     """
     if profile.gender == Gender.male:
         f_gender = "男孩"
@@ -97,6 +100,18 @@ def build_system_prompt(
 
 
 def build_compression_prompt(last_summary: BaseMessage | None) -> SystemMessage:
+    """构造压缩任务的系统提示词。
+
+    要求压缩 LLM 使用第三人称把 `<history>...</history>` 包裹的对话压缩为一段简短叙述,
+    并输出用 `<summary>…</summary>` 包裹的总结内容。若提供 `last_summary`,
+    则前置注入作为前序压缩摘要。
+
+    Args:
+        last_summary: 前序压缩摘要(可空)。
+
+    Returns:
+        组装后的 SystemMessage。
+    """
     return SystemMessage(
         content=f"""\
 你是对话压缩助手：
@@ -112,17 +127,17 @@ def build_compression_prompt(last_summary: BaseMessage | None) -> SystemMessage:
     )
 
 
-# ---- 摘要前缀（context.py build_context 使用） ----
+# ---- 摘要前缀(context.py build_context 使用) ----
 
 SUMMARY_PREFIX = "[历史对话摘要]\n"
 
 
-# ---- M9 crisis anchor_window 前缀（§D.1，供 context.py 引用） ----
+# ---- anchor 窗口前缀(context.py 引用) ----
 
 ANCHOR_WINDOW_PREFIX = "[anchor 窗口]"
 
 
-# ---- M9 三级干预 STUB prompt + wrapper ----
+# ---- 三级干预 STUB prompt + wrapper ----
 
 GUIDANCE_WRAPPER = """<guidance>{guidance}</guidance>
 
@@ -145,6 +160,22 @@ def build_crisis_system_prompt(
     post_crisis_turn_dialogue: str | None = None,
     compression_summary: str | None = None,
 ) -> SystemMessage:
+    """构造危机接管系统提示词。
+
+    在主对话分段之上叠加危机应对原则,并附触发危机信号前后的原文对话作为上下文,
+    可选注入压缩会话摘要。
+
+    Args:
+        profile: 孩子账户配置快照。
+        crisis_topic: 触发危机信号的主题(由审查 agent 提供)。
+        crisis_turn_dialogue: 触发危机信号的轮次原文对话。
+        pre_crisis_turn_dialogue: 触发危机信号前的对话原文。
+        post_crisis_turn_dialogue: 触发危机信号后的对话原文,无则不注入对应段落。
+        compression_summary: 压缩会话摘要,空则不注入对应段落。
+
+    Returns:
+        组装后的 SystemMessage。
+    """
     if profile.gender == Gender.male:
         f_gender = "男孩"
     elif profile.gender == Gender.female:
@@ -232,12 +263,27 @@ def build_crisis_system_prompt(
 
 
 def format_reentry_wrapper_crisis(user_input: str) -> str:
-    """crisis 重入 wrapper：包装用户输入后送入 crisis LLM。"""
-    return f"TODO(prompts-content): crisis 重入 wrapper\n用户输入：{user_input}"
+    """构造 crisis 重入 wrapper:包装用户输入后送入 crisis LLM。
+
+    Args:
+        user_input: 本轮用户输入原文。
+
+    Returns:
+        包装后的字符串(含固定说明 + 用户输入段落)。
+    """
+    return f"TODO(prompts-content): crisis 重入 wrapper\n用户输入:{user_input}"
 
 
 def format_guidance_wrapper(user_input: str, guidance: str | None) -> str:
-    """引导注入 wrapper：guidance 为空时透传 user_input。"""
+    """构造引导注入 wrapper:guidance 为空时透传 user_input。
+
+    Args:
+        user_input: 本轮用户输入原文。
+        guidance: 引导注入文本,空则原样返回 user_input。
+
+    Returns:
+        包装后的字符串(无 guidance 时等于 user_input)。
+    """
     if not guidance:
         return user_input
     return GUIDANCE_WRAPPER.format(user_input=user_input, guidance=guidance)

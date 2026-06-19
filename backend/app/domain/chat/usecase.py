@@ -7,10 +7,10 @@ D-2 边界:
 - 不装:HTTP 协议层(放 me.py 路由 handler)
 - 不装:纯算法(放 chat 域内对应模块)
 
-跨域 import 边界债(本期 verbatim 保留,D-3A.3 登记):
+跨域 import 边界债(保留,域通信重构时再处理):
 - `enqueue_audit` 内部用 `app.domain.audit.signals.AuditSignalsManager`
   (audit 域),`usecase.py`(chat 域)→ audit 域反向引用,
-  pre-existing 耦合,本 Phase 3 不修,等 Phase 4.x 域通信重构。
+  pre-existing 耦合,本周期不修。
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# 跨域契约常量(G3-6 收口)
+# 跨域契约常量
 # ---------------------------------------------------------------------------
 
 # ⚠️ 此字面量必须与 worker.py WORKER_SETTINGS["functions"] 字符串路径逐字一致。
@@ -65,23 +65,23 @@ async def persist_ai_turn(
     turn_number: int,
     intervention_type: InterventionType | None = None,
 ) -> uuid.UUID:
-    """持久化一条 AI 消息行 + 同事务自增 ai_turn_counter（M9-patch1 单写点收敛）。
+    """持久化一条 AI 消息行 + 同事务自增 ai_turn_counter(单写点收敛)。
 
-    收敛后：me.py 的两个写行分支（StopWithAi / 自然结束）统一调此函数，
+    收敛后:me.py 的两个写行分支(StopWithAi / 自然结束)统一调此函数,
     不再内联手搓 Message。调用方负责 usage_meta 记账和 enqueue_audit。
 
-    last_active_at 由 commit① 独占，本函数不覆写（F 决策 / M6-patch3）。
+    last_active_at 由 commit 前独占,本函数不覆写。
 
     Args:
-        db: async DB session
-        sid: session UUID
-        finish_reason: LLM stop reason (stop / length / content_filter / user_stopped)
-        content: accumulated text content
-        turn_number: 当前轮号（commit① human + commit② ai 共享同号）
-        intervention_type: None=normal, crisis/guided
+        db: 异步 DB session。
+        sid: session UUID。
+        finish_reason: LLM 终止原因(stop / length / content_filter / user_stopped)。
+        content: 累积的正文内容。
+        turn_number: 当前轮号(commit 前 human 行与本 ai 行共享同号)。
+        intervention_type: 干预类型,None 表示正常回复,crisis / guided 等见 InterventionType 枚举。
 
     Returns:
-        The id of the newly inserted AI message row (uuid.UUID).
+        新插入 AI 消息行的 uuid.UUID。
     """
     msg = Message(
         session_id=sid,
@@ -94,7 +94,7 @@ async def persist_ai_turn(
     )
     db.add(msg)
     await db.flush()  # populate msg.id
-    # M8: ai_turn_counter 同事务 +1（SQL 列表达式，PG 行锁安全）
+    # ai_turn_counter 同事务 +1(SQL 列表达式,PG 行锁安全)
     await db.execute(
         update(Session).where(Session.id == sid).values(ai_turn_counter=Session.ai_turn_counter + 1)
     )
@@ -116,9 +116,19 @@ async def enqueue_audit(
     target_message_id: uuid.UUID,
     child_profile: ChildProfileSnapshot,
 ) -> None:
-    """SET Redis pending + ARQ enqueue 触发异步审查。
+    """SET Redis pending 标记 + ARQ enqueue 触发异步审查任务。
 
-    入队使用 asdict 确保签名变更不会影响原有job
+    入队使用 asdict 序列化 child_profile,确保其签名变更不会破坏已入队 job。
+
+    Args:
+        arq_pool: arq 客户端(用于 enqueue_job)。
+        audit_redis: 审查 Redis 客户端(用于 pending 信号管道)。
+        sid: session UUID。
+        db: 异步 DB session(预留给将来可能的轮次快照)。
+        turn_number: 当前轮号。
+        child_user_id: child UUID。
+        target_message_id: 被审查的 AI 消息 id。
+        child_profile: child 投影快照,跨 chat / audit 共用。
     """
     manager = AuditSignalsManager(audit_redis, ttl=settings.audit_redis_ttl_seconds)
     await manager.set_pending(str(sid), turn_number, started_at=datetime.now(UTC).isoformat())

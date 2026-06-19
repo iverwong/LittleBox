@@ -1,21 +1,26 @@
-"""create_parent CLI：创建父账号 family + user + family_members。
+"""create_parent CLI：创建一个父端账号（含 Family + FamilyMember）。
+
+通过容器内 `python -m app.scripts.create_parent` 调用，复用
+`core.runtime.build_runtime` 路径，与 FastAPI lifespan / ARQ worker
+共享同一份进程级资源；不自建 engine，不绕过容器连库。
 
 Usage:
     docker compose exec api python -m app.scripts.create_parent --note "张三-家长"
 
-Arguments:
-    --note     必填。运维备注，用于标识这个父账号的用途或负责人。
+命令行参数：
+    --note    必填。运维备注，标识该父账号的用途或负责人，写入
+              `User.admin_note`。
 
-Output:
-    成功后在 stdout 打印 phone / password / user_id / note。
-    ⚠️  明文密码仅此一次，请立即妥善保管。
+stdout 输出（成功后一次性）：
+    `phone` / `password` / `user_id` / `note`。明文密码仅此一次打印，
+    需立即妥善保管。
 
-Details:
-    - phone：4 位小写字母（去 i/l/o），全局唯一 active parent 最多重试 10 次。
-    - password：8 位小写字母（去 i/l/o），永不打印第二次。
-    - 自动创建 Family + FamilyMember，保证 family 边界完整性。
-    - 即使无 Redis 写操作，也走 commit_with_redis 统一入口。
-    - 运行在 CLI 专用 cli_runtime() 中，不复用 FastAPI 全局 Redis 连接。
+运行时序：
+    1. `cli_runtime()` 装配 `RuntimeResources` 并 yield session 与主库 Redis；
+    2. `_create_parent` 插入空 `Family` → 生成唯一 `phone`（去重最多 10 次）
+       与 8 位 `password` → 插入 `User`（role=parent）→ 插入 `FamilyMember` →
+       `commit_with_redis` 统一提交；
+    3. CLI 打印结果，`cli_runtime` 退出时反向释放资源。
 """
 
 from __future__ import annotations
@@ -39,7 +44,7 @@ MAX_PHONE_RETRIES = 10
 
 @dataclass(frozen=True)
 class ParentInfo:
-    """_create_parent 的返回值。CLI 与测试共用。"""
+    """`_create_parent` 的返回值，供 CLI 输出或测试断言使用。"""
 
     phone: str
     plain_password: str
@@ -48,7 +53,21 @@ class ParentInfo:
 
 
 async def _ensure_unique_phone(db: AsyncSession, max_retries: int = MAX_PHONE_RETRIES) -> str:
-    """生成唯一 phone，若撞已有 active parent 则重试最多 max_retries 次。"""
+    """生成未占用的父端 `phone`，最多重试 `max_retries` 次。
+
+    通过查询 `User` 中 `phone` 相同、`role=parent` 且 `is_active=True`
+    的记录判定是否冲突。
+
+    Args:
+        db: 当前会话，用于查重。
+        max_retries: 最多重试次数（含首次生成），默认 `MAX_PHONE_RETRIES`。
+
+    Returns:
+        唯一可用的 4 位 phone 字符串。
+
+    Raises:
+        RuntimeError: 连续 `max_retries` 次均冲突，未能生成唯一 phone。
+    """
     for _ in range(max_retries):
         phone = generate_phone()
         existing = (
@@ -66,9 +85,20 @@ async def _ensure_unique_phone(db: AsyncSession, max_retries: int = MAX_PHONE_RE
 
 
 async def _create_parent(db: AsyncSession, redis: Redis, *, note: str) -> ParentInfo:
-    """创建 parent 账户。CLI 与测试共用入口，不含 IO 副作用。
+    """创建父端账号及其 family 边界（CLI 与测试共用入口）。
 
-    返回 ParentInfo 供调用方决定输出格式（CLI 打印 stdout / 测试断言）。
+    流程：插入空 `Family` → 生成唯一 `phone` 与 8 位 `password` →
+    插入 `User`（`role=parent`、`is_active=True`）→ 插入
+    `FamilyMember` → `commit_with_redis` 统一提交。
+
+    Args:
+        db: 当前数据库会话。
+        redis: 主库 Redis，用于 `commit_with_redis` 的 flush。
+        note: 运维备注，写入 `User.admin_note`。
+
+    Returns:
+        `ParentInfo`，包含 `phone` / `plain_password` / `user_id` /
+        `family_id`，供调用方决定输出格式。
     """
     family = Family()
     db.add(family)
@@ -107,6 +137,11 @@ async def _create_parent(db: AsyncSession, redis: Redis, *, note: str) -> Parent
 
 
 async def _main() -> None:
+    """CLI 入口：解析参数 → 通过 `cli_runtime` 跑 `_create_parent` → 打印结果。
+
+    由 `main()` 通过 `asyncio.run(run_main(_main))` 调度；异常路径由
+    `run_main` 统一以退出码 1 终止。
+    """
     parser = build_arg_parser(note_required=True)
     args = parser.parse_args()
     async with cli_runtime() as (db, redis):
@@ -120,6 +155,7 @@ async def _main() -> None:
 
 
 def main() -> None:
+    """同步入口：`asyncio.run(run_main(_main))`，供 `python -m` 触发。"""
     asyncio.run(run_main(_main))
 
 

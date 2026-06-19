@@ -1,12 +1,12 @@
-"""Accounts 域业务编排服务。
+"""accounts 域业务编排服务。
 
-聚合账号 / child 创建与硬删的跨表事务,统一走 commit_with_redis 同步纪律
-(避免裸 db.commit() 造成 DB / Redis 不一致)。
+聚合账号与 child 创建、硬删的跨表事务,统一走 `commit_with_redis` 同步纪律,
+避免裸 `db.commit()` 造成 DB 与 Redis 不一致。
 
-边界(D-1 + D-2):
-- 装:跨表事务 / 跨外部服务(DB + Redis)的事务编排
-- 不装:纯算法(age 换算只暴露 age_to_birth_date / birth_date_to_age 工具)
-- 不装:HTTP 协议层(handler 仍负责 Depends 注入与返回类型)
+职责边界:
+- 装:跨表事务、跨外部服务(DB + Redis)的事务编排。
+- 不装:纯算法换算(仅暴露 `age_to_birth_date` / `birth_date_to_age` 工具函数)。
+- 不装:HTTP 协议层(handler 仍负责 Depends 注入与返回类型)。
 """
 
 from __future__ import annotations
@@ -43,24 +43,25 @@ from app.domain.expert.models import DailyReport
 from app.domain.notifications.models import Notification
 
 # ---------------------------------------------------------------------------
-# 纯算法工具(M4.8 B2)
+# 纯算法工具:年龄 ↔ 出生日期双向换算
 # ---------------------------------------------------------------------------
 
 
 def age_to_birth_date(age: int, ref: date | None = None) -> date:
-    """将 age(岁)转换为近似 birth_date。
+    """将整数年龄(岁)转换为近似出生日期。
 
-    算法:ref - age 年同月同日;闰年 2-29 在非闰年触发 ValueError,兜底为前一日。
+    算法:`ref - age 年同月同日`。当 `ref` 月日为 2-29 且 `ref.year - age`
+    非闰年时,`date` 构造会抛 `ValueError`,此函数兜底为 2-28。
 
     Args:
-        age: 年龄,必须在 [3, 21] 范围内。
-        ref: 基准日期,默认为 date.today()。
+        age: 整数年龄,合法范围 `[3, 21]`。
+        ref: 基准日期,默认 `date.today()`。
 
     Returns:
-        近似出生日期。
+        近似出生日期(纯 `date`,无时区)。
 
     Raises:
-        ValueError: age 不在 [3, 21] 范围内。
+        ValueError: `age` 超出 `[3, 21]` 范围。
     """
     if not (3 <= age <= 21):
         raise ValueError(f"age must be in [3, 21], got {age}")
@@ -69,21 +70,21 @@ def age_to_birth_date(age: int, ref: date | None = None) -> date:
     try:
         return date(ref.year - age, ref.month, ref.day)
     except ValueError:
-        # 2-29 in non-leap year → fall back to 2-28
+        # 2-29 落在非闰年时 date() 会抛 ValueError;兜底为前一日 2-28
         return date(ref.year - age, ref.month, ref.day - 1)
 
 
 def birth_date_to_age(birth_date: date, ref: date | None = None) -> int:
-    """将 birth_date 转换为 age(岁)。
+    """将出生日期转换为整数年龄(岁)。
 
-    钳位到 [3, 21] 范围,避免极端 birth_date 把 API 打挂。
+    钳位到 `[3, 21]` 范围,避免极端 `birth_date` 把上游 API 打挂。
 
     Args:
         birth_date: 出生日期。
-        ref: 基准日期,默认为 date.today()。
+        ref: 基准日期,默认 `date.today()`。
 
     Returns:
-        3-21 之间的年龄。
+        钳位后的整数年龄,范围 `[3, 21]`。
     """
     ref = ref if ref is not None else date.today()
     raw = ref.year - birth_date.year - ((ref.month, ref.day) < (birth_date.month, birth_date.day))
@@ -91,7 +92,7 @@ def birth_date_to_age(birth_date: date, ref: date | None = None) -> int:
 
 
 # ---------------------------------------------------------------------------
-# 跨表事务(M4.8 B3 / M4.8 B6)
+# 跨表事务:创建子账号、硬删子账号
 # ---------------------------------------------------------------------------
 
 
@@ -102,12 +103,31 @@ async def create_child(
     parent: CurrentAccount,
     payload: CreateChildRequest,
 ) -> ChildSummary:
-    """父账号创建一个子账号:users(role=child) + child_profiles + family_members。
+    """父账号创建一个子账号。
 
-    family 行级锁防并发超限,所有写入在同一事务,走 commit_with_redis 落盘。
+    写入顺序(在同一事务内):
+    1. `users` 表插入 `role=child` 的子用户。
+    2. `child_profiles` 表插入子账号画像。
+    3. `family_members` 表插入成员关联记录。
+
+    并发安全:先对 family 行加 `SELECT ... FOR UPDATE` 行级锁,再统计当前
+    child 数量是否已达 `settings.max_children_per_family`,最后写入。
+    所有写入通过 `commit_with_redis` 落盘。
+
+    Args:
+        db: 数据库会话。
+        redis: Redis 客户端,用于随 commit 一并 flush 任何 staged ops。
+        parent: 当前父账号上下文,提供 `family_id` 与 `id`。
+        payload: 创建子账号的请求体,包含昵称、年龄、性别。
+
+    Returns:
+        包含子账号 ID、昵称、出生日期、性别与绑定状态的 `ChildSummary`。
+        `is_bound` 硬编码为 `False`(刚创建的 child 尚未生成任何 AuthToken)。
+
+    Raises:
+        HTTPException: 家庭下子账号数已达上限时抛出 409。
     """
-    # M5 hotfix: family child count limit — SELECT FOR UPDATE + COUNT within same tx
-    # Acquire row-level lock on the family row before counting
+    # 行级锁:同 family 下并发创建 child 时,锁住 family 行串行化计数
     await db.execute(select(Family).where(Family.id == parent.family_id).with_for_update())
     child_count = (
         await db.execute(
@@ -158,7 +178,7 @@ async def create_child(
         nickname=payload.nickname,
         birth_date=birth_date,
         gender=payload.gender,
-        is_bound=False,  # 硬编码:刚创建的 child 必然无 AuthToken
+        is_bound=False,  # 刚创建的 child 必然无 AuthToken
     )
 
 
@@ -168,21 +188,37 @@ async def hard_delete_child(
     child_user_id: uuid.UUID,
     requested_by: uuid.UUID,
 ) -> dict[str, int]:
-    """硬删 child 账号及其全部关联数据。
+    """硬删指定子账号及其全部关联数据。
 
-    三步顺序(必须遵守):
-      ① stage Redis auth 缓存清理(CASCADE 后 auth_tokens 行消失,token_hash 取不回)
-      ② SELECT COUNT 各表(CASCADE 前快照)
-      ③ DELETE User 触发 DB 层 CASCADE
-      ④ 写入 DataDeletionRequest
+    执行步骤(必须严格遵守顺序):
+    1. 调用 `revoke_all_active_tokens` 撤销该 child 的所有 token,
+       并 stage 清理 Redis 中对应的 token 缓存(CASCADE 触发后 `auth_tokens`
+       行消失,token_hash 无法再回查,Redis 清理必须前置)。
+    2. 在 CASCADE 触发前对 10 张关联表分别 `SELECT COUNT`,记录各表删除行数。
+       其中 `messages` / `audit_records` / `rolling_summaries` 通过 child
+       的 session_ids 中介统计。
+    3. 执行 `DELETE FROM users` 触发 DB 层 `ON DELETE CASCADE`,清理
+       `child_profiles` / `auth_tokens` / `device_tokens` /
+       `family_members` / `sessions` / `messages` / `audit_records` /
+       `rolling_summaries` / `daily_reports` / `notifications`。
+    4. 写入 `DataDeletionRequest` 审计记录,留存合规证据。
 
-    调用方必须用 commit_with_redis(db, redis) 提交。禁用裸 db.commit()。
-    不处理 family_members 中 parent 的记录(parent 不会被删)。
+    调用方约定:函数返回前**不要** commit;调用方必须在末尾执行
+    `await commit_with_redis(db, redis)` 才能落盘。禁用裸 `db.commit()`。
+    `family_members` 中 parent 的记录不会被本函数影响(parent 不会被删)。
+
+    Args:
+        db: 数据库会话。
+        child_user_id: 待硬删的子账号 `User.id`。
+        requested_by: 发起删除的家长 `User.id`,用于审计落库。
+
+    Returns:
+        `{table_name: deleted_row_count}` 各表删除行数快照。
     """
-    # ① stage Redis auth 缓存清理
+    # 1) 撤销 token:DB 标 revoked_at + stage 批量 Redis delete
     await revoke_all_active_tokens(db, child_user_id)
 
-    # ② SELECT COUNT 各表(CASCADE 前)
+    # 2) CASCADE 触发前快照各表行数(供审计落库)
     deleted_tables: dict[str, int] = {}
 
     deleted_tables["child_profiles"] = (
@@ -199,7 +235,7 @@ async def hard_delete_child(
         )
     ).scalar_one()
 
-    # messages/audit_records/rolling_summaries 以 session_ids 为中介
+    # messages / audit_records / rolling_summaries 都需要先取到 session_ids 再统计
     session_ids = (
         (await db.execute(select(Session.id).where(Session.child_user_id == child_user_id)))
         .scalars()
@@ -278,10 +314,10 @@ async def hard_delete_child(
         )
     ).scalar_one()
 
-    # ③ DELETE User 触发 DB 层 CASCADE
+    # 3) DELETE User 触发 DB 层 CASCADE,清理全部依赖行
     await db.execute(delete(User).where(User.id == child_user_id))
 
-    # ④ 写入审计记录
+    # 4) 写入审计记录(child_id_snapshot 已无 FK,仅留 UUID 快照)
     db.add(
         DataDeletionRequest(
             requested_by=requested_by,

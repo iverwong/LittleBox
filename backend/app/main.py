@@ -1,4 +1,10 @@
-"""FastAPI app factory."""
+"""FastAPI 应用工厂与 lifespan 管理。
+
+`create_app` 构造 `FastAPI` 实例、注册 CORS 中间件、挂载 `api/*` 路由。
+`lifespan` 协调启动与关闭顺序，启动期先建立 Redis 连接池，再装配
+`RuntimeResources` 写入 `app.state.resources`，关闭期先等候活跃 chat
+后台任务优雅退出，再反向关闭进程级资源。
+"""
 
 import asyncio
 import logging
@@ -26,10 +32,17 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """合并 lifespan：Redis 连接池 + 进程级 RuntimeResources。"""
-    # M9-patch1 test seam: 若 app.state.resources 已预注入（测试缝），
-    # 跳过 redis_lifespan + build_runtime + teardown_runtime，
-    # 但 shutdown 等候块仍按真实路径运行（#5/#6 测试依赖）。
+    """启动与关闭的统一编排。
+
+    startup 顺序：主 Redis 连接池 → `RuntimeResources` → 写入
+    `app.state.resources`。
+    shutdown 顺序：`RuntimeResources` 内的活跃 chat 后台任务等候
+    （30 秒超时则取消）→ 反向关闭 arq_pool / audit_redis /
+    db_engine。
+
+    测试可通过预注入 `app.state.resources` 跳过 lifespan 实际初始化，
+    此时仍走 shutdown 等候路径。
+    """
     rr: RuntimeResources | None = getattr(app.state, "resources", None)
     if rr is not None:
         # 测试注入路径：不裹 redis_lifespan，不调 teardown
@@ -52,9 +65,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 async def _shutdown_wait(rr: "RuntimeResources") -> None:
-    """有界等候正在运行的 chat bg task 优雅退出。超时则 cancel。
+    """有界等候活跃 chat 后台任务优雅退出，超时则取消。
 
-    M9-patch1 从 lifespan 抽出的共享 helper，生产路径和测试路径复用。
+    生产路径与测试注入路径共用，确保 lifespan shutdown 阶段不会因为
+    未完成的 chat 流而留下悬挂协程。
+
+    Args:
+        rr: 进程级资源容器，从中读取 chat 任务登记表。
     """
     tasks = list(rr._chat_tasks.values())
     if tasks:
@@ -74,7 +91,15 @@ async def _shutdown_wait(rr: "RuntimeResources") -> None:
 
 
 def create_app() -> FastAPI:
-    """应用工厂。"""
+    """构造 FastAPI 应用实例。
+
+    依据 `settings.debug` 决定是否暴露 Swagger UI（`/docs`）与
+    Redoc（`/redoc`）；按 health / auth / children / bind_tokens /
+    me 顺序注册路由。
+
+    Returns:
+        配置好的 FastAPI 应用实例，模块底部已据此实例化为 `app`。
+    """
     application = FastAPI(
         title=settings.app_name,
         docs_url="/docs" if settings.debug else None,

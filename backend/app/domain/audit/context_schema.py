@@ -1,4 +1,4 @@
-"""审查图 per-run 不可变上下文（Runtime[AuditContextSchema]）。"""
+"""审查图 per-run 不可变上下文(Runtime[AuditContextSchema])。"""
 
 from __future__ import annotations
 
@@ -19,15 +19,25 @@ if TYPE_CHECKING:
 class AuditContextSchema:
     """审查图单次运行的不可变上下文。
 
-    与 RuntimeResources（进程级）的分工：RuntimeResources 承载容器级
-    共享资源（engine / pool 等），AuditContextSchema 承载单次图调用
-    所需的请求级上下文。二者均 frozen=True，运行时不可变。
+    与 RuntimeResources(进程级)的分工:RuntimeResources 承载容器级共享资源
+    (engine / pool / CompiledStateGraph 等),AuditContextSchema 承载单次图调用
+    所需的请求级上下文。二者均 frozen=True,运行时不可变。
+
+    Attributes:
+        session_id: 被审查的对话 session UUID。
+        child_user_id: 被审查的青少年用户 ID。
+        target_message_id: 被审查的 ai_msg id(本轮审查锚点,必非空)。
+        max_iter: tool agentic loop 硬上限。
+        child_profile: 孩子档案快照(用于 prompt 注入家长关注度与红线配置)。
+        settings: 应用配置。
+        db_session_factory: DB 会话工厂,worker 层负责注入。
+        audit_redis: 审查信号管道 Redis。
     """
 
     # 身份字段
     session_id: uuid.UUID  # 被审查的对话 session UUID
     child_user_id: uuid.UUID  # 被审查的青少年用户 ID
-    target_message_id: uuid.UUID  # 被审查的 ai_msg id（本轮审查锚点，必非空）
+    target_message_id: uuid.UUID  # 被审查的 ai_msg id(本轮审查锚点,必非空)
     # 业务字段
     max_iter: int  # tool agentic loop 硬上限
     child_profile: ChildProfileSnapshot

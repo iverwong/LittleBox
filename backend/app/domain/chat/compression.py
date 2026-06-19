@@ -1,10 +1,10 @@
-"""M8 上下文压缩 prompt 构建。
+"""上下文压缩 prompt 构建。
 
-设计：固定 2 条消息（System + Human），history 走 XML 序列化嵌入 Human content，
+设计:固定 2 条消息(System + Human),history 走 XML 序列化嵌入 Human content,
 避免 chat template 进入"续写 assistant"分支。
 
-M6-patch3 scheme R：commit② 写 LLM usage 真值快照，
-阈值命中翻 needs_compression 标志，下一轮 user 到达时阻塞压缩。
+压缩触发:落库后写入 LLM usage 真值快照(input_tokens + output_tokens),
+阈值命中翻 needs_compression 标志,下一轮 user 到达时阻塞压缩。
 """
 
 import logging
@@ -18,7 +18,7 @@ from app.domain.chat.prompts import build_compression_prompt
 
 logger = logging.getLogger(__name__)
 
-CONTEXT_COMPRESS_THRESHOLD_TOKENS = 500_000  # V4 1M 上下文的 50%
+CONTEXT_COMPRESS_THRESHOLD_TOKENS = 500_000  # 1M 上下文的 50%
 
 # 压缩后保留最近 N 对完整 (h,a) 消息不压,直接进 history。
 # 切 N=3:既保证对话有"近因"接住,又给新摘要留足压缩空间。
@@ -41,11 +41,11 @@ def split_for_compression(
     注:按 actives 的传入顺序切(调用方应按 created_at ASC 传入),末尾视为"最近"。
 
     Args:
-        actives: 按 created_at ASC 的 active 消息(已排除本轮 human)
-        keep_recent_pairs: 保留最近的对数(每对 = 1 human + 1 ai = 2 条)
+        actives: 按 created_at ASC 的 active 消息(已排除本轮 human)。
+        keep_recent_pairs: 保留最近的对数(每对 = 1 human + 1 ai = 2 条)。
 
     Returns:
-        (to_compress, to_keep)
+        (to_compress, to_keep) 元组。
     """
     keep_n = keep_recent_pairs * 2
     if len(actives) <= keep_n:
@@ -56,10 +56,17 @@ def split_for_compression(
 def build_compression_messages(
     last_summary: BaseMessage | None, history: list[BaseMessage]
 ) -> list[BaseMessage]:
-    """构建压缩调用的 messages。返回 list 长度恒为 2。
+    """构建压缩调用的 messages 列表,返回长度恒为 2。
 
-    - SystemMessage: 角色定位及输入输出说明
-    - HumanMessage: 纯 <history>…</history> 序列化
+    - SystemMessage: 角色定位及输入输出说明(由 build_compression_prompt 生成)。
+    - HumanMessage: 纯 <history>...</history> 序列化的对话历史。
+
+    Args:
+        last_summary: 前序压缩摘要(可空,空时不注入)。
+        history: 待压缩的 LangChain 历史消息列表。
+
+    Returns:
+        长度恒为 2 的 messages 列表。
     """
     history_xml = serialize_history_to_xml(history, include_system=False)
     return [
@@ -69,7 +76,17 @@ def build_compression_messages(
 
 
 def extract_compression_summary(raw_output: str) -> str:
-    """从压缩 LLM 输出提取 <summary>…</summary>；失败时兜底使用 raw_output.strip() 并记 warning。"""
+    """从压缩 LLM 输出提取 <summary>...</summary>。
+
+    成功:返回标签内正文。
+    失败:兜底返回 raw_output.strip(),并记录 warning 日志。
+
+    Args:
+        raw_output: 压缩 LLM 原始输出字符串。
+
+    Returns:
+        提取后的摘要文本。
+    """
     extracted = extract_wrapped_output(raw_output, "summary")
     if extracted is not None:
         return extracted

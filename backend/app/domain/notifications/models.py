@@ -1,7 +1,6 @@
-"""notifications 域 ORM(1 张表:Notification)。
+"""notifications 域 ORM 模型。
 
-M10+ 真实通知推送真实化时,本表 schema 可能扩展(payload 强类型化、
-delivery_status 字段等);Phase 6 仅做物理迁出,不改 schema。
+当前包含 1 张表:`Notification`,用于记录推送至家长的通知。
 """
 
 import uuid
@@ -17,7 +16,19 @@ from app.core.enums import NotificationType
 
 
 class Notification(BaseMixin, Base):
-    """家长通知（危机实时推送 / 日常摘要）。"""
+    """家长通知(危机实时推送 / 日常摘要)。
+
+    Attributes:
+        id: 主键 UUID(继承自 BaseMixin)。
+        created_at: 记录创建时间(继承自 BaseMixin)。
+        parent_user_id: 接收通知的家长 user.id。
+        child_user_id: 关联的孩子 user.id(可空)。child 删除时 CASCADE 清空,
+            系统级通知此处为 NULL。
+        type: 通知类型枚举(crisis / daily_summary)。
+        payload: 通知载荷 JSON(可空)。代码层不约束 schema,消费方按 type 解构。
+        sent_at: 实际发送时间(可空,未发送则为 NULL)。
+        read_at: 家长已读时间(可空,未读则为 NULL)。
+    """
 
     __tablename__ = "notifications"
 
@@ -30,13 +41,13 @@ class Notification(BaseMixin, Base):
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=True,
-        comment="关联的 child（可选）；child 删除时 CASCADE 清空，系统通知为 NULL",
+        comment="关联的 child(可选);child 删除时 CASCADE 清空,系统通知为 NULL",
     )
     type: Mapped[NotificationType] = mapped_column(nullable=False)
     payload: Mapped[Optional[dict]] = mapped_column(
         JSONB,
         nullable=True,
-        comment="MVP 不约束 schema，消费方按 type 解构",
+        comment="代码层不约束 schema,消费方按 type 解构",
     )
     sent_at: Mapped[Optional[datetime]] = mapped_column(
         TIMESTAMP(timezone=True),

@@ -21,10 +21,9 @@ class Session(BaseMixin, Base):
     """对话会话。每个子账号可拥有多个会话。"""
 
     __tablename__ = "sessions"
-    # M6 partial 索引（keyset 分页 + WHERE status='active' 读路径优化）。
-    # 名字 + 列序 + WHERE 子句与迁移 a77f2c1e8b34 创建的 PG 索引严格一致，
-    # 保证 alembic check 不报漂移。ORM 与 DB 的 DDL 是同一份事实的两个表示，
-    # 任何对其中一边的改动都必须同步另一边。
+    # partial 索引(keyset 分页 + WHERE status='active' 读路径优化)。
+    # 索引名 + 列序 + WHERE 子句与 alembic 迁移严格一致,保证 alembic check 不报漂移。
+    # ORM 与 DB 的 DDL 是同一份事实的两个表示,任何对其中一边的改动都必须同步另一边。
     __table_args__ = (
         Index(
             "idx_sessions_child_active_lastactive",
@@ -79,8 +78,8 @@ class Message(BaseMixin, Base):
     """对话消息。role 使用 human/ai 对齐 LangChain 消息类型。"""
 
     __tablename__ = "messages"
-    # M6 partial 索引（与 Session 一致：keyset 分页 + WHERE status='active'）。
-    # 名字 + 列序 + WHERE 子句与迁移 a77f2c1e8b34 创建的 PG 索引严格一致。
+    # partial 索引(与 Session 一致:keyset 分页 + WHERE status='active')。
+    # 索引名 + 列序 + WHERE 子句与 alembic 迁移严格一致。
     __table_args__ = (
         Index(
             "idx_messages_session_active_created",

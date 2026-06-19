@@ -1,25 +1,31 @@
-"""reset_parent_password CLI：重置父账号密码并吊销所有活跃 token。
+"""reset_parent_password CLI：重置父账号密码并吊销该账号所有活跃 token。
+
+通过容器内 `python -m app.scripts.reset_parent_password` 调用，复用
+`core.runtime.build_runtime` 路径，与 FastAPI lifespan / ARQ worker
+共享同一份进程级资源；不自建 engine，不绕过容器连库。
 
 Usage:
     docker compose exec api python -m app.scripts.reset_parent_password --phone abcd
 
-Arguments:
-    --phone    必填。要重置密码的父账号手机号（4 位字母）。
+命令行参数：
+    --phone    必填。要重置的父账号手机号（4 位字母）。
 
-Exit codes:
+退出码：
     0       成功重置，stdout 打印新密码。
-    非 0    失败（phone 不存在或非活跃 parent）；stderr 打印错误信息。
+    非 0    失败（phone 不存在或非活跃 parent），stderr 输出错误信息。
 
-Output:
-    成功后在 stdout 打印 phone / user_id / 新密码。
-    ⚠️  明文密码仅此一次，请立即妥善保管。
+stdout 输出（成功后一次性）：
+    `phone` / `user_id` / 新 `password`。明文密码仅此一次打印，需立即
+    妥善保管。
 
-Details:
-    - 只作用于 is_active=True 且 role=parent 的账号（fail closed）。
-    - 自动生成新 8 位密码（去 i/l/o），覆盖原有 password_hash。
-    - 重置后立即吊销该 parent 所有活跃 token（DB revoked_at + Redis 双清）。
-    - 走 commit_with_redis 统一入口，不裸 db.commit()。
-    - 运行在 CLI 专用 cli_runtime() 中，不复用 FastAPI 全局 Redis 连接。
+运行时序：
+    1. `cli_runtime()` 装配 `RuntimeResources` 并 yield session 与主库 Redis；
+    2. `_reset_password` 按 `phone` + `role=parent` + `is_active=True`
+       查 `User`，缺失则抛 `ValueError`；
+    3. 生成新密码 → 覆盖 `password_hash` → 调用
+       `revoke_all_active_tokens` 吊销该账号所有 token（DB `revoked_at`
+       与 Redis 双清）→ `commit_with_redis` 统一提交；
+    4. CLI 打印结果，`cli_runtime` 退出时反向释放资源。
 """
 
 from __future__ import annotations
@@ -42,7 +48,7 @@ from app.scripts._common import build_arg_parser, cli_runtime, run_main
 
 @dataclass(frozen=True)
 class ResetResult:
-    """_reset_password 的返回值。CLI 与测试共用。"""
+    """`_reset_password` 的返回值，供 CLI 输出或测试断言使用。"""
 
     phone: str
     plain_password: str
@@ -50,9 +56,19 @@ class ResetResult:
 
 
 async def _reset_password(db: AsyncSession, redis: Redis, *, phone: str) -> ResetResult:
-    """重置父账号密码并吊销所有活跃 token。CLI 与测试共用入口，不含 IO 副作用。
+    """重置父账号密码并吊销该账号所有活跃 token（CLI 与测试共用入口）。
 
-    返回 ResetResult 供调用方输出。phone 不存在或非活跃 parent 时抛出 ValueError。
+    Args:
+        db: 当前数据库会话。
+        redis: 主库 Redis，用于 `commit_with_redis` 的 flush。
+        phone: 目标父账号手机号（4 位字母）。
+
+    Returns:
+        `ResetResult`，包含 `phone` / `plain_password` / `user_id`。
+
+    Raises:
+        ValueError: phone 不存在或非 `role=parent` 且 `is_active=True`
+            的账号。
     """
     stmt = select(User).where(
         User.phone == phone,
@@ -72,6 +88,11 @@ async def _reset_password(db: AsyncSession, redis: Redis, *, phone: str) -> Rese
 
 
 async def _main() -> None:
+    """CLI 入口：解析参数 → 通过 `cli_runtime` 跑 `_reset_password` → 打印结果。
+
+    由 `main()` 通过 `asyncio.run(run_main(_main))` 调度；异常路径由
+    `run_main` 统一以退出码 1 终止。
+    """
     parser = build_arg_parser(phone_required=True)
     args = parser.parse_args()
     async with cli_runtime() as (db, redis):
@@ -84,6 +105,7 @@ async def _main() -> None:
 
 
 def main() -> None:
+    """同步入口：`asyncio.run(run_main(_main))`，供 `python -m` 触发。"""
     asyncio.run(run_main(_main))
 
 

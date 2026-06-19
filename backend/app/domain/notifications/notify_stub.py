@@ -1,14 +1,12 @@
-"""通知桩(D-5,Phase 4.5):audit 域危机通知的占位实现。
+"""通知桩:audit 域危机通知的最小写入实现。
 
-M10+ 替换为真实推送(APNs / 极光 / 微信模板消息等)时,只改本文件 send()
-实现,不动调用方(audit/usecase.py)。
+调用方位于 `app/domain/audit/usecase.py`,在 `crisis_detected` 为真时通过
+`from app.domain.notifications.notify_stub import send as notify_send` 拉起本函数。
 
-M10+ 替换为真实推送(APNs / 极光 / 微信模板消息等)时,只改本文件 send()
-实现,不动调用方(audit/usecase.py)。
+当前仅写一条结构化日志,不做真实推送;替换为真实通道(APNs / 极光 / 微信模板消息
+等)时,只改本文件 `send()` 实现,不动调用方。
 
-D-4A.3 决议:logger 名保持 "audit.db",与原 audit/writers.py 末尾
-logger.info("notify.stub...") 一致 — 不切换日志输出通道,audit worker
-日志聚合路径不变。
+logger 名保持 `"audit.db"`,与 `audit/usecase.py` 同名 logger 一致,不切换日志输出通道。
 """
 
 from __future__ import annotations
@@ -27,17 +25,20 @@ def send(
     turn_number: int,
     target_message_id: uuid.UUID | None,
 ) -> None:
-    """发送通知桩(占位实现)。
+    """写入通知桩日志。
 
     Args:
-        notify_type: 通知类型枚举
-        session_id:  触发通知的 session UUID
-        turn_number: 触发通知的 turn 号
-        target_message_id: 触发通知的目标 message UUID(可空)
+        notify_type: 通知类型枚举。
+        session_id: 触发通知的 session UUID。
+        turn_number: 触发通知的 turn 号。
+        target_message_id: 触发通知的目标 message UUID(可空)。
 
-    日志格式 "notify.stub.<type> sid=<sid> turn=<turn> target=<target>"
-    必须与原 logger.info("notify.stub.%s sid=%s turn=%d target=%s", ...)
-    字面 byte 级一致,关注点 6 硬约束。
+    Returns:
+        None。
+
+    日志格式 `"notify.stub.<type> sid=<sid> turn=<turn> target=<target>"`
+    被 `tests/audit/test_writers.py` 中的 `test_notify_stub_*` 系列用例断言,
+    字段顺序与占位符需保持字面一致。
     """
     logger.info(
         "notify.stub.%s sid=%s turn=%d target=%s",

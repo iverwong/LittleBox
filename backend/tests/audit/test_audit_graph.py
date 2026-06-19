@@ -294,7 +294,7 @@ class TestAuditGraph:
         # 把运营态字符串误注入主 LLM（intervention_type="guided"）。
         assert result["structured_output"].guidance_injection is None
         # 降级覆盖从 guidance 串迁到 turn_summary，避免覆盖空洞
-        assert result["structured_output"].turn_summary == "无该轮摘要（审查降级：已超过迭代次数）"
+        assert result["structured_output"].turn_summary == "无该轮摘要(审查降级:已超过迭代次数)"
         # 当前实现:max_iter 兜底只设 structured_output,不污染 session_notes_working
         # (若有 replace miss,notes 保持上一轮成功后的状态;无成功则为空)
         session_notes = result["session_notes_working"]
@@ -348,7 +348,7 @@ class TestPostProcessing:
         # M9.5 契约：模型两轮都未给结构化结论时，guidance_injection 必须为 None
         assert result["structured_output"].guidance_injection is None
         # 降级覆盖迁到 turn_summary，保留诊断信息
-        assert result["structured_output"].turn_summary == "无该轮摘要（审查降级：无工具调用）"
+        assert result["structured_output"].turn_summary == "无该轮摘要(审查降级:无工具调用)"
 
 
 class TestCrossTurnContinuity:

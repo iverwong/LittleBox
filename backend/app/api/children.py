@@ -1,4 +1,7 @@
-"""children 路由：创建 child / 吊销 child tokens / 列表查询 / 删除 child。"""
+"""子账号管理路由:``/api/v1/children``。
+
+父端对子账号的 CRUD:创建子账号、列出本家庭所有子账号、吊销某子账号
+全部活跃 token、硬删子账号。"""
 
 from __future__ import annotations
 
@@ -39,7 +42,25 @@ async def create_child(
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> ChildSummary:
-    """委托 accounts.service.create_child,业务编排(行级锁 / 计数 / 跨表写入)在 service 层。"""
+    """创建子账号,``POST /api/v1/children``。仅 parent。
+
+    委托 ``accounts.service.create_child`` 执行跨表事务(``users`` /
+    ``child_profiles`` / ``family_members`` + 家庭 child 数量上限校验
+    + 行级锁)。HTTP 协议层只负责依赖注入与返回类型。
+
+    Args:
+        payload: ``CreateChildRequest``,含 nickname / age / gender。
+        parent: 当前父账号上下文(``Depends(require_parent)``)。
+        db: 异步 SQLAlchemy session(``Depends(get_db)``)。
+        redis: 主业务 Redis(``Depends(get_redis)``)。
+
+    Returns:
+        ``ChildSummary``:新建 child 的摘要,``is_bound`` 恒为 ``False``。
+
+    Raises:
+        HTTPException ``status.HTTP_409_CONFLICT``:家庭子账号数已达上限
+            (``ChildLimitReached``)。
+    """
     return await create_child_service(db, redis, parent=parent, payload=payload)
 
 
@@ -48,8 +69,25 @@ async def list_children(
     parent: Annotated[CurrentAccount, Depends(require_parent)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ListChildrenResponse:
-    """父账号查询本 family 下所有 child。is_bound 通过 EXISTS 动态构造，不落库。"""
-    # TODO: 后续若启用有限期 token，需在此补判 expires_at > now()
+    """父账号查询本 family 下所有 child,``GET /api/v1/children``。仅 parent。
+
+    ``is_bound`` 通过 ``EXISTS`` 动态构造(子查询查 ``auth_tokens`` 的未
+    撤销行),不落库。每次请求实时计算,新签 / 吊销 token 后下一次
+    请求即反映。
+
+    Args:
+        parent: 当前父账号上下文(``Depends(require_parent)``)。
+        db: 异步 SQLAlchemy session(``Depends(get_db)``)。
+
+    Returns:
+        ``ListChildrenResponse``:本 family 的 child 列表,按
+        ``ChildProfile.created_at``、``ChildProfile.id`` 升序。
+
+    Raises:
+        HTTPException ``status.HTTP_401_UNAUTHORIZED``:缺失 / 非法 Bearer token。
+        HTTPException ``status.HTTP_403_FORBIDDEN``:非 parent 角色。
+    """
+    # is_bound 子查询:存在未撤销的 auth_token 即视为已绑定
     is_bound_sub = (
         exists()
         .where(AuthToken.user_id == User.id, AuthToken.revoked_at.is_(None))
@@ -92,7 +130,23 @@ async def revoke_child_tokens(
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> None:
-    """吊销指定 child 的全部活跃 token。家庭边界：parent 只能下线本 family 的 child。"""
+    """吊销指定 child 的全部活跃 token,``POST /api/v1/children/{id}/revoke-tokens``。仅 parent。
+
+    家庭边界:目标 child 必须属于当前 parent 所在的 family 且 ``is_active``。
+
+    Args:
+        child_user_id: 目标 child 的 User.id(path param)。
+        parent: 当前父账号上下文(``Depends(require_parent)``)。
+        db: 异步 SQLAlchemy session(``Depends(get_db)``)。
+        redis: 主业务 Redis(``Depends(get_redis)``)。
+
+    Returns:
+        无。
+
+    Raises:
+        HTTPException ``status.HTTP_404_NOT_FOUND``:child 不存在、非本
+            family、角色不是 child 或已停用(统一 404,不区分原因)。
+    """
     stmt = select(User).where(
         User.id == child_user_id,
         User.role == UserRole.child,
@@ -113,13 +167,33 @@ async def delete_child(
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> None:
-    """硬删 child 账号及全部关联数据（DB CASCADE + Redis 缓存清理 + 审计写入）。
+    """硬删 child 账号及全部关联数据,``DELETE /api/v1/children/{id}``。仅 parent。
 
-    错误码矩阵：
-    - 401：未登录（依赖链 require_parent）
-    - 403：非 parent 角色（require_parent 抛出）
-    - 404：目标 child 不存在 / 非本 family / role 不是 child（不暴露存在性）
-    - 204：成功
+    委托 ``accounts.service.hard_delete_child`` 执行:DB CASCADE 删
+    ``auth_tokens`` / ``sessions`` / ``messages`` / ``audit_records`` /
+    ``rolling_summaries`` / ``daily_reports`` / ``notifications`` /
+    ``device_tokens`` / ``family_members`` + 清空 Redis auth 缓存 +
+    写 ``DataDeletionRequest`` 审计记录。
+
+    错误码矩阵:
+
+    - 401:未登录(``get_current_account`` 抛)
+    - 403:非 parent 角色(``require_parent`` 抛)
+    - 404:目标 child 不存在 / 非本 family / 角色不是 child(不暴露存在性)
+    - 204:成功
+
+    Args:
+        child_user_id: 目标 child 的 User.id(path param)。
+        parent: 当前父账号上下文(``Depends(require_parent)``)。
+        db: 异步 SQLAlchemy session(``Depends(get_db)``)。
+        redis: 主业务 Redis(``Depends(get_redis)``)。
+
+    Returns:
+        无。
+
+    Raises:
+        HTTPException ``status.HTTP_404_NOT_FOUND``:child 不存在、非本
+            family、角色不是 child 或已停用。
     """
     stmt = select(User).where(
         User.id == child_user_id,

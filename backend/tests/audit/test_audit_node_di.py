@@ -781,7 +781,7 @@ class TestMaxIterTailFallback:
         # 历史 crisis 字段不被回填(走 default)
         assert result["structured_output"].crisis_detected is False
         assert result["structured_output"].crisis_topic is None
-        assert result["structured_output"].turn_summary == "无该轮摘要（审查降级：已超过迭代次数）"
+        assert result["structured_output"].turn_summary == "无该轮摘要(审查降级:已超过迭代次数)"
 
     async def test_no_output_falls_back_to_default(self):
         from app.domain.audit.graph import audit_tools
@@ -804,7 +804,7 @@ class TestMaxIterTailFallback:
         assert result.get("structured_output") is not None
         # 无任何 OUTPUT → default fallback
         assert result["structured_output"].guidance_injection is None
-        assert result["structured_output"].turn_summary == "无该轮摘要（审查降级：已超过迭代次数）"
+        assert result["structured_output"].turn_summary == "无该轮摘要(审查降级:已超过迭代次数)"
 
     async def test_invalid_output_args_falls_back_to_default(self, caplog):
         from app.domain.audit.graph import audit_tools
@@ -841,7 +841,7 @@ class TestMaxIterTailFallback:
         # 不抛异常
         assert result.get("structured_output") is not None
         # 校验失败 → default fallback
-        assert result["structured_output"].turn_summary == "无该轮摘要（审查降级：已超过迭代次数）"
+        assert result["structured_output"].turn_summary == "无该轮摘要(审查降级:已超过迭代次数)"
         # warning log
         assert any("audit.loop_exceeded" in r.message for r in caplog.records)
 

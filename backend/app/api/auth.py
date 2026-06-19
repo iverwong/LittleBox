@@ -1,4 +1,7 @@
-"""auth 路由：login / logout。"""
+"""父端登录与登出路由：``POST /api/v1/auth/login`` 与 ``POST /api/v1/auth/logout``。
+
+登录处理 phone + password 鉴权、Redis 限流与 token 签发；
+登出吊销当前父账号的 token。"""
 
 from __future__ import annotations
 
@@ -35,27 +38,34 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 
 def _get_client_ip(request: Request) -> str | None:
-    """返回 uvicorn 净化后的客户端 IP, 无 client 信息时返回 None。
+    """返回 uvicorn 净化后的客户端 IP,无 client 信息时返回 ``None``。
 
-    合同: 不解析 XFF / X-Real-IP / 任何代理头。
+    合同：不解析 ``X-Forwarded-For`` / ``X-Real-IP`` / 任何代理头。
 
-    反代部署应让 uvicorn 的 ProxyHeadersMiddleware 完成 IP 净化:
+    反代部署应让 uvicorn 的 ``ProxyHeadersMiddleware`` 完成 IP 净化:
+
+    .. code-block:: bash
+
         uvicorn app.main:app --proxy-headers \\
             --forwarded-allow-ips=<反代 IP 或 CIDR>
+
     uvicorn 据此:
-        1. 校验直接 peer IP 是否在 --forwarded-allow-ips 白名单
-        2. 是 → 取 XFF 最右一个非可信跳, 写入 scope["client"].host
-        3. 否 → 忽略 XFF, scope["client"] 保留真实 peer IP
+      1. 校验直接 peer IP 是否在 ``--forwarded-allow-ips`` 白名单
+      2. 是 → 取 ``X-Forwarded-For`` 最右一个非可信跳,写入 ``scope["client"].host``
+      3. 否 → 忽略 ``X-Forwarded-For``,``scope["client"]`` 保留真实 peer IP
 
-    之后本函数返回的就是 uvicorn 净化后的客户端 IP, 业务代码无
-    任何额外信任判断, 也不再有可被伪造的接缝。
+    之后本函数返回的就是 uvicorn 净化后的客户端 IP,业务代码无
+    任何额外信任判断,也不再有可被伪造的接缝。
 
-    None 语义: 返回 None 表示 ASGI scope 未传 client (常见于裸 socket
-    部署或 ASGI 异常)。调用方 (如限流) 应将 None 视为"不参与该维度
-    限流", 而非塞进 "unknown" 共享桶。
+    返回 ``None`` 表示 ASGI scope 未传 ``client``(常见于裸 socket
+    部署或 ASGI 异常)。调用方(如限流)应将 ``None`` 视为"不参与该维度
+    限流",而非塞进 ``"unknown"`` 共享桶。
 
-    历史: 早期实现曾在 app 层做 XFF 最左段解析, 已删除。
-    trust_proxy_headers / LB_TRUST_PROXY_HEADERS 已同步移除, 不再使用。
+    Args:
+        request: 当前 FastAPI 请求对象。
+
+    Returns:
+        uvicorn 净化后的客户端 IP,或 ``None``。
     """
     if request.client and request.client.host:
         return request.client.host
@@ -69,7 +79,32 @@ async def login(
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> LoginResponse:
-    """父账号登录：phone + password → opaque token。"""
+    """父账号登录:phone + password → opaque token。
+
+    ``POST /api/v1/auth/login``。流程:
+
+    1. 取客户端 IP(``None`` 时跳过 IP 维度限流)
+    2. ``check_login_limit``:phone / IP 双桶已达阈值则 ``429``
+    3. 查 ``User``(role=parent, is_active),账号不存在或密码错统一 ``401``
+    4. 失败路径 ``incr_login_fail`` 递增计数;成功路径 stage 清零两条 key
+    5. ``revoke_all_active_tokens`` 吊销该 parent 全部老 token(一次一设备)
+    6. ``issue_token`` 签 7 天有效的新 token,落 DB + stage Redis
+    7. ``commit_with_redis`` 原子落盘
+
+    Args:
+        request: FastAPI 请求对象,用于读取 ``client.host``。
+        payload: ``LoginRequest``(phone / password / device_id)。
+        db: 异步 SQLAlchemy session(``Depends(get_db)``)。
+        redis: 主业务 Redis(``Depends(get_redis)``)。
+
+    Returns:
+        ``LoginResponse``:含明文 token 与 ``AccountOut``。
+
+    Raises:
+        HTTPException ``status.HTTP_429_TOO_MANY_REQUESTS``:登录限流触发。
+        HTTPException ``status.HTTP_401_UNAUTHORIZED``:账号不存在、密码错
+            或账号无 password_hash。
+    """
     client_ip = _get_client_ip(request)
     if client_ip is None:
         # 解析不到 peer IP —— 裸 socket 部署 + scope.client 缺失
@@ -89,10 +124,9 @@ async def login(
         User.is_active.is_(True),
     )
     user = (await db.execute(stmt)).scalar_one_or_none()
-    if (
-        user is None or user.password_hash is None
-    ):  # TODO 两个作用，一个是 verify_password 接非空字符串；
-        # 二个是做防御性兜底；后期转统一认证后该验证剔除
+    if user is None or user.password_hash is None:
+        # user 为 None 时 verify_password 无可验证对象;password_hash 为
+        # None 属于数据不一致,按"密码错"路径处理以避免泄露账号存在性。
         await incr_login_fail(redis, payload.phone, client_ip)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
     if not verify_password(user.password_hash, payload.password):
@@ -134,11 +168,26 @@ async def logout(
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> None:
-    """主动下线当前父账号 token。限 parent。
+    """主动下线当前父账号 token,``POST /api/v1/auth/logout``。仅 parent。
 
-    token 从 `request.state.token` 取 (get_current_account 已 stash),
-    不再二次 split Authorization header —— 避免前次审查发现的
-    "Authorization: Bearer / Token xxx" 静默 no-op 漏洞。
+    token 从 ``request.state.token`` 取(``get_current_account`` 已 stash),
+    不再二次 split Authorization header,避免把 ``"Authorization: Bearer
+    / Token xxx"`` 之类的畸形头静默吞成 no-op。
+
+    Args:
+        request: FastAPI 请求对象,用于读取 ``request.state.token``。
+        current: 当前账号上下文(``Depends(require_parent)``)。
+        db: 异步 SQLAlchemy session(``Depends(get_db)``)。
+        redis: 主业务 Redis(``Depends(get_redis)``)。
+
+    Returns:
+        无。
+
+    Raises:
+        HTTPException ``status.HTTP_401_UNAUTHORIZED``:缺失 / 非法 Bearer
+            token(``get_current_account`` 抛出)。
+        HTTPException ``status.HTTP_403_FORBIDDEN``:非 parent 角色
+            (``require_parent`` 抛出)。
     """
     await revoke_token(db, request.state.token)
     await commit_with_redis(db, redis)

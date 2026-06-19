@@ -1,14 +1,10 @@
-"""审查 Pipeline Pydantic schemas（M8）。
+"""审查 Pipeline Pydantic schemas。
 
-本模块设计为 Pydantic v2 BaseModel 纯数据类，不引入 ORM / LangChain 依赖。
-与 `app.models.audit` 的 ORM 模型共享字段名但独立命名空间。
+本模块设计为 Pydantic v2 BaseModel 纯数据类,不引入 ORM / LangChain 依赖。
+与 `app.domain.audit.models` 的 ORM 模型共享字段名但独立命名空间。
 
-LLM tool 用 `ReplaceInNotes` 由 LangChain `bind_tools()` 消费，
+LLM tool 用 `ReplaceInNotes` 由 LangChain `bind_tools()` 消费,
 `AuditOutputSchema` 由 `with_structured_output(include_raw=True)` 消费。
-详见 D11 决议：with_structured_output + bind_tools 同帧调用兼容性由 Step 4 live spike 验证。
-
-TODO(M9+): provider 切换时补充英文 Field(description=...) 实现双语兼容；
-当前 DeepSeek 对中文 description 理解正常。
 """
 
 from __future__ import annotations
@@ -20,11 +16,19 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class AuditDimensionScores(BaseModel):
-    """审查 Agent 输出的 7 维度评分。
+    """审查 Agent 输出的 6 维度评分(0-9 整数)。
 
-    与 `child_profiles.sensitivity`（家长配置）共享相同的 6 个 key；
-    审查 Agent 在评分时已通过 prompt 内化家长配置，输出即最终分数。
-    范围 0-9（10 阶），与架构基线 §四/七/九 保持一致。
+    与 `child_profiles.sensitivity`(家长配置)共享相同的 6 个 key;
+    审查 Agent 在评分时已通过 prompt 内化家长配置,输出即最终分数。
+    范围 0-9(10 阶)。
+
+    Attributes:
+        emotional: 情绪与心理维度评分。
+        social: 人际与社交维度评分。
+        values: 价值观与世界观维度评分。
+        boundaries: AI 应用边界维度评分。
+        academic: 学习独立性维度评分。
+        lifestyle: 生活方式维度评分。
     """
 
     emotional: int = Field(
@@ -88,8 +92,13 @@ class AuditDimensionScores(BaseModel):
 class TurnSummaryEntry(BaseModel):
     """单轮对话的客观中立短摘要。
 
-    审查图每轮 append 一条到 `rolling_summaries.turn_summaries`；
-    摘要口吻严格客观中立，禁带风控判断。
+    审查图每轮 append 一条到 `rolling_summaries.turn_summaries`;
+    摘要口吻严格客观中立,禁带风控判断。
+
+    Attributes:
+        turn_number: 对话轮次编号,与 ai_turn_counter 对齐。
+        summary: 单行摘要,≤100 字符。
+        created_at: ISO-8601 格式 UTC 时间戳。
     """
 
     turn_number: int = Field(description="对话轮次编号，与 ai_turn_counter 对齐")
@@ -99,6 +108,14 @@ class TurnSummaryEntry(BaseModel):
     @field_validator("created_at")
     @classmethod
     def _valid_iso8601(cls, v: str) -> str:
+        """校验 created_at 字段为合法 ISO-8601 字符串。
+
+        Args:
+            v: 原始字段值。
+
+        Returns:
+            原值(校验通过后透传)。
+        """
         datetime.fromisoformat(v)
         return v
 
@@ -161,9 +178,17 @@ class AuditSignalsPayload(BaseModel):
     """Redis `audit:{sid}` 单 key 三态信号管道值。
 
     - pending: 已入队等待 worker 处理
-    - ready: worker 完成，signals 就绪
-    - failed: 重试用尽，error 描述失败原因
-    TTL 24h（config.audit_redis_ttl_seconds），到期自动过期。
+    - ready: worker 完成,signals 就绪
+    - failed: 重试用尽,error 描述失败原因
+    TTL 24h(config.audit_redis_ttl_seconds),到期自动过期。
+
+    Attributes:
+        status: 三态之一。
+        turn: 对应的 ai_turn 轮次,用于主图 turn 校验。
+        signals: 审查结果,status=ready 时必填。
+        started_at: worker 开始处理时间(ISO-8601)。
+        completed_at: worker 完成时间(ISO-8601)。
+        error: 失败原因描述,status=failed 时必填。
     """
 
     status: Literal["pending", "ready", "failed"]
