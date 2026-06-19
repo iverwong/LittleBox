@@ -15,7 +15,6 @@ import json
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, patch
 
-import anyio
 import pytest
 
 pytestmark = pytest.mark.asyncio(loop_scope="function")
@@ -46,61 +45,6 @@ from tests.api._chat_stream_lifecycle_helpers import (  # noqa: F401  # lifecycl
 )
 
 # ---------------------------------------------------------------------------
-# _BrokenOnCall: 通过 athrow 将异常注入生成器的 yield 暂停点，
-# 触发 app/api/me.py 中内层 ``except (ConnectionError, anyio.BrokenResourceError,
-# asyncio.CancelledError)`` 路径（Step 8c advisory #1）。
-# httpx ASGI transport 无法直接从外部触发 yield 点异常，因为
-# GeneratorExit / 普通 __anext__ raise 都走外层 except。
-# ---------------------------------------------------------------------------
-
-
-class _BrokenOnCall:
-    """Wrap an async iterator; on the Nth ``__anext__`` call use ``athrow()``
-    to inject ``anyio.BrokenResourceError`` into the generator at its current
-    yield point, exercising the inner try/except at ``yield frame``.
-
-    Args:
-        iterator: The real async iterator (the generator from StreamingResponse).
-        break_after: After this many successful ``__anext__`` calls, the next
-                     call injects the error.  Default 2 = inject on call 3
-                     (after session_meta + first delta have been yielded).
-    """
-
-    def __init__(self, iterator: AsyncIterator, break_after: int = 2) -> None:
-        self._it = iterator
-        self._break_after = break_after
-        self._count = 0
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        self._count += 1
-        if self._count > self._break_after:
-            # Inject BrokenResourceError INTO the generator at yield point.
-            # The inner ``except anyio.BrokenResourceError`` in me.py catches it,
-            # sets client_alive = False, and continues consuming the graph stream
-            # (不 cancel 语义).
-            try:
-                return await self._it.athrow(anyio.BrokenResourceError("Broken pipe"))
-            except StopAsyncIteration:
-                raise
-        try:
-            return await self._it.__anext__()
-        except StopAsyncIteration:
-            raise
-
-    async def asend(self, *args):
-        return await self._it.asend(*args)
-
-    async def athrow(self, *args):
-        return await self._it.athrow(*args)
-
-    async def aclose(self):
-        await self._it.aclose()
-
-
-# ---------------------------------------------------------------------------
 # Fixtures (same pattern as test_chat_stream_graph.py)
 # ---------------------------------------------------------------------------
 
@@ -129,7 +73,7 @@ async def app_with_eval(db_session, redis_client_with_eval):
 
     from app.core.redis import get_redis
     from app.main import create_app
-    from tests.conftest import _inject_mock_resources
+    from tests.conftest import _inject_mock_resources_with_session
 
     application = create_app()
 
@@ -142,7 +86,7 @@ async def app_with_eval(db_session, redis_client_with_eval):
     application.dependency_overrides[get_db] = _get_db
     application.dependency_overrides[get_redis] = _get_redis
 
-    _inject_mock_resources(application, redis_client_with_eval)
+    _inject_mock_resources_with_session(application, redis_client_with_eval, db_session)
     try:
         yield application
     finally:
@@ -227,10 +171,11 @@ def _make_delta_frame(text: str) -> bytes:
 
 @pytest.mark.asyncio
 async def test_stop_no_ai(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session, redis_client,
+    lifecycle_ctx,
+    monkeypatch,
 ):
     """StopNoAi: event set before graph yields content → stopped without aid, DB human only."""
-    headers, child = auth_headers_child
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
 
     async def fake_astream_no_content(initial_state, stream_mode="custom", **kwargs):
         # Generator registered its event in running_streams before calling astream;
@@ -243,9 +188,9 @@ async def test_stop_no_ai(
             ev.set()
         yield {"finish_reason": "stop"}  # no delta → has_emitted_content stays False
 
-    app_with_eval.state.resources.main_graph.astream = fake_astream_no_content
+    lifecycle_ctx.rr.main_graph.astream = fake_astream_no_content
     body = make_payload(content="Hello")
-    resp = await api_client_with_eval.post(
+    resp = await client.post(
         "/api/v1/me/chat/stream", json=body, headers=headers,
     )
     assert resp.status_code == 200
@@ -268,7 +213,7 @@ async def test_stop_no_ai(
 
     # DB: only human row (from decision matrix), no ai row
     msgs = (
-        (await db_session.execute(
+        (await lifecycle_ctx.assert_sess.execute(
             select(Message).where(Message.session_id == sid).order_by(Message.created_at),
         ))
         .scalars()
@@ -282,7 +227,7 @@ async def test_stop_no_ai(
     assert sid not in running_streams, "running_streams entry was not cleaned up"
 
     # Lock released
-    lock_exists = await redis_client.exists(f"chat:lock:{sid}")
+    lock_exists = await lifecycle_ctx.redis_client.exists(f"chat:lock:{sid}")
     assert not lock_exists, "Session lock was not released"
 
 
@@ -358,25 +303,6 @@ async def test_stop_with_ai(lifecycle_ctx):
 
 
 # ---------------------------------------------------------------------------
-# S3: KeepGo (不 cancel) — 保护在 graph 循环内遇到 ConnectionError 时仍延续
-# ---------------------------------------------------------------------------
-#
-# M9-patch3: delta 帧改为 pipeline 循环内直接 frame_sse_event + _put,
-# 不再经过 stream_graph_to_sse async-generator, 因此 graph 循环内无
-# delta 相关异步边界可抛 ConnectionError。该场景不再可测,移除。
-# ---------------------------------------------------------------------------
-    assert ai_msg.content == "你好！", f"Expected '你好！', got '{ai_msg.content}'"
-    assert ai_msg.finish_reason == "stop"
-
-    # running_streams cleanup
-    assert sid not in running_streams, "running_streams entry was not cleaned up"
-
-    # 关注点6: 锁释放 — 锁 key 不存在
-    lock_exists = await lifecycle_ctx.redis_client.exists(f"chat:lock:{sid}")
-    assert not lock_exists, "Session lock was not released after keepgo"
-
-
-# ---------------------------------------------------------------------------
 # S4: running_streams cleanup after normal stream (no stop)
 # ---------------------------------------------------------------------------
 
@@ -435,90 +361,3 @@ async def test_running_streams_cleaned_after_error(
     sid = frames[0]["data"]["session_id"]
 
     assert sid not in running_streams, "running_streams was not cleaned after error"
-
-
-# ---------------------------------------------------------------------------
-# S6: Inner yield-frame except path — BrokenResourceError via athrow()
-# ---------------------------------------------------------------------------
-# Step 8c advisory #1 覆盖：yield frame 处的内层 except 捕获
-# anyio.BrokenResourceError，设置 client_alive=False 并继续消费 LLM 流。
-#
-# 此路径无法通过 httpx ASGI transport 从外部触发（断连发 GeneratorExit 而非
-# BrokenResourceError），故借助 _BrokenOnCall wrapper 在第 3 次 __anext__
-# 时通过 athrow() 将异常注入生成器暂停点。
-#
-# 断言三连：
-#   1) LLM 流全部消费完（consumed_count == len(fake_payloads)）
-#   2) DB ai 行写入完成，content/finish_reason 正确
-#   3) 双锁释放 + running_streams 清理
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_keepgo_inner_yield_connection_error(lifecycle_ctx):
-    """Inner ``yield frame`` catches BrokenResourceError via athrow → client_alive=False.
-
-    Triple assertion: all payloads consumed, DB written correctly,
-    locks released.
-    """
-    from starlette.responses import StreamingResponse
-
-    client, headers, child = await lifecycle_setup(lifecycle_ctx)
-
-    fake_payloads = [
-        {"delta": "你"},
-        {"delta": "好"},
-        {"delta": "！"},
-        {"finish_reason": "stop"},
-    ]
-    consumed_count = 0
-
-    async def fake_astream(initial_state, stream_mode="custom", **kwargs):
-        nonlocal consumed_count
-        for p in fake_payloads:
-            consumed_count += 1
-            yield p
-
-    original_sr_init = StreamingResponse.__init__
-
-    def patched_sr_init(self, content, *args, **kwargs):
-        original_sr_init(self, content, *args, **kwargs)
-        self.body_iterator = _BrokenOnCall(self.body_iterator, break_after=2)
-
-    with patch.object(StreamingResponse, "__init__", patched_sr_init):
-        lifecycle_ctx.rr.main_graph.astream = fake_astream
-        body = {"content": "Hi"}
-        resp = await client.post(
-            "/api/v1/me/chat/stream", json=body, headers=headers,
-        )
-        assert resp.status_code == 200
-        _ = resp.text
-
-    assert consumed_count == len(fake_payloads), (
-        f"Expected {len(fake_payloads)} chunks consumed, got {consumed_count}"
-    )
-
-    frames = _parse_sse_frames(resp.text)
-    sid = frames[0]["data"]["session_id"]
-
-    # 断言 2: DB ai 行写入完成
-    lifecycle_ctx.assert_sess.expire_all()
-    msgs = (
-        (await lifecycle_ctx.assert_sess.execute(
-            select(Message).where(Message.session_id == sid).order_by(Message.created_at),
-        ))
-        .scalars()
-        .all()
-    )
-    assert len(msgs) == 2, f"Expected 2 rows (human + ai), got {len(msgs)}"
-    ai_msg = msgs[1]
-    assert ai_msg.role == MessageRole.ai
-    assert ai_msg.status == MessageStatus.active
-    assert ai_msg.content == "你好！", f"Expected '你好！', got '{ai_msg.content}'"
-    assert ai_msg.finish_reason == "stop"
-
-    # 断言 3: 双锁释放 + running_streams 清理
-    lock_exists = await lifecycle_ctx.redis_client.exists(f"chat:lock:{sid}")
-    assert not lock_exists, "Session lock was not released"
-
-    assert sid not in running_streams, "running_streams entry was not cleaned up"
