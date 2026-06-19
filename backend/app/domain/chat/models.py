@@ -43,7 +43,7 @@ class Session(BaseMixin, Base):
     title: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     status: Mapped[SessionStatus] = mapped_column(
         default=SessionStatus.active,
-        server_default="active",
+        server_default=SessionStatus.active,
         nullable=False,
     )
     last_active_at: Mapped[datetime] = mapped_column(
@@ -104,7 +104,7 @@ class Message(BaseMixin, Base):
     )
     status: Mapped[MessageStatus] = mapped_column(
         default=MessageStatus.active,
-        server_default="active",
+        server_default=MessageStatus.active,
         nullable=False,
     )
     finish_reason: Mapped[Optional[str]] = mapped_column(

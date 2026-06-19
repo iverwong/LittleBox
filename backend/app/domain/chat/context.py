@@ -90,6 +90,7 @@ async def load_recent_messages(
                     Message.session_id == sid,
                     Message.turn_number.between(from_turn, to_turn),
                     Message.role.in_([MessageRole.human, MessageRole.ai]),
+                    Message.status != MessageStatus.discarded,
                 )
                 .order_by(Message.created_at.asc(), Message.id.asc())
             )

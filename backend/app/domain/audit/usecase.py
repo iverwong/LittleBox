@@ -29,6 +29,7 @@ from sqlalchemy import select
 
 # 4.6 期间:app/models/audit.py 仍存在(Phase 6.4 才迁到 app/domain/audit/models.py)
 # 故保留 app.models.audit import,Phase 6.4 收口时同步改
+from app.core.enums import NotificationType
 from app.domain.audit.models import AuditRecord, RollingSummary
 from app.domain.audit.schemas import AuditOutputSchema, TurnSummaryEntry
 
@@ -119,4 +120,4 @@ async def write_audit_results(
     if structured_output.crisis_detected:
         from app.domain.notifications.notify_stub import send as notify_send
 
-        notify_send("crisis", sid, turn_number, target_message_id)
+        notify_send(NotificationType.crisis, sid, turn_number, target_message_id)

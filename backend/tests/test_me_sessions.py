@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
-from app.core.enums import MessageRole
+from app.core.enums import MessageRole, MessageStatus
 from app.domain.accounts.models import User
 from app.domain.chat.models import Message
 from app.domain.chat.models import Session as SessionModel
@@ -491,7 +491,7 @@ class TestGetMessagesHappy:
         )
         db_session.add(
             Message(
-                session_id=s.id, role=MessageRole.human, content="Discarded", status="discarded"
+                session_id=s.id, role=MessageRole.human, content="Discarded", status=MessageStatus.discarded
             )
         )
         await db_session.commit()

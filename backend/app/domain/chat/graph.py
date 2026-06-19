@@ -32,7 +32,7 @@ from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from sqlalchemy import select, update
 
-from app.core.enums import MessageRole, MessageStatus
+from app.core.enums import InterventionType, MessageRole, MessageStatus
 from app.core.history_xml import serialize_history_to_xml
 from app.core.llm import build_compression_llm, build_crisis_llm, build_main_llm
 from app.core.llm_extractors import (
@@ -550,7 +550,7 @@ async def call_main_llm(
         # 字节等价于旧 main 端点默认值 "deepseek"(关注点 1 要求零兜底依赖):
         # 由 Role.MAIN 解析模型档,与原 provider 字符串路径同语义。
         profile=role_profile(Role.MAIN),
-        intervention_type="guided" if guidance is not None else None,
+        intervention_type=InterventionType.guided if guidance is not None else None,
     )
 
 
@@ -569,7 +569,7 @@ async def call_crisis_llm(
         llm=build_crisis_llm(ctx.settings),
         # crisis 复用 main 绑定(Step 3 收口),模型档同步沿用 main。
         profile=role_profile(Role.MAIN),
-        intervention_type="crisis",
+        intervention_type=InterventionType.crisis,
     )
 
 

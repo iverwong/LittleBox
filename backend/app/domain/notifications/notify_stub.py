@@ -16,11 +16,13 @@ from __future__ import annotations
 import logging
 import uuid
 
+from app.core.enums import NotificationType
+
 logger = logging.getLogger("audit.db")
 
 
 def send(
-    notify_type: str,
+    notify_type: NotificationType,
     session_id: uuid.UUID,
     turn_number: int,
     target_message_id: uuid.UUID | None,
@@ -28,7 +30,7 @@ def send(
     """发送通知桩(占位实现)。
 
     Args:
-        notify_type: "crisis"
+        notify_type: 通知类型枚举
         session_id:  触发通知的 session UUID
         turn_number: 触发通知的 turn 号
         target_message_id: 触发通知的目标 message UUID(可空)
@@ -39,7 +41,7 @@ def send(
     """
     logger.info(
         "notify.stub.%s sid=%s turn=%d target=%s",
-        notify_type,
+        notify_type.value,
         session_id,
         turn_number,
         target_message_id,

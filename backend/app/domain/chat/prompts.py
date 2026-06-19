@@ -12,6 +12,7 @@
 
 from langchain_core.messages import BaseMessage, SystemMessage
 
+from app.core.enums import Gender
 from app.domain.accounts.schemas import ChildProfileSnapshot
 
 # ---- compute_age 已迁至 core/time.py::age_at ----
@@ -29,10 +30,9 @@ def build_system_prompt(
     Returns:
         SystemMessage: 组件后的系统提示词
     """
-    gender = profile.gender
-    if gender == "male":
+    if profile.gender == Gender.male:
         f_gender = "男孩"
-    elif gender == "female":
+    elif profile.gender == Gender.female:
         f_gender = "女孩"
     else:
         f_gender = "孩子"
@@ -145,10 +145,9 @@ def build_crisis_system_prompt(
     post_crisis_turn_dialogue: str | None = None,
     compression_summary: str | None = None,
 ) -> SystemMessage:
-    gender = profile.gender
-    if gender == "male":
+    if profile.gender == Gender.male:
         f_gender = "男孩"
-    elif gender == "female":
+    elif profile.gender == Gender.female:
         f_gender = "女孩"
     else:
         f_gender = "孩子"

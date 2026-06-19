@@ -121,7 +121,7 @@ async def list_sessions(
     latest = (
         await db.execute(
             select(SessionModel)
-            .where(SessionModel.child_user_id == current.id, SessionModel.status == "active")
+            .where(SessionModel.child_user_id == current.id, SessionModel.status == SessionStatus.active)
             .order_by(SessionModel.last_active_at.desc())
             .limit(1)
         )
@@ -137,7 +137,7 @@ async def list_sessions(
         select(SessionModel.id, SessionModel.title, SessionModel.last_active_at)
         .where(
             SessionModel.child_user_id == current.id,
-            SessionModel.status == "active",
+            SessionModel.status == SessionStatus.active,
         )
         .order_by(SessionModel.last_active_at.desc(), SessionModel.id.desc())
         .limit(limit + 1)
@@ -182,7 +182,7 @@ async def get_messages(
 ) -> MessageListResponse:
     """Fetch messages for a session (keyset pagination, top-level in_progress)."""
     session_row = await db.get(SessionModel, sid)
-    if session_row is None or session_row.status != "active":
+    if session_row is None or session_row.status != SessionStatus.active:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "SessionNotFound")
     if session_row.child_user_id != current.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "SessionForbidden")
@@ -260,7 +260,7 @@ async def delete_session(
         await db.execute(select(SessionModel).where(SessionModel.id == sid))
     ).scalar_one_or_none()
 
-    if session is None or session.status == "deleted":
+    if session is None or session.status == SessionStatus.deleted:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "SessionNotFound")
 
     if session.child_user_id != current.id:
@@ -286,7 +286,7 @@ async def stop_session(
         await db.execute(
             select(SessionModel).where(
                 SessionModel.id == sid,
-                SessionModel.status == "active",
+                SessionModel.status == SessionStatus.active,
             )
         )
     ).scalar_one_or_none()
@@ -340,7 +340,7 @@ async def chat_stream(
                     select(SessionModel)
                     .where(
                         SessionModel.child_user_id == current.id,
-                        SessionModel.status == "active",
+                        SessionModel.status == SessionStatus.active,
                     )
                     .order_by(SessionModel.last_active_at.desc())
                     .limit(1)
@@ -356,7 +356,7 @@ async def chat_stream(
                     id=sid,
                     child_user_id=current.id,
                     title=today_session_title(now),
-                    status="active",
+                    status=SessionStatus.active,
                     last_active_at=now,
                 )
                 db.add(session)

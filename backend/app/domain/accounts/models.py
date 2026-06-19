@@ -25,7 +25,7 @@ class Family(BaseMixin, Base):
 
     sub_tier: Mapped[SubTier] = mapped_column(
         default=SubTier.free,
-        server_default="free",
+        server_default=SubTier.free,
         nullable=False,
     )
 

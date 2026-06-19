@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from langchain_core.messages import SystemMessage
 
+from app.core.enums import Gender
 from app.domain.accounts.schemas import ChildProfileSnapshot
 
 LEVEL_MAP = {
@@ -33,9 +34,9 @@ def build_audit_system_prompt(child_profile: ChildProfileSnapshot, max_iter: int
     使用 ChildProfileSnapshot 中的真实 sensitivity 和 custom_redlines。
     """
     age = child_profile.age
-    if child_profile.gender == "male":
+    if child_profile.gender == Gender.male:
         gender = "男孩"
-    elif child_profile.gender == "female":
+    elif child_profile.gender == Gender.female:
         gender = "女孩"
     else:
         gender = "孩子"
