@@ -212,6 +212,7 @@ async def test_stop_no_ai(
     sid = frames[0]["data"]["session_id"]
 
     # DB: only human row (from decision matrix), no ai row
+    lifecycle_ctx.assert_sess.expire_all()
     msgs = (
         (await lifecycle_ctx.assert_sess.execute(
             select(Message).where(Message.session_id == sid).order_by(Message.created_at),

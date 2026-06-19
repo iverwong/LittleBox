@@ -313,8 +313,8 @@ async def chat_stream(
     """流式接口：决策矩阵 → 提交① → 段一 bg task + 段二 generator。
 
     连接管理：前置 DB 工作收在一个短作用域 `db_session_factory` 块内，
-    块退出即还连接到池，不横跨 StreamingResponse（包括 Row 6 / regenerate
-    无写入路径也 commit 收尾事务，不留 idle in transaction）。
+    块退出即还连接到池，不横跨 StreamingResponse（Row 6 / regenerate
+    无写入路径也走 commit① + 块退出回滚/还池，不留 idle in transaction）。
     DB 块有独立 try/except，流式设置段也有独立 try/except，
     sid 显式初始化为 None，杜绝未绑定风险。
     """

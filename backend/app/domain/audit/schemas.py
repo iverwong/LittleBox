@@ -125,7 +125,7 @@ class AuditOutputSchema(BaseModel):
     guidance_injection: str | None = Field(
         default=None,
         max_length=300,
-        description="仅当需要对AI做轻度引导注入时才填写注入文本；正常无风险轮次必须留空（None）",
+        description="仅当需要对AI做轻度引导注入时才填写注入文本；正常无风险轮次必须留空",
     )
     turn_summary: str = Field(
         max_length=100,

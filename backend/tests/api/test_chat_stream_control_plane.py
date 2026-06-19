@@ -814,11 +814,12 @@ async def test_400_releases_session_lock(
 ):
     """HTTPException 400 before StreamingResponse → session lock explicitly released."""
     headers, child = auth_headers_child
+    child_id = child.id  # 在 __aexit__ rollback 导致过期前提取
     sid = uuid4()
 
     # Pre-seed session
     db_session.add(
-        SessionModel(id=sid, child_user_id=child.id, title="test", status=MessageStatus.active)
+        SessionModel(id=sid, child_user_id=child_id, title="test", status=MessageStatus.active)
     )
     ai_msg = Message(session_id=sid, role=MessageRole.ai, status=MessageStatus.active, content="AI")
     db_session.add(ai_msg)
@@ -833,7 +834,7 @@ async def test_400_releases_session_lock(
     assert resp.status_code == 400
 
     # Simulate throttle TTL expiry by manually deleting the throttle key
-    throttle_key = f"chat:throttle:{child.id}"
+    throttle_key = f"chat:throttle:{child_id}"
     await redis_client.delete(throttle_key)
 
     # Verify lock was released — a new request with same sid should succeed

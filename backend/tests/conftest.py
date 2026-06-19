@@ -339,6 +339,8 @@ class _UncloseableSessionContext:
     savepoint-wrapped session，退出时不 close，生命周期归 fixture 的
     teardown rollback 统一清理。
     __aexit__ 不吞异常：不返回 truthy，异常自然上抛。
+    异常路径回滚 savepoint（exc_type not None 时），防 PendingRollbackError
+    污染同一测试内后续复用。
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -353,7 +355,10 @@ class _UncloseableSessionContext:
         exc_val: BaseException | None,
         exc_tb: object,
     ) -> None:
-        pass  # lifecycle owned by fixture
+        if exc_type is not None:
+            # 异常退出时回滚 savepoint，避免 PendingRollbackError 污染后续复用。
+            # 不 close——session 生命周期仍归 fixture teardown rollback。
+            await self._session.rollback()
 
 
 def _inject_mock_resources_with_session(
