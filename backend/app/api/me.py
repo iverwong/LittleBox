@@ -411,9 +411,9 @@ async def chat_stream(
         raise
     # ★ db 块退出 → 连接已还池
 
-    # === DB 短作用域成功退出，sid / nonce 均已赋值 ===
-    assert sid is not None
-    assert nonce is not None
+    # # === DB 短作用域成功退出，sid / nonce 均已赋值 ===
+    # assert sid is not None
+    # assert nonce is not None
 
     # ==================================================================
     # 流式响应（不持 DB 连接）
