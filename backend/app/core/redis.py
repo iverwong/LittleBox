@@ -7,7 +7,7 @@ D-4 决议:把分散在 auth/redis_client.py + auth/redis_ops.py 的两段职责
   1. 客户端层:Redis 连接工厂 + FastAPI lifespan 钩子 + Depends 注入
      - _build_arq_redis_url(派生 ARQ 专用 db URL,被 core/runtime.py 复用)
      - redis_lifespan(挂到 FastAPI lifespan)
-     - _redis / _audit_redis(模块私有变量,业务走 rr.audit_redis / Depends(get_redis))
+     - _redis(模块私有变量,业务走 Depends(get_redis))
      - get_redis(主业务 Redis db=0)
 
   2. 同步层:DB commit 与 Redis flush 顺序保证
@@ -16,9 +16,8 @@ D-4 决议:把分散在 auth/redis_client.py + auth/redis_ops.py 的两段职责
      - discard_pending_redis_ops(显式丢弃)
      - commit_with_redis(先 DB commit,再 flush Redis ops;DB 失败 ops 丢弃,Redis 失败 log 不抛)
 
-D-4A.1 决议:不创建 get_audit_redis。当前代码无此函数,业务统一走
-rr.audit_redis(RuntimeResources 注入);_audit_redis 是 redis_lifespan
-内部模块私有变量,Phase 6 之前保留(疑似死代码,Phase 6 收口)。
+D-4A.1 决议:不创建 get_audit_redis。业务统一走
+rr.audit_redis(RuntimeResources 注入),走 build_runtime 创建。
 """
 
 from __future__ import annotations
@@ -38,7 +37,6 @@ from app.core.config import settings
 # ---- 客户端层 ----
 
 _redis: Redis | None = None
-_audit_redis: Redis | None = None
 
 
 def _build_arq_redis_url() -> str:
@@ -53,14 +51,9 @@ def _build_arq_redis_url() -> str:
 @asynccontextmanager
 async def redis_lifespan() -> AsyncGenerator[None, None]:
     """挂到 FastAPI lifespan:创建主 Redis + ARQ Redis 连接池。"""
-    global _redis, _audit_redis
+    global _redis
     _redis = Redis.from_url(
         settings.redis_url,
-        encoding="utf-8",
-        decode_responses=True,
-    )
-    _audit_redis = Redis.from_url(
-        _build_arq_redis_url(),
         encoding="utf-8",
         decode_responses=True,
     )
@@ -68,8 +61,7 @@ async def redis_lifespan() -> AsyncGenerator[None, None]:
         yield
     finally:
         await _redis.aclose()
-        await _audit_redis.aclose()
-        _redis = _audit_redis = None
+        _redis = None
 
 
 async def get_redis() -> Redis:
