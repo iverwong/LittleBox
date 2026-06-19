@@ -104,11 +104,7 @@ class TurnSummaryEntry(BaseModel):
 
 
 class AuditOutputSchema(BaseModel):
-    """审查 Agent 一次调用的完整结构化输出。
-
-    8 字段含 7 维度评分、危机/红线信号、家长引导建议、客观摘要。
-    由 `with_structured_output(AuditOutputSchema, include_raw=True)` 消费。
-    """
+    """最终单独调用的完整结构化输出"""
 
     dimension_scores: AuditDimensionScores = Field(
         description="""按以下 6 个维度对本轮对话各打 0–9 风险分\
@@ -136,6 +132,14 @@ class AuditOutputSchema(BaseModel):
         description="本轮对话客观摘要，不带风控视角，中立无判断，≤100 字符",
     )
 
+    @field_validator("crisis_topic", "guidance_injection", mode="before")
+    @classmethod
+    def _normalize_null_string(cls, v: str | None) -> str | None:
+        """归一化 LLM 将 null 序列化为字符串 "null" 的边界情况。"""
+        if v is not None and v.lower() == "null":
+            return None
+        return v
+
     @model_validator(mode="after")
     def _check_crisis_consistency(self) -> Self:
         if self.crisis_detected and self.crisis_topic is None:
@@ -146,36 +150,20 @@ class AuditOutputSchema(BaseModel):
 
 
 class AppendNote(BaseModel):
-    """在 `session_notes` 末尾追加一段文本。
-
-    每次调用返回当前完整 notes 全文。LLM 不自推导 notes 现态。
-
-    批量调用约定：与 `ReplaceInNotes` 同帧调用时，仅"最后一条 note 工具的成功响应"
-    或"任何 note 工具的失败响应"在 ToolMessage payload 中返回 `current_notes`，
-    中间成功的 note 工具响应不返回，便于 LLM 节省注意力在末态上。
-    """
+    """在 `session_notes` 末尾追加一段文本。一般用于备注块的快速补充"""
 
     text: str = Field(
         min_length=1,
         max_length=500,
-        description="追加内容，≤500 字符；LLM 不自推导当前 notes，必须读取返回值",
+        description="追加内容，≤500 字符",
     )
 
 
 class ReplaceInNotes(BaseModel):
-    """替换 `session_notes` 中一段精确匹配的文本。
+    """替换 `session_notes` 中一段精确匹配的文本
+    首轮调用时，请参考系统提示词中<session_notes>块包裹的原文"""
 
-    唯一匹配语义（大小写敏感）：
-    - 0 命中 → 不修改，返 `{"ok": false, "error": "old_str not found"}`
-    - 1 命中 → 替换并返 `{"ok": true, "current_notes": "..."}`
-    - ≥2 命中 → 不修改，返 `{"ok": false, "error": "old_str matches N times"}`
-    LLM 收到 ≥2 命中错误后应扩写 old_str 缩小范围后重试。
-
-    批量调用约定：与 `AppendNote` 同帧调用时，仅"最后一条 note 工具的成功响应"
-    或"任何 note 工具的失败响应"在 ToolMessage payload 中返回 `current_notes`。
-    """
-
-    old_str: str = Field(min_length=1, description="待替换的原文片段，必须精确匹配")
+    old_str: str = Field(min_length=1, description="待替换的原文片段，必须唯一精确匹配")
     new_str: str = Field(min_length=1, description="替换后的新文本")
 
 

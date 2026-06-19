@@ -295,7 +295,10 @@ async def redis_client() -> AsyncGenerator[FakeRedis, None]:
 # ---------- function scope：FastAPI ASGI client ----------
 
 
-def _inject_mock_resources(application: FastAPI, redis_client: FakeRedis) -> None:
+def _inject_mock_resources(
+    application: FastAPI,
+    redis_client: FakeRedis,
+) -> None:
     """为 app 注入 mock RuntimeResources + 禁用 lifespan（避免 Redis 连接 hang）。
 
     M9 Step 10: main_graph 直接用 MagicMock（不走模块级 _main_graph）。
@@ -316,15 +319,60 @@ def _make_mock_resources(redis_client: FakeRedis):
     mock_rr.main_graph.astream = AsyncMock()
     mock_rr.audit_graph = MagicMock()
     mock_rr.settings = MagicMock()
+    mock_rr.settings.chat_queue_maxsize = 128
     mock_rr.settings.deepseek_api_key.get_secret_value.return_value = ""
     mock_rr.db_session_factory = MagicMock()
-    mock_rr.db_session_factory.return_value.__aenter__.return_value = MagicMock(spec=AsyncSession)
     mock_rr.audit_redis = redis_client
     mock_rr.arq_pool = AsyncMock()
     mock_rr.arq_pool.close = AsyncMock()
     mock_rr.db_engine = AsyncMock()
     mock_rr.db_engine.dispose = AsyncMock()
     return mock_rr
+
+
+# ---------- chat_stream 短作用域 DB 块测试辅助 ----------
+
+class _UncloseableSessionContext:
+    """async context manager wrapping a shared AsyncSession without closing it.
+
+    chat_stream 短 DB 块方案B：handler 和 bg task 共享同一份
+    savepoint-wrapped session，退出时不 close，生命周期归 fixture 的
+    teardown rollback 统一清理。
+    __aexit__ 不吞异常：不返回 truthy，异常自然上抛。
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def __aenter__(self) -> AsyncSession:
+        return self._session
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
+        pass  # lifecycle owned by fixture
+
+
+def _inject_mock_resources_with_session(
+    application: FastAPI,
+    redis_client: FakeRedis,
+    db_session: AsyncSession,
+) -> None:
+    """注入 mock RuntimeResources，db_session_factory 返回共享 session（不 close）。
+
+    chat_stream 短 DB 块方案B：handler 短块 / bg task 共用同一份
+    savepoint-wrapped session；db_session_factory 是可多次调用的 callable，
+    不使用 side_effect 交替列表。
+    """
+    from app.core.runtime import RuntimeResources
+
+    mock_rr = _make_mock_resources(redis_client)
+    mock_rr.db_session_factory = lambda: _UncloseableSessionContext(db_session)
+    application.state.resources = mock_rr
+    application.router.lifespan_context = lambda _: contextlib.nullcontext()
 
 
 @pytest_asyncio.fixture
@@ -340,7 +388,7 @@ async def app(db_session: AsyncSession, redis_client: FakeRedis) -> AsyncGenerat
     application.dependency_overrides[get_db] = _get_db
     application.dependency_overrides[get_redis] = _get_redis
 
-    _inject_mock_resources(application, redis_client)
+    _inject_mock_resources_with_session(application, redis_client, db_session)
 
     try:
         yield application

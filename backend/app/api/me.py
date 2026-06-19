@@ -308,106 +308,117 @@ async def chat_stream(
     request: Request,
     req: ChatStreamRequest,
     current: Annotated[CurrentAccount, Depends(require_child)],
-    db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> StreamingResponse:
     """流式接口：决策矩阵 → 提交① → 段一 bg task + 段二 generator。
 
-    M9-patch1 解耦后：
-    - 同步前置（限流 / sesssion 策略 / 决策矩阵 / commit①）保持原位
-    - LLM consumption 迁至独立 run_llm_pipeline（段一），
-      通过 asyncio.Queue 单向中转 SSE 字节帧给段二
-    - StreamingResponse 由 stream_generator（段二）承担，仅做帧转发 +
-      overflow check + 客户端断检测
-
-    Decision matrix O (baseline §5.4, 7 rows) 参见 run_llm_pipeline docstring。
+    连接管理：前置 DB 工作收在一个短作用域 `db_session_factory` 块内，
+    块退出即还连接到池，不横跨 StreamingResponse（包括 Row 6 / regenerate
+    无写入路径也 commit 收尾事务，不留 idle in transaction）。
+    DB 块有独立 try/except，流式设置段也有独立 try/except，
+    sid 显式初始化为 None，杜绝未绑定风险。
     """
+    rr: RuntimeResources = request.app.state.resources
+
     # ---- throttle lock (TTL 自然过期，finally 不主动 DEL) ----
     if not await acquire_throttle_lock(redis, str(current.id)):
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "RequestThrottled")
 
-    # ---- session policy resolution（确定生效 sid） ----
-    now = datetime.now(SHANGHAI)
-    latest = (
-        await db.execute(
-            select(SessionModel)
-            .where(SessionModel.child_user_id == current.id, SessionModel.status == "active")
-            .order_by(SessionModel.last_active_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
+    nonce: str | None = None
+    sid: UUID | None = None
 
-    sid: UUID
-    session: SessionModel
-    is_new_session: bool
-
-    if should_switch_session(latest.last_active_at if latest else None, now):
-        sid = uuid4()
-        session = SessionModel(
-            id=sid,
-            child_user_id=current.id,
-            title=today_session_title(now),
-            status="active",
-            last_active_at=now,
-        )
-        db.add(session)
-        is_new_session = True
-    else:
-        assert latest is not None, "已有 active session"
-        sid = latest.id
-        session = latest
-        is_new_session = False
-
-    # ---- session lock（新建 session 无 race，但为简化统一 lock） ----
-    nonce = await acquire_session_lock(redis, str(sid))
-    if not nonce:
-        raise HTTPException(status.HTTP_409_CONFLICT, "SessionBusy")
-
-    # 确保在 StreamingResponse 之前抛出 HTTPException 时释放锁
+    # ==================================================================
+    # 短作用域 DB 块：前置工作 + 锁获取 + commit①
+    # 块退出即还连接到池，不横跨 StreamingResponse
+    # ==================================================================
     try:
-        # ---- session ownership check（仅复用 session 需验证） ----
-        if not is_new_session and session.child_user_id != current.id:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "SessionForbidden")
+        async with rr.db_session_factory() as db:
+            # ---- session policy resolution（确定生效 sid） ----
+            now = datetime.now(SHANGHAI)
+            latest = (
+                await db.execute(
+                    select(SessionModel)
+                    .where(
+                        SessionModel.child_user_id == current.id,
+                        SessionModel.status == "active",
+                    )
+                    .order_by(SessionModel.last_active_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
 
-        # ---- 准备 child_profile 数据（无 DB 写入依赖） ----
-        # child 与 child_profile 强绑定（M4 创建流程）：profile 缺失是异常状态，
-        # 不应静默兜底用默认人设喂 LLM，直接 404 让外层流程修复。
-        # me.py 是 chat 域唯一边界：此处构造 ChildProfileSnapshot（frozen dataclass），
-        # 消费侧 prompts 三个 builder + audit graph 节点都从 ctx.child_profile 读取。
-        # 按 child_user_id 查（不是 PK id —— ChildProfile.id 是 gen_random_uuid()，
-        # 跟 current.id 不同源；用 db.get 按 PK 查永远 miss，会让所有 child 走兜底
-        # 或 404 路径，见 f12171b 的隐式 bug 暴露）。
-        child_profile = await db.scalar(
-            select(ChildProfile).where(ChildProfile.child_user_id == current.id)
-        )
-        if child_profile is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "ChildProfileNotFound")
+            session: SessionModel
+            is_new_session: bool
 
-        profile_snapshot = ChildProfileSnapshot(
-            child_user_id=child_profile.child_user_id,
-            nickname=child_profile.nickname,
-            gender=child_profile.gender.value,
-            birth_date=child_profile.birth_date,
-            age=age_at(child_profile.birth_date, tz="Asia/Shanghai"),
-            sensitivity=child_profile.sensitivity,
-            custom_redlines=child_profile.custom_redlines,
-        )
+            if should_switch_session(latest.last_active_at if latest else None, now):
+                sid = uuid4()
+                session = SessionModel(
+                    id=sid,
+                    child_user_id=current.id,
+                    title=today_session_title(now),
+                    status="active",
+                    last_active_at=now,
+                )
+                db.add(session)
+                is_new_session = True
+            else:
+                assert latest is not None, "已有 active session"
+                sid = latest.id
+                session = latest
+                is_new_session = False
 
-        # ---- decision matrix O + first-turn / subsequent-turn transaction ----
-        # 决策矩阵 7 row 等价重写(Phase 2.4 抽到 domain/chat/turn_intake.py),
-        # 行为不变,见 tests/api/test_chat_stream_control_plane.py (1419 行回归锚)。
-        result = await intake_human_message(db, sid, session, req)
+            # ---- session lock ----
+            nonce = await acquire_session_lock(redis, str(sid))
+            if not nonce:
+                raise HTTPException(status.HTTP_409_CONFLICT, "SessionBusy")
 
-        # 历史装配由 build_messages_main 节点在图内执行
-        # commit① — user 消息落库(同事务内同步 last_active_at)
-        if result.user_msg is not None:
-            session.last_active_at = result.user_msg.created_at
-        await db.commit()
+            # ---- session ownership check（仅复用 session 需验证） ----
+            if not is_new_session and session.child_user_id != current.id:
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "SessionForbidden")
 
-        # ---- 流式响应（M9-patch1 解耦） ----
-        # 段一：LLM consumption 独立 bg task；段二：StreamingResponse 帧转发
-        rr: RuntimeResources = request.app.state.resources
+            # ---- 准备 child_profile 数据 ----
+            child_profile = await db.scalar(
+                select(ChildProfile).where(ChildProfile.child_user_id == current.id)
+            )
+            if child_profile is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "ChildProfileNotFound")
 
+            profile_snapshot = ChildProfileSnapshot(
+                child_user_id=child_profile.child_user_id,
+                nickname=child_profile.nickname,
+                gender=child_profile.gender.value,
+                birth_date=child_profile.birth_date,
+                age=age_at(child_profile.birth_date, tz="Asia/Shanghai"),
+                sensitivity=child_profile.sensitivity,
+                custom_redlines=child_profile.custom_redlines,
+            )
+
+            # ---- decision matrix O + first-turn / subsequent-turn transaction ----
+            result = await intake_human_message(db, sid, session, req)
+
+            # commit① — user 消息落库(同事务内同步 last_active_at)
+            if result.user_msg is not None:
+                session.last_active_at = result.user_msg.created_at
+            await db.commit()
+    except HTTPException:
+        # nonce 在 sid 之后赋值，非 None 时 sid 必已绑定
+        if nonce is not None:
+            await release_session_lock(redis, str(sid), nonce)
+        raise
+    except Exception:
+        if nonce is not None:
+            await release_session_lock(redis, str(sid), nonce)
+        raise
+    # ★ db 块退出 → 连接已还池
+
+    # === DB 短作用域成功退出，sid / nonce 均已赋值 ===
+    assert sid is not None
+    assert nonce is not None
+
+    # ==================================================================
+    # 流式响应（不持 DB 连接）
+    # ==================================================================
+    try:
         from app.domain.chat.state import MainDialogueState
 
         ctx = ChatContextSchema(
@@ -440,8 +451,6 @@ async def chat_stream(
         running_streams[str(sid)] = stop_event
 
         _maxsize = rr.settings.chat_queue_maxsize
-        if not isinstance(_maxsize, int):
-            _maxsize = 128
         queue: asyncio.Queue = asyncio.Queue(maxsize=_maxsize)
         state = ChatStreamState()
 
@@ -468,13 +477,9 @@ async def chat_stream(
             stream_generator(queue, state, sid),
             media_type="text/event-stream",
         )
-
     except HTTPException:
-        # P0-2 锁释放：限流锁 TTL 自过期，不主动 DEL（关注点 #6）
         await release_session_lock(redis, str(sid), nonce)
         raise
     except Exception:
-        # 非 HTTPException 异常路径（DB / Redis / OOM）同样释放锁，
-        # 封死 commit①~create_task 间非 HTTPException 绕过 release_session_lock 的 lock 残留
         await release_session_lock(redis, str(sid), nonce)
         raise

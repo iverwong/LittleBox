@@ -73,7 +73,7 @@ async def app_with_eval(db_session, redis_client_with_eval):
 
     from app.core.redis import get_redis
     from app.main import create_app
-    from tests.conftest import _inject_mock_resources
+    from tests.conftest import _inject_mock_resources_with_session
 
     application = create_app()
 
@@ -86,7 +86,7 @@ async def app_with_eval(db_session, redis_client_with_eval):
     application.dependency_overrides[get_db] = _get_db
     application.dependency_overrides[get_redis] = _get_redis
 
-    _inject_mock_resources(application, redis_client_with_eval)
+    _inject_mock_resources_with_session(application, redis_client_with_eval, db_session)
     try:
         yield application
     finally:
@@ -838,27 +838,28 @@ async def test_compression_with_reasoning_path(lifecycle_ctx):
 
 @pytest.mark.asyncio
 async def test_compression_failure_path(
-    app_with_eval, api_client_with_eval, auth_headers_child, db_session, compression_session, monkeypatch,
+    lifecycle_ctx,
+    monkeypatch,
 ):
     """Compression LLM raises → compression_start without compression_end + error(CompressionError)."""
     from unittest.mock import AsyncMock
 
-    headers, child = auth_headers_child
-    sid, _, msg1_id, msg2_id = compression_session
+    client, headers, child = await lifecycle_setup(lifecycle_ctx)
+    sid, _, msg1_id, msg2_id = await seed_compression_session(lifecycle_ctx, child)
 
     fake_c_llm = AsyncMock()
     fake_c_llm.ainvoke = AsyncMock(side_effect=RuntimeError("LLM compression failed"))
 
     async def _fake_astream_fail(initial_state, stream_mode="custom", **kwargs):
         yield {"compression_start": True}
-        # 模拟图内压缩失败后 error 帧
-        yield {"finish_reason": "stop"}
+        # 模拟图内压缩 LLM 抛异常时 graph.astream() 也抛出异常
+        raise RuntimeError("graph compression failed")
 
-    app_with_eval.state.resources.main_graph.astream = _fake_astream_fail
+    lifecycle_ctx.rr.main_graph.astream = _fake_astream_fail
 
     with patch("app.core.llm.build_compression_llm", return_value=fake_c_llm):
         body = make_payload(content="继续", session_id=str(sid))
-        resp = await api_client_with_eval.post(
+        resp = await client.post(
             "/api/v1/me/chat/stream", json=body, headers=headers,
         )
     # The error is caught inside generator, so HTTP status is still 200
@@ -876,7 +877,7 @@ async def test_compression_failure_path(
     )
 
     # No NEW AI row created by the generator（压缩失败 → commit② 未执行）
-    _result = await db_session.execute(
+    _result = await lifecycle_ctx.assert_sess.execute(
         select(Message).where(
             Message.session_id == sid,
             Message.role == MessageRole.ai,
@@ -891,7 +892,7 @@ async def test_compression_failure_path(
 
     # session.needs_compression should still be True (compression didn't complete)
     session_row = (
-        await db_session.execute(
+        await lifecycle_ctx.assert_sess.execute(
             select(SessionModel).where(SessionModel.id == sid)
         )
     ).scalar_one()

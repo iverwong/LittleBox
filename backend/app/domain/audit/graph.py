@@ -369,7 +369,7 @@ async def audit_tools(
             # 混调 / 多 OUTPUT 违规：发 error ToolMessage，不解析
             payload = {
                 "error": "请单独调用一次 AuditOutputSchema 给出最终结论，\
-                    不要与笔记工具混调或重复调用"
+不要与笔记工具混调或重复调用"
             }
             tool_messages.append(
                 ToolMessage(content=json.dumps(payload, ensure_ascii=False), tool_call_id=tid),

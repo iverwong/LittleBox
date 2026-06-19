@@ -51,7 +51,6 @@ async def app_with_eval(db_session, redis_client_with_eval):
 
     from app.core.redis import get_redis
     from app.main import create_app
-    from tests.conftest import _inject_mock_resources
 
     application = create_app()
 
@@ -63,6 +62,8 @@ async def app_with_eval(db_session, redis_client_with_eval):
 
     application.dependency_overrides[get_db] = _get_db
     application.dependency_overrides[get_redis] = _get_redis
+
+    from tests.conftest import _inject_mock_resources
 
     _inject_mock_resources(application, redis_client_with_eval)
     try:

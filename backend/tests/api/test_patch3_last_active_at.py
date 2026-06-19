@@ -52,7 +52,7 @@ async def app_with_eval(db_session, redis_client_with_eval):
 
     from app.core.redis import get_redis
     from app.main import create_app
-    from tests.conftest import _inject_mock_resources
+    from tests.conftest import _inject_mock_resources_with_session
 
     application = create_app()
 
@@ -65,7 +65,7 @@ async def app_with_eval(db_session, redis_client_with_eval):
     application.dependency_overrides[get_db] = _get_db
     application.dependency_overrides[get_redis] = _get_redis
 
-    _inject_mock_resources(application, redis_client_with_eval)
+    _inject_mock_resources_with_session(application, redis_client_with_eval, db_session)
     yield application
     application.dependency_overrides.clear()
 

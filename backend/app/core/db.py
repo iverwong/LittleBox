@@ -1,7 +1,7 @@
 """FastAPI async SQLAlchemy session 工厂 + ORM 基础。
 
 业务 handler 走 commit_with_redis,不要在 yield 后显式 commit/close。
-CLI 不复用本模块的 _engine,走 _common.cli_runtime()。
+CLI 走 _common.cli_runtime(),应用层 get_db 使用 RuntimeResources 共享 engine。
 
 D-1 边界:core/db.py 是零业务依赖叶子,不得 import 任何 model;
 模型与 alembic 从 core.db 反向 import Base / BaseMixin。
@@ -13,29 +13,20 @@ import uuid
 from collections.abc import AsyncGenerator
 from datetime import datetime
 
+from fastapi import Request
 from sqlalchemy import func, text
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from app.core.config import settings
-
-# ---------------------------------------------------------------------------
-# Engine + sessionmaker(基础设施层,app.runtime 共享同一份构建路径)
-# ---------------------------------------------------------------------------
-
-_engine = create_async_engine(settings.database_url, pool_pre_ping=True)
-_session_maker = async_sessionmaker(_engine, expire_on_commit=False)
+from app.core.runtime import RuntimeResources
 
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    async with _session_maker() as session:
+async def get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
+    """从进程级 RuntimeResources 获取会话,HTTP handler 与后台共用同一 engine。"""
+    rr: RuntimeResources = request.app.state.resources
+    async with rr.db_session_factory() as session:
         yield session
-
-
-async def dispose_engine() -> None:
-    """挂到 main.py lifespan shutdown;Step 5 Redis lifespan 落地时一并挂。"""
-    await _engine.dispose()
 
 
 # ---------------------------------------------------------------------------
