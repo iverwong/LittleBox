@@ -36,7 +36,6 @@ from app.core.history_xml import serialize_history_to_xml
 from app.domain.audit.llm import build_audit_llm
 from app.domain.audit.prompts import build_audit_system_prompt
 from app.domain.audit.schemas import (
-    AppendNote,
     AuditDimensionScores,
     AuditOutputSchema,
     ReplaceInNotes,
@@ -52,7 +51,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("audit.graph")
 
-TOOL_NAME_APPEND = "AppendNote"
 TOOL_NAME_REPLACE = "ReplaceInNotes"
 TOOL_NAME_OUTPUT = "AuditOutputSchema"
 
@@ -254,8 +252,8 @@ async def audit_llm_call(
                 content="请调用 AuditOutputSchema 工具给出最终结论"
                 "（verdict 为 pass / warn / fail），"
                 "不要直接回复文本。你仍然可以在调用 AuditOutputSchema"
-                " 之前先调用 AppendNote 或 ReplaceInNotes"
-                " 记录笔记。",
+                " 之前先调用 ReplaceInNotes"
+                " 更新记录笔记。",
             ),
         )
         response = await llm.ainvoke(messages)
@@ -355,9 +353,7 @@ async def audit_tools(
     # ---- 多 tool_call 路径：混调 / 多 OUTPUT / 纯 note ----
     tool_messages: list[ToolMessage] = []
 
-    note_tcs = [
-        tc for tc in last_ai.tool_calls if tc["name"] in (TOOL_NAME_APPEND, TOOL_NAME_REPLACE)
-    ]
+    note_tcs = [tc for tc in last_ai.tool_calls if tc["name"] == TOOL_NAME_REPLACE]
 
     output_tcs = [tc for tc in last_ai.tool_calls if tc["name"] == TOOL_NAME_OUTPUT]
 
@@ -378,33 +374,7 @@ async def audit_tools(
     for tc in note_tcs:
         name, args, tid = tc["name"], tc["args"], tc["id"]
         is_last_note = tc is last_note_tc
-        if name == TOOL_NAME_APPEND:
-            try:
-                structured = AppendNote.model_validate(args)
-            except ValidationError as exc:
-                payload = {
-                    "error": "AppendNote args 校验失败，请按 schema 重发",
-                    "validation_errors": [
-                        {
-                            "loc": list(err["loc"]),
-                            "msg": err["msg"],
-                            "type": err["type"],
-                        }
-                        for err in exc.errors()
-                    ],
-                }
-                tool_messages.append(
-                    ToolMessage(content=json.dumps(payload, ensure_ascii=False), tool_call_id=tid),
-                )
-            else:
-                new_notes = new_notes + ("\n" if new_notes else "") + args["text"]
-                payload = {"ok": True}
-                if is_last_note:
-                    payload["current_notes"] = new_notes
-                tool_messages.append(
-                    ToolMessage(content=json.dumps(payload, ensure_ascii=False), tool_call_id=tid),
-                )
-        elif name == TOOL_NAME_REPLACE:
+        if name == TOOL_NAME_REPLACE:
             try:
                 structured = ReplaceInNotes.model_validate(args)
             except ValidationError as exc:

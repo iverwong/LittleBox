@@ -6,7 +6,7 @@
   reasoning_effort=MAX（裸 `BaseChatModel`）
 - 备端：`build_role_fallback(Role.AUDIT, settings)` → bailian + thinking +
   reasoning_effort=MAX（裸 `BaseChatModel`）
-- 主备各 `bind_tools([AppendNote, ReplaceInNotes, AuditOutputSchema])`，
+- 主备各 `bind_tools([ReplaceInNotes, AuditOutputSchema])`，
   再 `wrap_resilience(..., retry_attempts=ROLES[Role.AUDIT].retry_attempts)`
   主端重试 + 备端兜底一气呵成
 - 不传 `tool_choice`（D11 v3 实证：DS/BL 两端思考模式均不支持
@@ -31,7 +31,7 @@ from langchain_core.runnables import Runnable
 
 from app.core.llm import build_role_fallback, build_role_primary, wrap_resilience
 from app.core.llm_topology import ROLES, Role
-from app.domain.audit.schemas import AppendNote, AuditOutputSchema, ReplaceInNotes
+from app.domain.audit.schemas import AuditOutputSchema, ReplaceInNotes
 
 if TYPE_CHECKING:
     from app.core.config import Settings
@@ -44,7 +44,7 @@ def build_audit_llm(settings: Settings) -> Runnable:
 
         1. `build_role_primary(Role.AUDIT, settings)` → 主端裸 ChatDeepSeek（deepseek-v4）
         2. `build_role_fallback(Role.AUDIT, settings)` → 备端裸 ChatDeepSeek（bailian）
-        3. 主备各 `bind_tools([AppendNote, ReplaceInNotes, AuditOutputSchema])`
+        3. 主备各 `bind_tools([ReplaceInNotes, AuditOutputSchema])`
         4. `wrap_resilience(primary_bound, fallback_bound, retry_attempts=
            ROLES[Role.AUDIT].retry_attempts)` → `with_retry(stop=3) + with_fallbacks`
 
@@ -66,7 +66,7 @@ def build_audit_llm(settings: Settings) -> Runnable:
             "audit role 必须有 fallback 配置(百炼兜底);"
             "若有意移除请同步改 app/domain/audit/llm.py::build_audit_llm"
         )
-    tools = [AppendNote, ReplaceInNotes, AuditOutputSchema]
+    tools = [ReplaceInNotes, AuditOutputSchema]
     primary_bound = primary.bind_tools(  # type: ignore[attr-defined]
         tools,
     )

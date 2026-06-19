@@ -3,7 +3,7 @@
 本模块设计为 Pydantic v2 BaseModel 纯数据类，不引入 ORM / LangChain 依赖。
 与 `app.models.audit` 的 ORM 模型共享字段名但独立命名空间。
 
-LLM tool 用 `AppendNote` / `ReplaceInNotes` 由 LangChain `bind_tools()` 消费，
+LLM tool 用 `ReplaceInNotes` 由 LangChain `bind_tools()` 消费，
 `AuditOutputSchema` 由 `with_structured_output(include_raw=True)` 消费。
 详见 D11 决议：with_structured_output + bind_tools 同帧调用兼容性由 Step 4 live spike 验证。
 
@@ -149,22 +149,12 @@ class AuditOutputSchema(BaseModel):
         return self
 
 
-class AppendNote(BaseModel):
-    """在 `session_notes` 末尾追加一段文本。一般用于备注块的快速补充"""
-
-    text: str = Field(
-        min_length=1,
-        max_length=500,
-        description="追加内容，≤500 字符",
-    )
-
-
 class ReplaceInNotes(BaseModel):
     """替换 `session_notes` 中一段精确匹配的文本
     首轮调用时，请参考系统提示词中<session_notes>块包裹的原文"""
 
     old_str: str = Field(min_length=1, description="待替换的原文片段，必须唯一精确匹配")
-    new_str: str = Field(min_length=1, description="替换后的新文本")
+    new_str: str = Field(min_length=0, description="替换后的新文本")
 
 
 class AuditSignalsPayload(BaseModel):

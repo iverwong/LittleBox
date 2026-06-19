@@ -1,7 +1,7 @@
 """审查 LLM 装配测试（Step 6 新增）。
 
 落点:验证 `app/domain/audit/llm.py::build_audit_llm` 重写后,主备两端都
-正确绑了 3 个工具([AppendNote, ReplaceInNotes, AuditOutputSchema])。
+正确绑了 2 个工具([ReplaceInNotes, AuditOutputSchema])。
 
 设计:
 - 用 respx 在 HTTP 层 mock,捕获两 URL 的 request body
@@ -31,7 +31,7 @@ from app.core.llm_topology import ENDPOINTS, EndpointName
 from app.domain.audit.llm import build_audit_llm
 from langchain_core.messages import HumanMessage
 
-_EXPECTED_TOOL_NAMES = frozenset({"AppendNote", "ReplaceInNotes", "AuditOutputSchema"})
+_EXPECTED_TOOL_NAMES = frozenset({"ReplaceInNotes", "AuditOutputSchema"})
 
 
 def _success_response() -> dict[str, Any]:
@@ -54,7 +54,7 @@ def _tool_names_from_request_body(body: bytes) -> frozenset[str]:
 
 
 class TestAuditLlmToolBinding:
-    """build_audit_llm 装配链:主备两端各 bind 3 工具,双 URL 均被请求。"""
+    """build_audit_llm 装配链:主备两端各 bind 2 工具,双 URL 均被请求。"""
 
     @pytest.fixture
     def _no_retry_backoff(self, monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
@@ -70,7 +70,7 @@ class TestAuditLlmToolBinding:
     async def test_both_urls_receive_three_tool_schemas(
         self, _no_retry_backoff: AsyncMock
     ) -> None:
-        """主端持续失败 → retry×3 → fallback 兜底:两 URL 各收到带 3 工具的请求。"""
+        """主端持续失败 → retry×3 → fallback 兜底:两 URL 各收到带 2 工具的请求。"""
         primary_url = f"{ENDPOINTS[EndpointName.DEEPSEEK].base_url}/chat/completions"
         fallback_url = f"{ENDPOINTS[EndpointName.BAILIAN].base_url}/chat/completions"
 
@@ -98,7 +98,7 @@ class TestAuditLlmToolBinding:
         # 备端被调 1 次(fallback 一次性成功)
         assert len(fallback_bodies) == 1
 
-        # 主备 4 条请求 body 全部含 3 工具 schema,名称集合一致
+        # 主备 4 条请求 body 全部含 2 工具 schema,名称集合一致
         for body in primary_bodies + fallback_bodies:
             names = _tool_names_from_request_body(body)
             assert names == _EXPECTED_TOOL_NAMES, (

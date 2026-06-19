@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import pytest
 from app.domain.audit.schemas import (
-    AppendNote,
     AuditDimensionScores,
     AuditOutputSchema,
     AuditSignalsPayload,
@@ -165,36 +164,17 @@ class TestAuditOutputSchema:
         assert s.crisis_topic == "提到自残倾向"
 
 
-class TestAppendNote:
-    """text 非空 + max_length=500。"""
-
-    def test_text_empty_raises(self):
-        with pytest.raises(ValidationError):
-            AppendNote(text="")
-
-    def test_text_max_length_ok(self):
-        s = AppendNote(text="a" * 500)
-        assert len(s.text) == 500
-
-    def test_text_too_long(self):
-        with pytest.raises(ValidationError):
-            AppendNote(text="a" * 501)
-
-    def test_text_normal(self):
-        s = AppendNote(text="用户今天情绪不稳定")
-        assert s.text == "用户今天情绪不稳定"
-
-
 class TestReplaceInNotes:
-    """old_str / new_str 非空约束。"""
+    """old_str 非空约束 + new_str 可空(min_length=0)。"""
 
     def test_old_str_empty_raises(self):
         with pytest.raises(ValidationError):
             ReplaceInNotes(old_str="", new_str="replacement")
 
-    def test_new_str_empty_raises(self):
-        with pytest.raises(ValidationError):
-            ReplaceInNotes(old_str="original", new_str="")
+    def test_new_str_empty_ok(self):
+        s = ReplaceInNotes(old_str="original", new_str="")
+        assert s.old_str == "original"
+        assert s.new_str == ""
 
     def test_both_valid(self):
         s = ReplaceInNotes(old_str="旧文本", new_str="新文本")

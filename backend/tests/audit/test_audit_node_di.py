@@ -91,7 +91,6 @@ _AUDIT_OUTPUT_ARGS = {
     "turn_summary": "情绪稳定",
 }
 
-TOOL_NAME_APPEND = "AppendNote"
 TOOL_NAME_REPLACE = "ReplaceInNotes"
 TOOL_NAME_OUTPUT = "AuditOutputSchema"
 
@@ -484,12 +483,12 @@ class TestAuditToolsOutputViolation:
         from langchain_core.messages import ToolMessage
 
         state = _make_state(
-            session_notes_working="",
+            session_notes_working="abc",
             messages=[
                 AIMessage(
                     content="",
                     tool_calls=[
-                        _tc(TOOL_NAME_APPEND, {"text": "append 内容"}),
+                        _tc(TOOL_NAME_REPLACE, {"old_str": "a", "new_str": "x"}, call_id="call-R1"),
                         _tc(TOOL_NAME_OUTPUT, _AUDIT_OUTPUT_ARGS, call_id="call-OUT"),
                     ],
                 ),
@@ -500,13 +499,13 @@ class TestAuditToolsOutputViolation:
 
         tool_messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
         assert len(tool_messages) == 2
-        # APPEND 是最后 note → 含 current_notes
-        append_msg = next(m for m in tool_messages if m.tool_call_id == "call-AppendNote")
+        # REPLACE 是最后 note → 含 current_notes
+        note_msg = next(m for m in tool_messages if m.tool_call_id == "call-R1")
         import json as _json
 
-        append_payload = _json.loads(append_msg.content)
-        assert append_payload["ok"] is True
-        assert "current_notes" in append_payload
+        note_payload = _json.loads(note_msg.content)
+        assert note_payload["ok"] is True
+        assert "current_notes" in note_payload
         # OUTPUT 违规 → error
         output_msg = next(m for m in tool_messages if m.tool_call_id == "call-OUT")
         output_payload = _json.loads(output_msg.content)
@@ -545,18 +544,18 @@ class TestAuditToolsOutputViolation:
 class TestAuditToolsLastNotePayload:
     """C3 段:current_notes 统一在循环底部赋值(失败 OR 末 note)。"""
 
-    async def test_middle_append_no_current_notes(self):
+    async def test_middle_replace_no_current_notes(self):
         from app.domain.audit.graph import audit_tools
         from langchain_core.messages import ToolMessage
 
         state = _make_state(
-            session_notes_working="",
+            session_notes_working="abc",
             messages=[
                 AIMessage(
                     content="",
                     tool_calls=[
-                        _tc(TOOL_NAME_APPEND, {"text": "first"}, call_id="call-A1"),
-                        _tc(TOOL_NAME_APPEND, {"text": "second"}, call_id="call-A2"),
+                        _tc(TOOL_NAME_REPLACE, {"old_str": "a", "new_str": "x"}, call_id="call-R1"),
+                        _tc(TOOL_NAME_REPLACE, {"old_str": "b", "new_str": "y"}, call_id="call-R2"),
                     ],
                 ),
             ],
@@ -647,7 +646,7 @@ class TestAuditLlmCallTransparent:
         assert last_msg.tool_calls[0]["name"] == "AuditOutputSchema"
 
     async def test_note_only_no_structured_output(self):
-        state = _make_state()
+        state = _make_state(session_notes_working="abc")
         runtime = _make_fake_runtime()
         from langchain_core.messages import AIMessage
 
@@ -656,7 +655,7 @@ class TestAuditLlmCallTransparent:
             mock_llm.ainvoke = AsyncMock(
                 return_value=AIMessage(
                     content="",
-                    tool_calls=[_tc(TOOL_NAME_APPEND, {"text": "x"}, call_id="call-1")],
+                    tool_calls=[_tc(TOOL_NAME_REPLACE, {"old_str": "a", "new_str": "x"}, call_id="call-1")],
                 )
             )
             mock_build.return_value = mock_llm
@@ -688,7 +687,7 @@ class TestAuditLlmCallTransparent:
 
     async def test_mixed_output_no_parse(self):
         """混调 [NOTE, OUTPUT] 在 audit_llm_call 透传。"""
-        state = _make_state()
+        state = _make_state(session_notes_working="abc")
         runtime = _make_fake_runtime()
         from langchain_core.messages import AIMessage
 
@@ -698,7 +697,7 @@ class TestAuditLlmCallTransparent:
                 return_value=AIMessage(
                     content="",
                     tool_calls=[
-                        _tc(TOOL_NAME_APPEND, {"text": "x"}, call_id="call-1"),
+                        _tc(TOOL_NAME_REPLACE, {"old_str": "a", "new_str": "x"}, call_id="call-1"),
                         _tc(TOOL_NAME_OUTPUT, _AUDIT_OUTPUT_ARGS, call_id="call-2"),
                     ],
                 )

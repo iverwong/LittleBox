@@ -1,4 +1,4 @@
-"""审查 LLM live spike：验证 ChatDeepSeek + bind_tools 三 tool 共存兼容性。
+"""审查 LLM live spike：验证 ChatDeepSeek + bind_tools 两 tool 共存兼容性。
 
 **不进 CI**。手动触发方式：
     docker compose exec api python -m pytest tests/audit/test_llm_live.py -v --run-live
@@ -6,7 +6,7 @@
 需 Iver 批准后执行。参见 M8 §五 Step 4 验证矩阵。
 
 通过条件（D11/D8 验证）：
-1. 三 tool 共存（AppendNote, ReplaceInNotes, AuditOutputSchema）
+1. 两 tool 共存（ReplaceInNotes, AuditOutputSchema）
 2. 模型每帧选一个调用，tool_call.args 可被对应 schema 反序列化
 3. thinking 模式生效（response 含 reasoning_content）
 """
@@ -18,7 +18,7 @@ import pytest
 from app.domain.audit.llm import build_audit_llm
 from app.domain.audit.prompts import build_audit_system_prompt
 from app.core.config import Settings
-from app.domain.audit.schemas import AppendNote, AuditOutputSchema, ReplaceInNotes
+from app.domain.audit.schemas import AuditOutputSchema, ReplaceInNotes
 from langchain_core.messages import HumanMessage, SystemMessage
 
 pytestmark = [
@@ -35,7 +35,7 @@ def audit_llm():
 
 
 class TestAuditLLMLive:
-    """Live spike：验证 ChatDeepSeek 三 tool 共存 + thinking 激活。"""
+    """Live spike：验证 ChatDeepSeek 两 tool 共存 + thinking 激活。"""
 
     async def test_thinking_is_enabled(self, audit_llm):
         """验证 thinking 被启用（响应中含 reasoning_content 标记）。"""
@@ -58,12 +58,10 @@ class TestAuditLLMLive:
         tc = response.tool_calls[0]
         if tc["name"].endswith("AuditOutputSchema"):
             AuditOutputSchema.model_validate_json(json.dumps(tc["args"]))
-        elif tc["name"].endswith("AppendNote"):
-            AppendNote.model_validate_json(json.dumps(tc["args"]))
         elif tc["name"].endswith("ReplaceInNotes"):
             ReplaceInNotes.model_validate_json(json.dumps(tc["args"]))
 
-    async def test_all_three_tools_available(self, audit_llm):
+    async def test_all_tools_available(self, audit_llm):
         """验证模型可选任意 tool，且 tool_choice 约束有效。"""
         prompt = [
             SystemMessage(content=build_audit_system_prompt()),
@@ -74,9 +72,6 @@ class TestAuditLLMLive:
         assert response.tool_calls, "model 应至少返回一个 tool_call"
 
         tool_names = {tc["name"] for tc in response.tool_calls}
-        # 三个 tool 都应出现在可能的范围内
-        audit_name = "AuditOutputSchema"
-        append_name = "AppendNote"
-        replace_name = "ReplaceInNotes"
-        any_tool = audit_name in tool_names or append_name in tool_names or replace_name in tool_names
+        # 两个 tool 都应出现在可能的范围内
+        any_tool = "AuditOutputSchema" in tool_names or "ReplaceInNotes" in tool_names
         assert any_tool, f"未知 tool name: {tool_names}"

@@ -78,7 +78,7 @@ def build_audit_system_prompt(child_profile: ChildProfileSnapshot, max_iter: int
 
 # 审查笔记(session_notes)
 每位用户每天共享一个会话，你完整参与当前会话的所有轮次。
-因此，你将在使用 AppendNote 和 ReplaceInNotes 工具在会话期间维护一份审查笔记。
+因此，你将在使用 ReplaceInNotes 工具在会话期间维护一份审查笔记。
 增量记录会话的情绪、话题趋势、反复出现的风险苗头、需持续关注的信息。
 这是你自己的工作记录，只服务于审查，不会进入主对话的上下文。
 
@@ -116,8 +116,8 @@ def build_audit_system_prompt(child_profile: ChildProfileSnapshot, max_iter: int
 
 # 工作流程
 1. 审阅历史及当前会话，参考前期审查笔记，进行风险判断
-2. 根据需要调用多次 AppendNote 或 ReplaceInNotes 工具更新笔记内容，保持笔记精简，重点明确
-3. 单独调用 AuditOutputSchema 工具给出该轮结论
+2. 根据需要你可以每轮调用多次 ReplaceInNotes 工具更新笔记内容，保持笔记精简，重点明确
+3. 独立调用 AuditOutputSchema 工具给出该轮结论，混用笔记工具将无法给出审查结论
 4. 你最多拥有 {max_iter} 次迭代次数来完善笔记和给出结论。超过该次数本轮将无审查结论
 
 # 纪律与提示

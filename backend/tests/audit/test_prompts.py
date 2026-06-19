@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 from app.domain.audit.prompts import build_audit_system_prompt
-from app.domain.audit.schemas import AppendNote, AuditOutputSchema, ReplaceInNotes
+from app.domain.audit.schemas import AuditOutputSchema, ReplaceInNotes
 from langchain_core.utils.function_calling import convert_to_openai_function
 
 pytestmark = pytest.mark.audit
@@ -36,10 +36,10 @@ class TestAuditSystemPrompt:
 
     def test_contains_tool_usage_protocol(self):
         prompt = self._prompt()
-        assert "AppendNote" in prompt
+        assert "AppendNote" not in prompt
         assert "ReplaceInNotes" in prompt
         assert "AuditOutputSchema" in prompt
-        assert "单独调用 AuditOutputSchema" in prompt
+        assert "独立调用 AuditOutputSchema" in prompt
         # max_iter 注入工作流程段
         assert "你最多拥有 5 次迭代次数" in prompt
 
@@ -48,7 +48,7 @@ class TestAuditSystemPrompt:
         # 当前实现:Tool 返回协议是隐式 contract(通过 current_notes 字段返回),
         # 关键词断言转向"# 审查笔记(session_notes)"与"# 引导注入(guidance_injection)"段
         assert "# 审查笔记(session_notes)" in prompt
-        assert "AppendNote 和 ReplaceInNotes" in prompt
+        assert "ReplaceInNotes 工具" in prompt
 
     def test_contains_signal_guidelines(self):
         prompt = self._prompt()
@@ -59,13 +59,6 @@ class TestAuditSystemPrompt:
 
 class TestToolSchemas:
     """bind_tools 前后 JSON schema 结构正确。"""
-
-    def test_append_note_json_schema(self):
-        schema = convert_to_openai_function(AppendNote)
-        props = schema["parameters"]["properties"]
-        assert "text" in props
-        assert schema["parameters"]["required"] == ["text"]
-        assert props["text"]["maxLength"] == 500
 
     def test_replace_in_notes_json_schema(self):
         schema = convert_to_openai_function(ReplaceInNotes)

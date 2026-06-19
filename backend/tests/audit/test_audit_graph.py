@@ -10,7 +10,6 @@ from typing import Any
 
 import pytest
 from app.domain.audit.graph import (
-    TOOL_NAME_APPEND,
     TOOL_NAME_OUTPUT,
     TOOL_NAME_REPLACE,
     AuditGraphState,
@@ -88,7 +87,6 @@ _AUDIT_OUTPUT_ARGS = {
 }
 
 _TC_OUTPUT = _tc(TOOL_NAME_OUTPUT, _AUDIT_OUTPUT_ARGS)
-_TC_APPEND = _tc(TOOL_NAME_APPEND, {"text": "追加的笔记。"})
 _TC_REPLACE = _tc(TOOL_NAME_REPLACE, {"old_str": "情绪稳定", "new_str": "情绪有些波动"})
 _TC_REPLACE_MISS = _tc(TOOL_NAME_REPLACE, {"old_str": "不存在的文本", "new_str": "替换"})
 _TC_REPLACE_MULTI = _tc(TOOL_NAME_REPLACE, {"old_str": "a", "new_str": "b"})
@@ -204,20 +202,8 @@ class TestAuditGraph:
         assert result["structured_output"] is not None
         assert result["tool_iter_count"] == 0
 
-    async def test_one_append(self, monkeypatch):
-        """路径 ②：1 append → 正确追加到 session_notes → AuditOutputSchema 终止。"""
-        result = await _run(
-            [
-                _aim(tool_calls=[_TC_APPEND]),
-                _aim(tool_calls=[_TC_OUTPUT]),
-            ],
-            monkeypatch,
-        )
-        assert "追加的笔记。" in result["session_notes_working"]
-        assert result["structured_output"] is not None
-
     async def test_one_replace_hit(self, monkeypatch):
-        """路径 ③：1 replace 唯一命中 → 替换成功 → 终止。"""
+        """路径 ②：1 replace 唯一命中 → 替换成功 → 终止。"""
         result = await _run(
             [
                 _aim(tool_calls=[_TC_REPLACE]),
@@ -230,12 +216,12 @@ class TestAuditGraph:
         assert "情绪稳定" not in result["session_notes_working"]
         assert result["structured_output"] is not None
 
-    async def test_replace_miss_then_append(self, monkeypatch):
-        """路径 ④：replace 0 命中 → LLM 改调 append → 通过。"""
+    async def test_replace_miss_then_hit(self, monkeypatch):
+        """路径 ③：replace 0 命中 → LLM 改换 old_str 重试 → 1 命中 → 终止。"""
         result = await _run(
             [
                 _aim(tool_calls=[_TC_REPLACE_MISS]),
-                _aim(tool_calls=[_TC_APPEND]),
+                _aim(tool_calls=[_tc(TOOL_NAME_REPLACE, {"old_str": "用户今天情绪稳定。", "new_str": "追加内容。用户今天情绪稳定。"})]),
                 _aim(tool_calls=[_TC_OUTPUT]),
             ],
             monkeypatch,
@@ -243,13 +229,13 @@ class TestAuditGraph:
         )
         # 第一轮 replace 不命中 → session_notes 不变
         assert "用户今天情绪稳定。" in result["session_notes_working"]
-        # 第二轮 append 追加
-        assert "追加的笔记。" in result["session_notes_working"]
+        # 第二轮 replace 命中
+        assert "追加内容。" in result["session_notes_working"]
         assert result["structured_output"] is not None
         assert result["tool_iter_count"] == 2
 
     async def test_replace_multi_then_precise(self, monkeypatch):
-        """路径 ⑤：replace ≥2 命中 → LLM 用更精确 old_str 重试 → 1 命中。"""
+        """路径 ④：replace ≥2 命中 → LLM 用更精确 old_str 重试 → 1 命中。"""
         state: AuditGraphState = {
             "sid": SID,
             "turn_number": 1,
@@ -295,7 +281,7 @@ class TestAuditGraph:
         assert result["structured_output"] is not None
 
     async def test_loop_exceeded_degradation(self, monkeypatch):
-        """路径 ⑥：连续 replace 失败 → 循环超限 → 降级 append + 降级标记。"""
+        """路径 ⑤：连续 replace 失败 → 循环超限 → 降级标记。"""
         result = await _run(
             [_aim(tool_calls=[_TC_REPLACE_MISS]) for _ in range(6)],
             monkeypatch,
@@ -313,23 +299,22 @@ class TestAuditGraph:
         # (若有 replace miss,notes 保持上一轮成功后的状态;无成功则为空)
         session_notes = result["session_notes_working"]
 
-    async def test_mixed_append_replace(self, monkeypatch):
-        """路径 ⑦：多轮交替 append + replace → session_notes_working 状态正确累积。"""
+    async def test_multi_replace_accumulation(self, monkeypatch):
+        """路径 ⑥：多轮 replace → session_notes_working 状态正确累积。"""
         result = await _run(
             [
-                _aim(tool_calls=[_TC_APPEND]),
-                _aim(tool_calls=[_TC_REPLACE]),
-                _aim(tool_calls=[_tc(TOOL_NAME_APPEND, {"text": "最终观察。"})]),
+                _aim(tool_calls=[_tc(TOOL_NAME_REPLACE, {"old_str": "情绪稳定。", "new_str": "追加内容。情绪有些波动。"})]),
+                _aim(tool_calls=[_tc(TOOL_NAME_REPLACE, {"old_str": "追加内容。", "new_str": "最终观察。追加内容。"})]),
                 _aim(tool_calls=[_TC_OUTPUT]),
             ],
             monkeypatch,
             initial_notes="用户今天情绪稳定。",
         )
         notes = result["session_notes_working"]
-        assert "追加的笔记。" in notes
-        assert "情绪有些波动" in notes  # replace 替换了"情绪稳定"→"情绪有些波动"
+        assert "追加内容。" in notes
+        assert "情绪有些波动" in notes
         assert "最终观察。" in notes
-        assert result["tool_iter_count"] == 3
+        assert result["tool_iter_count"] == 2
         assert result["structured_output"] is not None
 
 
@@ -340,10 +325,11 @@ class TestPostProcessing:
         """模型首轮未调 audit_output → post-processing 触发追问 → 第二轮调了 → verdict 正确解析。"""
         result = await _run(
             [
-                _aim(tool_calls=[_TC_APPEND]),  # 首轮只调了 append，没收尾
+                _aim(tool_calls=[_TC_REPLACE_MISS]),  # 首轮只调了 replace miss，没收尾
                 # 追问后自动获得默认 audit_output 响应
             ],
             monkeypatch,
+            initial_notes="用户今天情绪稳定。",
         )
         # post-processing 追问后调了 audit_output
         assert result["structured_output"] is not None
@@ -398,13 +384,13 @@ class TestOutputViolationE2E:
     """C3 + C5 协同:OUTPUT 违规 (混调/多 OUTPUT) → audit_tools error → 修正为单 OUTPUT。"""
 
     async def test_mixed_output_loops_to_single_output(self, monkeypatch):
-        """LLM 返 [APPEND, OUTPUT] → audit_tools 发 error 给 OUTPUT → 下轮返 [OUTPUT] 解析。"""
+        """LLM 返 [REPLACE, OUTPUT] → audit_tools 发 error 给 OUTPUT → 下轮返 [OUTPUT] 解析。"""
         result = await _run(
             [
-                _aim(tool_calls=[_TC_APPEND]),  # 首轮只 append(无 OUTPUT),进 tool loop
+                _aim(tool_calls=[_tc(TOOL_NAME_REPLACE, {"old_str": "起始笔记。", "new_str": "起始笔记。追加内容。"})]),  # 首轮只 replace,无 OUTPUT,进 tool loop
                 _aim(
                     tool_calls=[  # 第二轮 LLM 混调 (违规)
-                        _tc(TOOL_NAME_APPEND, {"text": "再来一条"}),
+                        _tc(TOOL_NAME_REPLACE, {"old_str": "起始笔记。", "new_str": "起始笔记。再来一条。"}),
                         _TC_OUTPUT,
                     ]
                 ),
@@ -415,8 +401,8 @@ class TestOutputViolationE2E:
         )
         # 单 OUTPUT 解析 → structured_output 不为 None
         assert result["structured_output"] is not None
-        # session_notes_working 含第一轮的 append 内容
-        assert "追加的笔记。" in result["session_notes_working"]
+        # session_notes_working 含第一轮的 replace 内容
+        assert "追加内容。" in result["session_notes_working"]
         # tool_iter_count 应累到 2 (前两轮 audit_tools 各累 1)
         assert result["tool_iter_count"] == 2
 
@@ -425,8 +411,8 @@ class TestOutputViolationE2E:
         result = await _run(
             [
                 _aim(
-                    tool_calls=[  # 首轮 [APPEND, OUTPUT] 混调
-                        _TC_APPEND,
+                    tool_calls=[  # 首轮 [REPLACE, OUTPUT] 混调
+                        _tc(TOOL_NAME_REPLACE, {"old_str": "起始笔记。", "new_str": "起始笔记。追加内容。"}),
                         _TC_OUTPUT,
                     ]
                 ),
@@ -436,7 +422,7 @@ class TestOutputViolationE2E:
             initial_notes="起始笔记。",
         )
         assert result["structured_output"] is not None
-        assert "追加的笔记。" in result["session_notes_working"]
+        assert "追加内容。" in result["session_notes_working"]
 
 
 class TestRouteAfterToolsStructuredOutputShortCircuit:
