@@ -32,6 +32,7 @@ from app.core.llm import (
 )
 from app.core.llm_topology import (
     ENDPOINTS,
+    LLM_HTTPX_TIMEOUT,
     LLM_REQUEST_TIMEOUT_SECONDS,
     MODEL_PROFILES,
     ROLES,
@@ -475,7 +476,10 @@ class TestAdapterChatDeepseekKwargs:
         assert captured["api_key"] == "sk-ds-test"
         assert captured["api_base"] == "https://api.deepseek.com"
         assert captured["model"] == "deepseek-v4-flash"
-        assert captured["timeout"] == LLM_REQUEST_TIMEOUT_SECONDS
+        # 关注点 6:timeout 共享 LLM_HTTPX_TIMEOUT(与 shared_http_client
+        # 单一真相源,避免两边 httpx.Timeout 字面量漂移)
+        assert captured["timeout"] is LLM_HTTPX_TIMEOUT
+        assert captured["timeout"].read == LLM_REQUEST_TIMEOUT_SECONDS
         assert captured["max_retries"] == 0
         assert captured["extra_body"] == {
             "thinking": {"type": "enabled"},

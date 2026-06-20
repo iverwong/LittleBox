@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from app.core.llm_topology import LLM_REQUEST_TIMEOUT_SECONDS
+from app.core.llm_topology import LLM_HTTPX_TIMEOUT
 from app.core.redis import _build_arq_redis_url
 
 logger = logging.getLogger(__name__)
@@ -150,12 +150,7 @@ async def build_runtime(settings: Settings) -> RuntimeResources:
             max_connections=100,
             keepalive_expiry=30.0,
         ),
-        timeout=httpx.Timeout(
-            connect=10.0,
-            read=LLM_REQUEST_TIMEOUT_SECONDS,
-            write=10.0,
-            pool=10.0,
-        ),
+        timeout=LLM_HTTPX_TIMEOUT,
     )
 
     # 6. main_graph：惰性导入

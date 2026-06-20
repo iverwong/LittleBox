@@ -44,7 +44,7 @@ from langchain_openai import ChatOpenAI
 
 from app.core.llm_topology import (
     ENDPOINTS,
-    LLM_REQUEST_TIMEOUT_SECONDS,
+    LLM_HTTPX_TIMEOUT,
     ROLES,
     Role,
     RoleBinding,
@@ -160,7 +160,7 @@ def _adapter_chat_deepseek(
         "api_key": api_key,
         "api_base": base_url,
         "model": b.model,
-        "timeout": LLM_REQUEST_TIMEOUT_SECONDS,
+        "timeout": LLM_HTTPX_TIMEOUT,
         "max_retries": 0,
         "extra_body": extra_body,
     }

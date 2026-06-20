@@ -43,6 +43,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
+import httpx
 from pydantic import SecretStr
 
 if TYPE_CHECKING:
@@ -52,6 +53,13 @@ if TYPE_CHECKING:
 # 全局超时进 code（无 dev/prod 区分）；adapter 层读取此值构造 LangChain LLM。
 LLM_REQUEST_TIMEOUT_SECONDS = 60.0
 """LangChain LLM 调用的全局超时秒数。"""
+LLM_HTTPX_TIMEOUT = httpx.Timeout(
+    connect=10.0,
+    read=LLM_REQUEST_TIMEOUT_SECONDS,
+    write=10.0,
+    pool=10.0,
+)
+"""LangChain LLM 调用的全局 httpx 超时配置。"""
 
 
 # —— 枚举：把散落字符串固化进类型系统（StrEnum 保留 str 兼容 + 穷尽性 + 防 typo）——
