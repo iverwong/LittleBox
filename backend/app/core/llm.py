@@ -489,7 +489,7 @@ def _build_chat_openai(
     api_key: str,
     base_url: str,
     model: str,
-    timeout: float,
+    timeout: httpx.Timeout,
 ) -> ChatOpenAI:
     """构造 `ChatOpenAI`（无思考模式，保留给未来 OpenAI 兼容族实验）。
 
