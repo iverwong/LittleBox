@@ -136,6 +136,7 @@ def _make_fake_runtime(max_iter: int = 5) -> object:
         settings=MagicMock(),
         db_session_factory=MagicMock(),
         audit_redis=MagicMock(),
+        shared_http_client=MagicMock(),
     )
     return SimpleNamespace(context=ctx)
 
@@ -154,7 +155,7 @@ def _run(
     load_context 覆盖 state.session_notes_working 到该字符串。
     """
     fake = FakeAuditLLM(responses, exhausted_raises=exhausted_raises)
-    monkeypatch.setattr("app.domain.audit.graph.build_audit_llm", lambda s: fake)
+    monkeypatch.setattr("app.domain.audit.graph.build_audit_llm", lambda s, **kwargs: fake)
 
     # mock 数据层调用为 no-op
     async def _mock_load(*_: Any, **__: Any) -> list:
@@ -221,7 +222,17 @@ class TestAuditGraph:
         result = await _run(
             [
                 _aim(tool_calls=[_TC_REPLACE_MISS]),
-                _aim(tool_calls=[_tc(TOOL_NAME_REPLACE, {"old_str": "用户今天情绪稳定。", "new_str": "追加内容。用户今天情绪稳定。"})]),
+                _aim(
+                    tool_calls=[
+                        _tc(
+                            TOOL_NAME_REPLACE,
+                            {
+                                "old_str": "用户今天情绪稳定。",
+                                "new_str": "追加内容。用户今天情绪稳定。",
+                            },
+                        )
+                    ]
+                ),
                 _aim(tool_calls=[_TC_OUTPUT]),
             ],
             monkeypatch,
@@ -254,7 +265,7 @@ class TestAuditGraph:
                 _aim(tool_calls=[_TC_OUTPUT]),
             ]
         )
-        monkeypatch.setattr("app.domain.audit.graph.build_audit_llm", lambda s: fake)
+        monkeypatch.setattr("app.domain.audit.graph.build_audit_llm", lambda s, **kwargs: fake)
 
         async def _mock_load(*_: Any, **__: Any) -> list:
             return []
@@ -303,8 +314,22 @@ class TestAuditGraph:
         """路径 ⑥：多轮 replace → session_notes_working 状态正确累积。"""
         result = await _run(
             [
-                _aim(tool_calls=[_tc(TOOL_NAME_REPLACE, {"old_str": "情绪稳定。", "new_str": "追加内容。情绪有些波动。"})]),
-                _aim(tool_calls=[_tc(TOOL_NAME_REPLACE, {"old_str": "追加内容。", "new_str": "最终观察。追加内容。"})]),
+                _aim(
+                    tool_calls=[
+                        _tc(
+                            TOOL_NAME_REPLACE,
+                            {"old_str": "情绪稳定。", "new_str": "追加内容。情绪有些波动。"},
+                        )
+                    ]
+                ),
+                _aim(
+                    tool_calls=[
+                        _tc(
+                            TOOL_NAME_REPLACE,
+                            {"old_str": "追加内容。", "new_str": "最终观察。追加内容。"},
+                        )
+                    ]
+                ),
                 _aim(tool_calls=[_TC_OUTPUT]),
             ],
             monkeypatch,
@@ -387,10 +412,20 @@ class TestOutputViolationE2E:
         """LLM 返 [REPLACE, OUTPUT] → audit_tools 发 error 给 OUTPUT → 下轮返 [OUTPUT] 解析。"""
         result = await _run(
             [
-                _aim(tool_calls=[_tc(TOOL_NAME_REPLACE, {"old_str": "起始笔记。", "new_str": "起始笔记。追加内容。"})]),  # 首轮只 replace,无 OUTPUT,进 tool loop
+                _aim(
+                    tool_calls=[
+                        _tc(
+                            TOOL_NAME_REPLACE,
+                            {"old_str": "起始笔记。", "new_str": "起始笔记。追加内容。"},
+                        )
+                    ]
+                ),  # 首轮只 replace,无 OUTPUT,进 tool loop
                 _aim(
                     tool_calls=[  # 第二轮 LLM 混调 (违规)
-                        _tc(TOOL_NAME_REPLACE, {"old_str": "起始笔记。", "new_str": "起始笔记。再来一条。"}),
+                        _tc(
+                            TOOL_NAME_REPLACE,
+                            {"old_str": "起始笔记。", "new_str": "起始笔记。再来一条。"},
+                        ),
                         _TC_OUTPUT,
                     ]
                 ),
@@ -412,7 +447,10 @@ class TestOutputViolationE2E:
             [
                 _aim(
                     tool_calls=[  # 首轮 [REPLACE, OUTPUT] 混调
-                        _tc(TOOL_NAME_REPLACE, {"old_str": "起始笔记。", "new_str": "起始笔记。追加内容。"}),
+                        _tc(
+                            TOOL_NAME_REPLACE,
+                            {"old_str": "起始笔记。", "new_str": "起始笔记。追加内容。"},
+                        ),
                         _TC_OUTPUT,
                     ]
                 ),

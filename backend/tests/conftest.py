@@ -57,11 +57,15 @@ from fakeredis.aioredis import FakeRedis
 
 def pytest_addoption(parser):
     parser.addoption(
-        "--run-live", action="store_true", default=False,
+        "--run-live",
+        action="store_true",
+        default=False,
         help="run tests marked as live (real LLM API)",
     )
     parser.addoption(
-        "--run-integration", action="store_true", default=False,
+        "--run-integration",
+        action="store_true",
+        default=False,
         help="run integration tests (real DB/Redis/arq)",
     )
 
@@ -77,6 +81,8 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if item.get_closest_marker("integration"):
                 item.add_marker(skip_int)
+
+
 import uuid
 from datetime import date
 from typing import Any
@@ -244,8 +250,7 @@ async def concurrent_db_sessions(
 
     db_name = str(engine.url.database or "")
     assert "_test" in db_name, (
-        f"concurrent_db_sessions 仅可用于测试库（库名须含 '_test'），"
-        f"实际连到 {db_name}"
+        f"concurrent_db_sessions 仅可用于测试库（库名须含 '_test'），实际连到 {db_name}"
     )
 
     created_sessions: list[AsyncSession] = []
@@ -274,9 +279,7 @@ async def concurrent_db_sessions(
         if dirtied_tables:
             tables_sql = ", ".join(f'"{t}"' for t in dirtied_tables)
             async with engine.connect() as conn:
-                await conn.execute(
-                    text(f"TRUNCATE TABLE {tables_sql} RESTART IDENTITY CASCADE")
-                )
+                await conn.execute(text(f"TRUNCATE TABLE {tables_sql} RESTART IDENTITY CASCADE"))
                 await conn.commit()
 
 
@@ -327,10 +330,12 @@ def _make_mock_resources(redis_client: FakeRedis):
     mock_rr.arq_pool.close = AsyncMock()
     mock_rr.db_engine = AsyncMock()
     mock_rr.db_engine.dispose = AsyncMock()
+    mock_rr.shared_http_client = MagicMock()
     return mock_rr
 
 
 # ---------- chat_stream 短作用域 DB 块测试辅助 ----------
+
 
 class _UncloseableSessionContext:
     """async context manager wrapping a shared AsyncSession without closing it.
@@ -551,13 +556,19 @@ def make_chat_context(
     settings: Any = None,
     db_session_factory: Any = None,
     audit_redis: Any = None,
+    shared_http_client: Any = None,
     profile: ChildProfileSnapshot | None = None,
 ) -> ChatContextSchema:
     """构造最小 ChatContextSchema，测试用。
 
     settings / db_session_factory / audit_redis 必传（来自测试 fixture），
+    shared_http_client 缺省用 MagicMock（图节点仅读引用，无需真 httpx），
     profile 缺省用 make_child_profile_snapshot() 默认值。
     """
+    if shared_http_client is None:
+        from unittest.mock import MagicMock
+
+        shared_http_client = MagicMock()
     return ChatContextSchema(
         session_id=session_id or uuid.uuid4(),
         child_user_id=child_user_id or uuid.uuid4(),
@@ -566,6 +577,7 @@ def make_chat_context(
         settings=settings,
         db_session_factory=db_session_factory,
         audit_redis=audit_redis,
+        shared_http_client=shared_http_client,
     )
 
 
@@ -640,6 +652,7 @@ _GUARD_TABLES = [
 
 async def _async_count_rows(url: str, tables: list[str]) -> dict[str, int]:
     from sqlalchemy import text as _text
+
     engine = create_async_engine(url)
     try:
         async with engine.connect() as conn:

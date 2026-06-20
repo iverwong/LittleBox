@@ -29,8 +29,14 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 TABLES = [
-    "families", "users", "family_members", "child_profiles",
-    "auth_tokens", "device_tokens", "sessions", "messages",
+    "families",
+    "users",
+    "family_members",
+    "child_profiles",
+    "auth_tokens",
+    "device_tokens",
+    "sessions",
+    "messages",
 ]
 
 # 模块级 FakeRedis.eval patch（特化版：监控各测试文件传参）
@@ -115,6 +121,7 @@ async def lifecycle_ctx(engine, redis_client, concurrent_db_sessions):
             db_session_factory=_factory,
             audit_redis=redis_client,
             arq_pool=AsyncMock(),
+            shared_http_client=MagicMock(),
             main_graph=MagicMock(),
             audit_graph=MagicMock(),
         )
@@ -203,16 +210,20 @@ async def seed_compression_session(ctx, child) -> tuple:
     await ctx.seed_sess.flush()
 
     msg1 = Message(
-        session_id=sid, role=MessageRole.human,
-        content="你好", status=MessageStatus.active,
+        session_id=sid,
+        role=MessageRole.human,
+        content="你好",
+        status=MessageStatus.active,
     )
     msg1.created_at = base_ts
     ctx.seed_sess.add(msg1)
     await ctx.seed_sess.flush()
 
     msg2 = Message(
-        session_id=sid, role=MessageRole.ai,
-        content="今天天气不错", status=MessageStatus.active,
+        session_id=sid,
+        role=MessageRole.ai,
+        content="今天天气不错",
+        status=MessageStatus.active,
     )
     msg2.created_at = base_ts.replace(microsecond=base_ts.microsecond + 1)
     ctx.seed_sess.add(msg2)

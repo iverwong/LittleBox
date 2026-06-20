@@ -8,6 +8,7 @@
 
 T10（D-patch0-7）：mock RuntimeResources 替代 build_audit_graph 直接 mock。
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
@@ -37,6 +38,7 @@ def _fake_child_profile_dict() -> dict:
         "sensitivity": None,
         "custom_redlines": None,
     }
+
 
 _AUDIT_OUTPUT = AuditOutputSchema(
     dimension_scores=AuditDimensionScores(),
@@ -74,6 +76,7 @@ def _make_fake_rr() -> MagicMock:
     fake_rr.settings.max_audit_tool_iterations = 5
     fake_rr.db_session_factory = MagicMock()
     fake_rr.audit_redis = MagicMock()
+    fake_rr.shared_http_client = MagicMock()
     return fake_rr
 
 
@@ -113,7 +116,14 @@ class TestRunAudit:
         fake_rr: MagicMock = ctx["resources"]
         fake_rr.audit_graph.ainvoke = _fake_graph_ainvoke_ok
 
-        await run_audit(ctx, SID, turn_number=1, child_user_id=CUID, target_message_id=TARGET_MID, child_profile=_fake_child_profile_dict())
+        await run_audit(
+            ctx,
+            SID,
+            turn_number=1,
+            child_user_id=CUID,
+            target_message_id=TARGET_MID,
+            child_profile=_fake_child_profile_dict(),
+        )
 
         # 验证 Redis 状态
         payload = await mgr.get(SID)
@@ -130,7 +140,14 @@ class TestRunAudit:
         fake_rr.audit_graph.ainvoke = _fake_graph_ainvoke_raise
 
         with pytest.raises(RuntimeError, match="LLM error"):
-            await run_audit(ctx, SID, turn_number=2, child_user_id=CUID, target_message_id=TARGET_MID, child_profile=_fake_child_profile_dict())
+            await run_audit(
+                ctx,
+                SID,
+                turn_number=2,
+                child_user_id=CUID,
+                target_message_id=TARGET_MID,
+                child_profile=_fake_child_profile_dict(),
+            )
 
         # 验证 Redis 状态
         payload = await mgr.get(SID)
@@ -148,7 +165,14 @@ class TestRunAudit:
         fake_rr.audit_graph.ainvoke = _fake_graph_ainvoke_raise
 
         with pytest.raises(RuntimeError, match="LLM error"):
-            await run_audit(ctx, SID, turn_number=2, child_user_id=CUID, target_message_id=TARGET_MID, child_profile=_fake_child_profile_dict())
+            await run_audit(
+                ctx,
+                SID,
+                turn_number=2,
+                child_user_id=CUID,
+                target_message_id=TARGET_MID,
+                child_profile=_fake_child_profile_dict(),
+            )
 
         # 验证 Redis 状态未写入（key 不存在）
         payload = await mgr.get(SID)
@@ -172,7 +196,14 @@ class TestRunAudit:
         fake_rr: MagicMock = ctx["resources"]
         fake_rr.audit_graph.ainvoke = ainvoke_spy
 
-        await run_audit(ctx, SID, turn_number=1, child_user_id=CUID, target_message_id=TARGET_MID, child_profile=_fake_child_profile_dict())
+        await run_audit(
+            ctx,
+            SID,
+            turn_number=1,
+            child_user_id=CUID,
+            target_message_id=TARGET_MID,
+            child_profile=_fake_child_profile_dict(),
+        )
 
         ainvoke_spy.assert_called_once()
         _, kwargs = ainvoke_spy.call_args

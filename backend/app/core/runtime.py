@@ -1,7 +1,8 @@
 """进程级资源容器，FastAPI lifespan 与 ARQ on_startup 共用。
 
 `build_runtime` / `teardown_runtime` 是单进程所有长生命周期资源
-（DB engine / session 工厂 / 审查 Redis / ARQ 池 / 编译后的 LangGraph）
+（DB engine / session 工厂 / 审查 Redis / ARQ 池 / 共享 httpx 客户端 /
+编译后的 LangGraph）
 的唯一构建与关闭路径，FastAPI、ARQ worker、CLI 脚本统一走它。
 """
 
@@ -13,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
+import httpx
 from langgraph.graph.state import CompiledStateGraph
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import (
@@ -22,6 +24,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from app.core.llm_topology import LLM_REQUEST_TIMEOUT_SECONDS
 from app.core.redis import _build_arq_redis_url
 
 logger = logging.getLogger(__name__)
@@ -45,6 +48,8 @@ class RuntimeResources:
         db_session_factory: 异步 session 工厂（`get_db` 与后台任务共用）。
         audit_redis: 审查专用 Redis（db=`arq_redis_db`）。
         arq_pool: ARQ 异步任务队列连接池。
+        shared_http_client: 进程级共享 `httpx.AsyncClient`，供 LLM transport
+            复用 keep-alive 连接（避免每轮新建 httpx 池丢 TCP 握手）。
         main_graph: 主对话图（LangGraph 编译产物）。
         audit_graph: 审查图（LangGraph 编译产物）。
         _chat_tasks: 活跃 chat 后台任务登记表，
@@ -56,6 +61,7 @@ class RuntimeResources:
     db_session_factory: async_sessionmaker[AsyncSession]
     audit_redis: Redis
     arq_pool: ArqRedis
+    shared_http_client: httpx.AsyncClient
     main_graph: CompiledStateGraph
     audit_graph: CompiledStateGraph
     _chat_tasks: dict[str, asyncio.Task] = field(default_factory=dict)
@@ -100,8 +106,9 @@ class RuntimeResources:
 async def build_runtime(settings: Settings) -> RuntimeResources:
     """构建进程级资源容器。
 
-    装配顺序：DB engine → session 工厂 → 审查 Redis → ARQ 池 → 主对话图
-    → 审查图。后两者用惰性 import，避免模块加载时即触发图编译。
+    装配顺序：DB engine → session 工厂 → 审查 Redis → ARQ 池 →
+    共享 httpx 客户端 → 主对话图 → 审查图。后两者用惰性 import，避免模块
+    加载时即触发图编译。
 
     Args:
         settings: 全局配置。
@@ -134,12 +141,29 @@ async def build_runtime(settings: Settings) -> RuntimeResources:
         ),
     )
 
-    # 5. main_graph：惰性导入
+    # 5. shared_http_client：进程级 httpx 连接池，供 LangChain 相关
+    #    transport 复用 keep-alive。keepalive_expiry 30s 覆盖多数对话间隔；
+    #    read 取 LLM_REQUEST_TIMEOUT_SECONDS（与 ChatDeepSeek(timeout=...) 同源）。
+    shared_http_client = httpx.AsyncClient(
+        limits=httpx.Limits(
+            max_keepalive_connections=20,
+            max_connections=100,
+            keepalive_expiry=30.0,
+        ),
+        timeout=httpx.Timeout(
+            connect=10.0,
+            read=LLM_REQUEST_TIMEOUT_SECONDS,
+            write=10.0,
+            pool=10.0,
+        ),
+    )
+
+    # 6. main_graph：惰性导入
     from app.domain.chat.graph import build_main_graph
 
     main_graph = build_main_graph()
 
-    # 6. audit_graph：惰性导入
+    # 7. audit_graph：惰性导入
     from app.domain.audit.graph import build_audit_graph
 
     audit_graph = build_audit_graph()
@@ -150,6 +174,7 @@ async def build_runtime(settings: Settings) -> RuntimeResources:
         db_session_factory=session_factory,
         audit_redis=audit_redis,
         arq_pool=arq_pool,
+        shared_http_client=shared_http_client,
         main_graph=main_graph,
         audit_graph=audit_graph,
     )
@@ -158,12 +183,16 @@ async def build_runtime(settings: Settings) -> RuntimeResources:
 async def teardown_runtime(rr: RuntimeResources) -> None:
     """反向关闭进程级资源。
 
-    关闭顺序：`arq_pool` → `audit_redis` → `db_engine`，与构建顺序相反。
-    LangGraph 编译产物无需显式关闭。
+    关闭顺序：`shared_http_client` → `arq_pool` → `audit_redis` → `db_engine`，
+    与构建顺序相反。LangGraph 编译产物无需显式关闭。
+    `shared_http_client` 必须先于 DB / Redis 关：进程退出前的所有 LLM
+    流可能仍在用池里的 keep-alive 连接，httpx `aclose` 会 drain 完挂起
+    请求再退出。
 
     Args:
         rr: 由 `build_runtime` 创建的 `RuntimeResources`。
     """
+    await rr.shared_http_client.aclose()
     await rr.arq_pool.aclose(close_connection_pool=True)
     await rr.audit_redis.aclose()
     await rr.db_engine.dispose()

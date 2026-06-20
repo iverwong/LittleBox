@@ -5,6 +5,7 @@
 2. task 抛异常 → 日志留痕（含 sid 上下文）
 3. 多实例 _chat_tasks dict 隔离（default_factory 生效）
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -27,6 +28,7 @@ def runtime_resources() -> RuntimeResources:
         db_session_factory=MagicMock(),
         audit_redis=AsyncMock(),
         arq_pool=AsyncMock(),
+        shared_http_client=MagicMock(),
         main_graph=MagicMock(),
         audit_graph=MagicMock(),
     )
@@ -99,6 +101,7 @@ async def test_chat_tasks_default_factory_isolated() -> None:
         db_session_factory=MagicMock(),
         audit_redis=AsyncMock(),
         arq_pool=AsyncMock(),
+        shared_http_client=MagicMock(),
         main_graph=MagicMock(),
         audit_graph=MagicMock(),
     )
@@ -108,6 +111,7 @@ async def test_chat_tasks_default_factory_isolated() -> None:
         db_session_factory=MagicMock(),
         audit_redis=AsyncMock(),
         arq_pool=AsyncMock(),
+        shared_http_client=MagicMock(),
         main_graph=MagicMock(),
         audit_graph=MagicMock(),
     )

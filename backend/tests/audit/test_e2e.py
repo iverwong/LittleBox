@@ -3,6 +3,7 @@
 B.1a 范围：仅验 Redis 信号闭环 pending→ready，不验 audit_records 落库
 （由 test_writers.py 单独覆盖）。
 """
+
 from __future__ import annotations
 
 import uuid
@@ -22,9 +23,12 @@ pytestmark = pytest.mark.audit
 
 _AUDIT_OUT = AuditOutputSchema(
     dimension_scores=AuditDimensionScores(),
-    crisis_detected=False, crisis_topic=None,
-    redline_triggered=False, redline_detail=None,
-    guidance_injection="ok", turn_summary="ok",
+    crisis_detected=False,
+    crisis_topic=None,
+    redline_triggered=False,
+    redline_detail=None,
+    guidance_injection="ok",
+    turn_summary="ok",
 )
 
 
@@ -34,8 +38,13 @@ async def test_e2e_enqueue_to_ready(concurrent_db_sessions):
     sessions = await concurrent_db_sessions(
         count=1,
         tables=[
-            "messages", "sessions", "users", "family_members",
-            "families", "audit_records", "rolling_summaries",
+            "messages",
+            "sessions",
+            "users",
+            "family_members",
+            "families",
+            "audit_records",
+            "rolling_summaries",
         ],
     )
     db = sessions[0]
@@ -45,14 +54,20 @@ async def test_e2e_enqueue_to_ready(concurrent_db_sessions):
     db.add(fam)
     await db.flush()
     child = User(
-        family_id=fam.id, role=UserRole.child,
-        phone="e2e-test", is_active=True,
+        family_id=fam.id,
+        role=UserRole.child,
+        phone="e2e-test",
+        is_active=True,
     )
     db.add(child)
     await db.flush()
-    db.add(FamilyMember(
-        family_id=fam.id, user_id=child.id, role=UserRole.child,
-    ))
+    db.add(
+        FamilyMember(
+            family_id=fam.id,
+            user_id=child.id,
+            role=UserRole.child,
+        )
+    )
     await db.flush()
     session = SessionModel(id=uuid.uuid4(), child_user_id=child.id, title="test")
     db.add(session)
@@ -79,8 +94,13 @@ async def test_e2e_enqueue_to_ready(concurrent_db_sessions):
 
     # 1) enqueue_audit → pending（§H.2：arq_pool + audit_redis 直接注入）
     await enqueue_audit(
-        mock_arq, shared_redis, sid, db, turn_number=1,
-        child_user_id=child.id, target_message_id=sid,
+        mock_arq,
+        shared_redis,
+        sid,
+        db,
+        turn_number=1,
+        child_user_id=child.id,
+        target_message_id=sid,
         child_profile=profile_snapshot,
     )
 
@@ -92,6 +112,7 @@ async def test_e2e_enqueue_to_ready(concurrent_db_sessions):
     # 2) run_audit → ready
     # T10：构造 fake RuntimeResources + ctx，通过 audit_graph.ainvoke 走通
     from app.core.runtime import RuntimeResources
+
     fake_rr = MagicMock(spec=RuntimeResources)
     fake_graph = AsyncMock()
     fake_graph.ainvoke = AsyncMock(return_value={"structured_output": _AUDIT_OUT})
@@ -100,6 +121,7 @@ async def test_e2e_enqueue_to_ready(concurrent_db_sessions):
     fake_rr.settings.max_audit_tool_iterations = 5
     fake_rr.audit_redis = shared_redis
     fake_rr.db_session_factory = MagicMock()
+    fake_rr.shared_http_client = MagicMock()
 
     worker_ctx = {
         "redis": shared_redis,
@@ -109,7 +131,11 @@ async def test_e2e_enqueue_to_ready(concurrent_db_sessions):
     }
     # run_audit 签名扩 child_profile 必传(dict 入参,R2 重构后冻结 dataclass 入队改 asdict 由 worker 层处理)
     await run_audit(
-        worker_ctx, str(sid), 1, str(child.id), str(sid),
+        worker_ctx,
+        str(sid),
+        1,
+        str(child.id),
+        str(sid),
         child_profile=profile_snapshot.__dict__,
     )
 

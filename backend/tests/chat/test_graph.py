@@ -8,8 +8,8 @@ M6 Step 6 coverage:
 - M8 always routes to "main" (all signals False)
 """
 
-
 import pytest
+from unittest.mock import MagicMock
 from app.domain.chat.graph import (
     build_main_graph,
     call_crisis_llm,
@@ -93,9 +93,7 @@ def test_graph_has_5_nodes():
         "call_main_llm",
         "call_crisis_llm",
     }
-    assert expected.issubset(node_names), (
-        f"Missing nodes: {expected - node_names}"
-    )
+    assert expected.issubset(node_names), f"Missing nodes: {expected - node_names}"
 
 
 def test_graph_no_db_write_nodes():
@@ -188,6 +186,7 @@ def _make_stub_runtime():
             child_profile=make_child_profile_snapshot(age=8, gender=None),
             user_input="test",
             db_session_factory=AsyncMock(),
+            shared_http_client=MagicMock(),
         ),
     )
 
@@ -218,7 +217,9 @@ async def test_crisis_llm_streams_via_writer(monkeypatch):
             yield fake_chunk
 
     monkeypatch.setattr("app.domain.chat.graph.get_stream_writer", lambda: fake_writer)
-    monkeypatch.setattr("app.domain.chat.graph.build_crisis_llm", lambda _: _FakeLLM())
+    monkeypatch.setattr(
+        "app.domain.chat.graph.build_crisis_llm", lambda *args, **kwargs: _FakeLLM()
+    )
 
     await call_crisis_llm(state, runtime)
 
@@ -257,7 +258,9 @@ async def test_call_main_llm_finish_reason_passthrough_stop(monkeypatch):
             ]
         )
 
-    monkeypatch.setattr("app.domain.chat.graph.build_main_llm", lambda _: _fake_get_llm())
+    monkeypatch.setattr(
+        "app.domain.chat.graph.build_main_llm", lambda *args, **kwargs: _fake_get_llm()
+    )
 
     written: list[dict] = []
     monkeypatch.setattr(
@@ -289,7 +292,9 @@ async def test_call_main_llm_finish_reason_passthrough_length(monkeypatch):
             ]
         )
 
-    monkeypatch.setattr("app.domain.chat.graph.build_main_llm", lambda _: _fake_get_llm())
+    monkeypatch.setattr(
+        "app.domain.chat.graph.build_main_llm", lambda *args, **kwargs: _fake_get_llm()
+    )
 
     written: list[dict] = []
     monkeypatch.setattr(
@@ -321,7 +326,9 @@ async def test_call_main_llm_finish_reason_passthrough_content_filter(monkeypatc
             ]
         )
 
-    monkeypatch.setattr("app.domain.chat.graph.build_main_llm", lambda _: _fake_get_llm())
+    monkeypatch.setattr(
+        "app.domain.chat.graph.build_main_llm", lambda *args, **kwargs: _fake_get_llm()
+    )
 
     written: list[dict] = []
     monkeypatch.setattr(
@@ -353,7 +360,9 @@ async def test_call_main_llm_finish_reason_non_whitelist_filtered(monkeypatch):
             ]
         )
 
-    monkeypatch.setattr("app.domain.chat.graph.build_main_llm", lambda _: _fake_get_llm())
+    monkeypatch.setattr(
+        "app.domain.chat.graph.build_main_llm", lambda *args, **kwargs: _fake_get_llm()
+    )
 
     written: list[dict] = []
     monkeypatch.setattr(
@@ -393,7 +402,9 @@ async def test_call_main_llm_emits_reasoning_signal_on_reasoning_content(monkeyp
             ]
         )
 
-    monkeypatch.setattr("app.domain.chat.graph.build_main_llm", lambda _: _fake_get_llm())
+    monkeypatch.setattr(
+        "app.domain.chat.graph.build_main_llm", lambda *args, **kwargs: _fake_get_llm()
+    )
 
     written: list[dict] = []
     monkeypatch.setattr(
@@ -427,7 +438,9 @@ async def test_call_main_llm_no_reasoning_no_signal(monkeypatch):
             ]
         )
 
-    monkeypatch.setattr("app.domain.chat.graph.build_main_llm", lambda _: _fake_get_llm())
+    monkeypatch.setattr(
+        "app.domain.chat.graph.build_main_llm", lambda *args, **kwargs: _fake_get_llm()
+    )
 
     written: list[dict] = []
     monkeypatch.setattr(

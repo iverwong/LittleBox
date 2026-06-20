@@ -568,6 +568,7 @@ async def chat_stream(
             settings=rr.settings,
             db_session_factory=rr.db_session_factory,
             audit_redis=rr.audit_redis,
+            shared_http_client=rr.shared_http_client,
         )
 
         initial_state: MainDialogueState = {

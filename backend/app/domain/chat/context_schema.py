@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.domain.accounts.schemas import ChildProfileSnapshot
 
 if TYPE_CHECKING:
+    import httpx
+
     from app.core.config import Settings
 
 
@@ -20,8 +22,8 @@ class ChatContextSchema:
     """主对话图单次运行的不可变上下文。
 
     与 RuntimeResources(进程级)的分工:RuntimeResources 承载容器级
-    共享资源(engine / pool 等),ChatContextSchema 承载单次图调用所需
-    的请求级上下文。二者均 frozen=True,运行时不可变。
+    共享资源(engine / pool / shared_http_client 等),ChatContextSchema
+    承载单次图调用所需的请求级上下文。二者均 frozen=True,运行时不可变。
 
     Attributes:
         session_id: 当前对话 session UUID。
@@ -31,6 +33,9 @@ class ChatContextSchema:
         settings: 应用配置。
         db_session_factory: DB 会话工厂(供图内节点按需开短连接)。
         audit_redis: 审查信号管道 Redis。
+        shared_http_client: 进程级共享 httpx 客户端(供 LLM transport
+            复用 keep-alive)。图节点只能见 ctx、见不到 rr,经 ctx 中转
+            (与 db_session_factory / audit_redis 完全同构)。
     """
 
     # 身份字段
@@ -43,3 +48,4 @@ class ChatContextSchema:
     settings: Settings
     db_session_factory: async_sessionmaker[AsyncSession]
     audit_redis: Redis
+    shared_http_client: httpx.AsyncClient

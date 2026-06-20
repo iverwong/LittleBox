@@ -268,7 +268,7 @@ async def audit_llm_call(
         {"messages": [response]},AIMessage 透传,structured_output 不设。
     """
     ctx = runtime.context
-    llm = build_audit_llm(ctx.settings)
+    llm = build_audit_llm(ctx.settings, http_async_client=ctx.shared_http_client)
     messages = list(state["messages"])
     response = await llm.ainvoke(messages)
 

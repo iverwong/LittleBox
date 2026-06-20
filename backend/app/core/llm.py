@@ -35,6 +35,7 @@ import importlib.metadata as _metadata
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+import httpx
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import Runnable
@@ -114,14 +115,17 @@ _lcoai._convert_message_to_dict = _patched_convert
 # - main / audit 的 `thinking=True & reasoning_effort=MAX` 与 `Settings` 默认值一致；
 # - compression 的 `thinking=False & temperature=0.3` 与生产历史一致。
 
-_TransportBuilder = Callable[[str, str, RoleBinding], BaseChatModel]
-"""transport adapter 签名：取 `(api_key, base_url, RoleBinding)` 返回 chat model 实例。"""
+_TransportBuilder = Callable[[str, str, RoleBinding, httpx.AsyncClient | None], BaseChatModel]
+"""transport adapter 签名：取 `(api_key, base_url, RoleBinding, http_async_client)`
+返回 chat model 实例。`http_async_client` 为 None 时 adapter 走 SDK 默认池（每轮现造）；
+注入非 None 实例时复用进程级 keep-alive 连接池。"""
 
 
 def _adapter_chat_deepseek(
     api_key: str,
     base_url: str,
     b: RoleBinding,
+    http_async_client: httpx.AsyncClient | None = None,
 ) -> BaseChatModel:
     """deepseek-v4 族 adapter：从 `RoleBinding` 装配 `ChatDeepSeek` 实例。
 
@@ -131,10 +135,17 @@ def _adapter_chat_deepseek(
 
     `max_retries=0` 把 SDK 内置重试关掉，改由 `wrap_resilience` 统一管。
 
+    `http_async_client` 注入进程级共享 httpx 池后,LangChain 异步路径走
+    该池的 keep-alive(避免每轮新建池丢 TCP 握手)。仅注入 `http_async_client`
+    字段（langchain-deepseek / langchain-openai 异步路径专用；同步 invoke
+    不在工程路径中,无需 `http_client`)。注入为 None 时保持 SDK 默认行为
+    (测试 / 未注入路径完全不变)。
+
     Args:
         api_key: provider API key。
         base_url: 端点 base URL。
         b: role 绑定。
+        http_async_client: 进程级共享 httpx 异步客户端,None 时用 SDK 默认。
 
     Returns:
         配置完成的 `ChatDeepSeek` 实例。
@@ -155,6 +166,8 @@ def _adapter_chat_deepseek(
     }
     if b.temperature is not None:
         kwargs["temperature"] = b.temperature
+    if http_async_client is not None:
+        kwargs["http_async_client"] = http_async_client
     return ChatDeepSeek(**kwargs)
 
 
@@ -171,7 +184,12 @@ _TRANSPORTS: dict[Transport, _TransportBuilder] = {
 # ============================================================================
 
 
-def _build_binding(b: RoleBinding, settings: Settings) -> BaseChatModel:
+def _build_binding(
+    b: RoleBinding,
+    settings: Settings,
+    *,
+    http_async_client: httpx.AsyncClient | None = None,
+) -> BaseChatModel:
     """`RoleBinding → ChatModel` 实例的统一装配入口。
 
     装配链：`role → (endpoint, model) → 模型档给 transport+方言 → 实例化`。
@@ -179,6 +197,8 @@ def _build_binding(b: RoleBinding, settings: Settings) -> BaseChatModel:
     Args:
         b: role 绑定。
         settings: 全局配置（提供 API key 读取入口）。
+        http_async_client: 进程级共享 httpx 异步客户端,None 时 adapter 走
+            SDK 默认池。详见 `_adapter_chat_deepseek`。
 
     Returns:
         配置完成的 chat model 实例。
@@ -189,7 +209,7 @@ def _build_binding(b: RoleBinding, settings: Settings) -> BaseChatModel:
     ep = ENDPOINTS[b.endpoint]
     profile = resolve_profile(b.model)
     api_key = ep.api_key(settings).get_secret_value()
-    return _TRANSPORTS[profile.transport](api_key, ep.base_url, b)
+    return _TRANSPORTS[profile.transport](api_key, ep.base_url, b, http_async_client)
 
 
 # ============================================================================
@@ -213,7 +233,12 @@ _test_llm_overrides: dict[Role, BaseChatModel] = {}
 #     retry 取 ROLES[role].retry_attempts
 
 
-def build_role_primary(role: Role, settings: Settings) -> BaseChatModel:
+def build_role_primary(
+    role: Role,
+    settings: Settings,
+    *,
+    http_async_client: httpx.AsyncClient | None = None,
+) -> BaseChatModel:
     """role 主端 LLM 实例（裸 ChatModel，未包 retry / fallback）。
 
     注入缝：若 `role in _test_llm_overrides`，直接返回 override
@@ -222,6 +247,7 @@ def build_role_primary(role: Role, settings: Settings) -> BaseChatModel:
     Args:
         role: 目标 role。
         settings: 全局配置。
+        http_async_client: 进程级共享 httpx 异步客户端,见 `_build_binding`。
 
     Returns:
         主端 chat model 实例。
@@ -231,10 +257,15 @@ def build_role_primary(role: Role, settings: Settings) -> BaseChatModel:
     """
     if role in _test_llm_overrides:
         return _test_llm_overrides[role]
-    return _build_binding(ROLES[role], settings)
+    return _build_binding(ROLES[role], settings, http_async_client=http_async_client)
 
 
-def build_role_fallback(role: Role, settings: Settings) -> BaseChatModel | None:
+def build_role_fallback(
+    role: Role,
+    settings: Settings,
+    *,
+    http_async_client: httpx.AsyncClient | None = None,
+) -> BaseChatModel | None:
     """role 备端 LLM 实例（裸 ChatModel，未包 retry / fallback）。
 
     注入缝**不**查 override：约定「主端 fake / 备端 real」，若备端也走
@@ -243,6 +274,7 @@ def build_role_fallback(role: Role, settings: Settings) -> BaseChatModel | None:
     Args:
         role: 目标 role。
         settings: 全局配置。
+        http_async_client: 进程级共享 httpx 异步客户端,见 `_build_binding`。
 
     Returns:
         备端 chat model 实例；当 role 无 fallback 配置时返回 `None`
@@ -251,7 +283,7 @@ def build_role_fallback(role: Role, settings: Settings) -> BaseChatModel | None:
     fb = ROLES[role].fallback
     if fb is None:
         return None
-    return _build_binding(fb, settings)
+    return _build_binding(fb, settings, http_async_client=http_async_client)
 
 
 def wrap_resilience(
@@ -286,7 +318,12 @@ def wrap_resilience(
     return retryable.with_fallbacks([fallback]) if fallback else retryable
 
 
-def _build_role_llm(role: Role, settings: Settings) -> Runnable:
+def _build_role_llm(
+    role: Role,
+    settings: Settings,
+    *,
+    http_async_client: httpx.AsyncClient | None = None,
+) -> Runnable:
     """role 维度的 LLM 装配入口：primary + retry + fallback 一体化。
 
     retry 次数取 `ROLES[role].retry_attempts`（`main` / `audit` = 3，
@@ -297,13 +334,15 @@ def _build_role_llm(role: Role, settings: Settings) -> Runnable:
     Args:
         role: 目标 role。
         settings: 全局配置。
+        http_async_client: 进程级共享 httpx 异步客户端,透传到 primary /
+            fallback `_build_binding`。
 
     Returns:
         Runnable 实例。
     """
     return wrap_resilience(
-        build_role_primary(role, settings),
-        build_role_fallback(role, settings),
+        build_role_primary(role, settings, http_async_client=http_async_client),
+        build_role_fallback(role, settings, http_async_client=http_async_client),
         retry_attempts=ROLES[role].retry_attempts,
     )
 
@@ -316,7 +355,11 @@ def _build_role_llm(role: Role, settings: Settings) -> Runnable:
 # temperature=0.3、retry=1）。
 
 
-def build_main_llm(settings: Settings) -> Runnable:
+def build_main_llm(
+    settings: Settings,
+    *,
+    http_async_client: httpx.AsyncClient | None = None,
+) -> Runnable:
     """主对话 LLM（`role=MAIN`）：retry=3 + bailian 真兜底。
 
     主端 deepseek thinking + reasoning_effort=max，备端 bailian 等价配置
@@ -324,14 +367,20 @@ def build_main_llm(settings: Settings) -> Runnable:
 
     Args:
         settings: 全局配置。
+        http_async_client: 进程级共享 httpx 异步客户端,None 时 adapter
+            走 SDK 默认池。详见 `_adapter_chat_deepseek`。
 
     Returns:
         Runnable 实例。
     """
-    return _build_role_llm(Role.MAIN, settings)
+    return _build_role_llm(Role.MAIN, settings, http_async_client=http_async_client)
 
 
-def build_crisis_llm(settings: Settings) -> Runnable:
+def build_crisis_llm(
+    settings: Settings,
+    *,
+    http_async_client: httpx.AsyncClient | None = None,
+) -> Runnable:
     """crisis 干预 LLM（`role=MAIN`，不复用 audit）。
 
     行为本同 main（接替对话：流式 + 思考、不绑工具），而非 audit note-writer。
@@ -339,14 +388,19 @@ def build_crisis_llm(settings: Settings) -> Runnable:
 
     Args:
         settings: 全局配置。
+        http_async_client: 进程级共享 httpx 异步客户端,同 `build_main_llm`。
 
     Returns:
         Runnable 实例。
     """
-    return _build_role_llm(Role.MAIN, settings)
+    return _build_role_llm(Role.MAIN, settings, http_async_client=http_async_client)
 
 
-def build_compression_llm(settings: Settings) -> Runnable:
+def build_compression_llm(
+    settings: Settings,
+    *,
+    http_async_client: httpx.AsyncClient | None = None,
+) -> Runnable:
     """压缩 LLM（`role=COMPRESSION`）：retry=1 + bailian 兜底。
 
     retry=1：仅 1 次尝试、不重试，避免后台压缩在主端抖动时放大重试，
@@ -355,11 +409,12 @@ def build_compression_llm(settings: Settings) -> Runnable:
 
     Args:
         settings: 全局配置。
+        http_async_client: 进程级共享 httpx 异步客户端,同 `build_main_llm`。
 
     Returns:
         Runnable 实例。
     """
-    return _build_role_llm(Role.COMPRESSION, settings)
+    return _build_role_llm(Role.COMPRESSION, settings, http_async_client=http_async_client)
 
 
 # ============================================================================

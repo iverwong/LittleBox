@@ -59,6 +59,7 @@ def _make_fake_runtime() -> object:
         settings=MagicMock(),
         db_session_factory=MagicMock(),
         audit_redis=MagicMock(),
+        shared_http_client=MagicMock(),
     )
     return SimpleNamespace(context=ctx)
 
@@ -188,7 +189,11 @@ async def test_audit_llm_call_passes_settings():
         result = await audit_llm_call(state, runtime)
 
     # build_audit_llm 被调一次，参数 == runtime.context.settings
-    mock_build.assert_called_once_with(runtime.context.settings)
+    # + http_async_client = runtime.context.shared_http_client（共用 httpx 池）
+    mock_build.assert_called_once_with(
+        runtime.context.settings,
+        http_async_client=runtime.context.shared_http_client,
+    )
     # C2 段:纯文本追问后单 OUTPUT 透传,structured_output 不设(由 audit_tools 终止)
     assert "messages" in result
     assert result.get("structured_output") is None
@@ -329,7 +334,9 @@ class TestLoadContextHistorySplit:
         ]
 
         with (
-            patch("app.domain.audit.graph.load_recent_messages", new=AsyncMock(return_value=history)),
+            patch(
+                "app.domain.audit.graph.load_recent_messages", new=AsyncMock(return_value=history)
+            ),
             patch(
                 "app.domain.audit.graph._load_session_notes_from_pg",
                 new=AsyncMock(return_value="notes"),
@@ -655,7 +662,9 @@ class TestAuditLlmCallTransparent:
             mock_llm.ainvoke = AsyncMock(
                 return_value=AIMessage(
                     content="",
-                    tool_calls=[_tc(TOOL_NAME_REPLACE, {"old_str": "a", "new_str": "x"}, call_id="call-1")],
+                    tool_calls=[
+                        _tc(TOOL_NAME_REPLACE, {"old_str": "a", "new_str": "x"}, call_id="call-1")
+                    ],
                 )
             )
             mock_build.return_value = mock_llm

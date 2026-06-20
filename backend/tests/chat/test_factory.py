@@ -80,9 +80,7 @@ class TestResolveProfile:
 
     def test_unknown_model_raises(self) -> None:
         """未注册 model 抛错。"""
-        with pytest.raises(
-            ModelProfileNotRegisteredError, match="qwen-vl"
-        ):
+        with pytest.raises(ModelProfileNotRegisteredError, match="qwen-vl"):
             resolve_profile("qwen-vl-max")
 
 
@@ -199,15 +197,13 @@ class TestBuildCrisisLlm:
 
         called_with: list[Role] = []
 
-        def spy(role: Role, settings: Any) -> Any:
+        def spy(role: Role, settings: Any, **kwargs: Any) -> Any:
             called_with.append(role)
-            return _build_role_llm(role, settings)
+            return _build_role_llm(role, settings, **kwargs)
 
         monkeypatch.setattr("app.core.llm._build_role_llm", spy)
         build_crisis_llm(_FakeSettings())
-        assert called_with == [Role.MAIN], (
-            f"crisis 应走 MAIN 绑定(关注点 6),实际 {called_with}"
-        )
+        assert called_with == [Role.MAIN], f"crisis 应走 MAIN 绑定(关注点 6),实际 {called_with}"
 
 
 class TestBuildCompressionLlm:
@@ -269,9 +265,7 @@ class TestAuditLlmRetry:
         import respx
         from app.domain.audit.llm import build_audit_llm
 
-        primary_url = (
-            f"{ENDPOINTS[EndpointName.DEEPSEEK].base_url}/chat/completions"
-        )
+        primary_url = f"{ENDPOINTS[EndpointName.DEEPSEEK].base_url}/chat/completions"
 
         async with respx.mock(assert_all_mocked=False) as respx_mock:
             route = respx_mock.post(primary_url)
@@ -301,27 +295,19 @@ class TestAuditLlmRetry:
             assert result.content is not None
             assert len(respx_mock.calls) == 2
 
-    async def test_primary_all_fail_uses_fallback(
-        self, _no_retry_backoff: AsyncMock
-    ) -> None:
+    async def test_primary_all_fail_uses_fallback(self, _no_retry_backoff: AsyncMock) -> None:
         """Given 主端持续 ConnectError + 备端 OK When build_audit_llm.ainvoke Then 切备端成功。"""
         import httpx
         import respx
         from app.domain.audit.llm import build_audit_llm
 
-        primary_url = (
-            f"{ENDPOINTS[EndpointName.DEEPSEEK].base_url}/chat/completions"
-        )
-        fallback_url = (
-            f"{ENDPOINTS[EndpointName.BAILIAN].base_url}/chat/completions"
-        )
+        primary_url = f"{ENDPOINTS[EndpointName.DEEPSEEK].base_url}/chat/completions"
+        fallback_url = f"{ENDPOINTS[EndpointName.BAILIAN].base_url}/chat/completions"
 
         async with respx.mock(assert_all_mocked=False) as respx_mock:
             primary_route = respx_mock.post(primary_url)
             primary_route.mock(
-                side_effect=[
-                    httpx.ConnectError("mock connection refused") for _ in range(3)
-                ],
+                side_effect=[httpx.ConnectError("mock connection refused") for _ in range(3)],
             )
             respx_mock.post(fallback_url).respond(
                 status_code=200,

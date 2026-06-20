@@ -8,6 +8,7 @@ shutdown wait / shutdown cancel / stop signal / commit①~create_task lock relea
 - 纯 async 单元（#5 #6）：直操 asyncio.wait 逻辑，不需 HTTP；
 - 协程级直测（#2 #3）：直接驱动 stream_generator / run_llm_pipeline。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -75,28 +76,35 @@ async def test_normal_stream_emits_deltas_and_end(lifecycle_ctx):
     current_type = None
     for line in resp.text.split("\n"):
         if line.startswith("event:"):
-            current_type = line[len("event:"):].strip()
+            current_type = line[len("event:") :].strip()
         elif line.startswith("data:") and current_type is not None:
             frames.append(current_type)
     assert frames == ["session_meta", "delta", "delta", "delta", "end"]
 
     # Re-parse for sid
     import json as _json
+
     events = []
     ct = None
     for line in resp.text.split("\n"):
         if line.startswith("event:"):
-            ct = line[len("event:"):].strip()
+            ct = line[len("event:") :].strip()
         elif line.startswith("data:") and ct is not None:
-            events.append((ct, _json.loads(line[len("data:"):].strip())))
+            events.append((ct, _json.loads(line[len("data:") :].strip())))
 
     sid = events[0][1]["session_id"]
 
     # DB: human + ai rows committed
     lifecycle_ctx.assert_sess.expire_all()
-    msgs = (await lifecycle_ctx.assert_sess.execute(
-        select(Message).where(Message.session_id == sid).order_by(Message.created_at)
-    )).scalars().all()
+    msgs = (
+        (
+            await lifecycle_ctx.assert_sess.execute(
+                select(Message).where(Message.session_id == sid).order_by(Message.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
     assert len(msgs) == 2
     assert msgs[1].role == MessageRole.ai
     assert msgs[1].content == "你好吗"
@@ -140,8 +148,10 @@ async def test_client_disconnect_keeps_bg_task_running(lifecycle_ctx):
 
     # 准备段一参数
     from tests.conftest import make_chat_context
+
     ctx = make_chat_context(
-        session_id=sid, child_user_id=child.id,
+        session_id=sid,
+        child_user_id=child.id,
         user_input="测试",
         settings=lifecycle_ctx.rr.settings,
         db_session_factory=lifecycle_ctx.rr.db_session_factory,
@@ -160,10 +170,18 @@ async def test_client_disconnect_keeps_bg_task_running(lifecycle_ctx):
     # 同时启动段一 segment task
     task = asyncio.create_task(
         run_llm_pipeline(
-            rr=rr, redis=lifecycle_ctx.redis_client, sid=sid, hid=hid, nonce=nonce,
-            child_user_id=child.id, turn_number=1,
-            initial_state={"messages": []}, ctx=ctx,
-            queue=queue, state=state, stop_event=stop_event,
+            rr=rr,
+            redis=lifecycle_ctx.redis_client,
+            sid=sid,
+            hid=hid,
+            nonce=nonce,
+            child_user_id=child.id,
+            turn_number=1,
+            initial_state={"messages": []},
+            ctx=ctx,
+            queue=queue,
+            state=state,
+            stop_event=stop_event,
         ),
         name=f"chat-llm-{sid}",
     )
@@ -185,9 +203,11 @@ async def test_client_disconnect_keeps_bg_task_running(lifecycle_ctx):
 
     # 断言段一仍 commit② + release lock
     lifecycle_ctx.assert_sess.expire_all()
-    ai_msg = (await lifecycle_ctx.assert_sess.execute(
-        select(Message).where(Message.session_id == sid, Message.role == MessageRole.ai)
-    )).scalar_one_or_none()
+    ai_msg = (
+        await lifecycle_ctx.assert_sess.execute(
+            select(Message).where(Message.session_id == sid, Message.role == MessageRole.ai)
+        )
+    ).scalar_one_or_none()
     assert ai_msg is not None, "ai row should be committed even after disconnect"
     assert ai_msg.content == "你好世界"
 
@@ -223,8 +243,10 @@ async def test_queue_full_triggers_flow_pause_and_headless_continuation(lifecycl
         yield {"finish_reason": "stop"}
 
     from tests.conftest import make_chat_context
+
     ctx = make_chat_context(
-        session_id=sid, child_user_id=child.id,
+        session_id=sid,
+        child_user_id=child.id,
         user_input="测试",
         settings=lifecycle_ctx.rr.settings,
         db_session_factory=lifecycle_ctx.rr.db_session_factory,
@@ -240,10 +262,18 @@ async def test_queue_full_triggers_flow_pause_and_headless_continuation(lifecycl
 
     task = asyncio.create_task(
         run_llm_pipeline(
-            rr=rr, redis=lifecycle_ctx.redis_client, sid=sid, hid=hid, nonce=nonce,
-            child_user_id=child.id, turn_number=1,
-            initial_state={"messages": []}, ctx=ctx,
-            queue=queue, state=state, stop_event=stop_event,
+            rr=rr,
+            redis=lifecycle_ctx.redis_client,
+            sid=sid,
+            hid=hid,
+            nonce=nonce,
+            child_user_id=child.id,
+            turn_number=1,
+            initial_state={"messages": []},
+            ctx=ctx,
+            queue=queue,
+            state=state,
+            stop_event=stop_event,
         ),
         name=f"chat-llm-{sid}",
     )
@@ -265,9 +295,11 @@ async def test_queue_full_triggers_flow_pause_and_headless_continuation(lifecycl
 
     # 段一仍然完成了 commit②
     lifecycle_ctx.assert_sess.expire_all()
-    ai_msg = (await lifecycle_ctx.assert_sess.execute(
-        select(Message).where(Message.session_id == sid, Message.role == MessageRole.ai)
-    )).scalar_one_or_none()
+    ai_msg = (
+        await lifecycle_ctx.assert_sess.execute(
+            select(Message).where(Message.session_id == sid, Message.role == MessageRole.ai)
+        )
+    ).scalar_one_or_none()
     assert ai_msg is not None, "ai row should be committed in headless mode"
     assert "x" in ai_msg.content
 
@@ -297,13 +329,14 @@ async def test_llm_pipeline_exception_rolls_back_without_ai_row(lifecycle_ctx):
     assert resp.status_code == 200
 
     import json as _json
+
     events = []
     ct = None
     for line in resp.text.split("\n"):
         if line.startswith("event:"):
-            ct = line[len("event:"):].strip()
+            ct = line[len("event:") :].strip()
         elif line.startswith("data:") and ct is not None:
-            events.append((ct, _json.loads(line[len("data:"):].strip())))
+            events.append((ct, _json.loads(line[len("data:") :].strip())))
 
     # Error frame present
     assert any(ev[0] == "error" for ev in events), "error frame should be present"
@@ -311,9 +344,15 @@ async def test_llm_pipeline_exception_rolls_back_without_ai_row(lifecycle_ctx):
 
     # No ai row
     lifecycle_ctx.assert_sess.expire_all()
-    ai_msgs = (await lifecycle_ctx.assert_sess.execute(
-        select(Message).where(Message.session_id == sid, Message.role == MessageRole.ai)
-    )).scalars().all()
+    ai_msgs = (
+        (
+            await lifecycle_ctx.assert_sess.execute(
+                select(Message).where(Message.session_id == sid, Message.role == MessageRole.ai)
+            )
+        )
+        .scalars()
+        .all()
+    )
     assert len(ai_msgs) == 0, "no ai row should exist after pipeline error"
 
     # Lock released
@@ -405,6 +444,7 @@ def _make_real_rr_for_shutdown(engine=None, redis_client=None) -> RuntimeResourc
         db_session_factory=MagicMock(),
         audit_redis=redis_client or MagicMock(),
         arq_pool=AsyncMock(),
+        shared_http_client=MagicMock(),
         main_graph=MagicMock(),
         audit_graph=MagicMock(),
     )
@@ -434,6 +474,7 @@ async def _lifespan_for_test(app):
     but runs the shutdown block on exit.
     """
     from app.main import lifespan
+
     async with lifespan(app):
         yield
 
@@ -472,13 +513,14 @@ async def test_stop_signal_breaks_pipeline_with_stopped_end_reason(lifecycle_ctx
     assert resp.status_code == 200
 
     import json as _json
+
     events = []
     ct = None
     for line in resp.text.split("\n"):
         if line.startswith("event:"):
-            ct = line[len("event:"):].strip()
+            ct = line[len("event:") :].strip()
         elif line.startswith("data:") and ct is not None:
-            events.append((ct, _json.loads(line[len("data:"):].strip())))
+            events.append((ct, _json.loads(line[len("data:") :].strip())))
 
     assert any(ev[0] == "stopped" for ev in events), "stopped frame should be present"
     stopped_ev = next(ev for ev in events if ev[0] == "stopped")
@@ -489,9 +531,13 @@ async def test_stop_signal_breaks_pipeline_with_stopped_end_reason(lifecycle_ctx
 
     # DB: partial ai text committed
     lifecycle_ctx.assert_sess.expire_all()
-    ai_msg = (await lifecycle_ctx.assert_sess.execute(
-        select(Message).where(Message.session_id == captured_sid, Message.role == MessageRole.ai)
-    )).scalar_one_or_none()
+    ai_msg = (
+        await lifecycle_ctx.assert_sess.execute(
+            select(Message).where(
+                Message.session_id == captured_sid, Message.role == MessageRole.ai
+            )
+        )
+    ).scalar_one_or_none()
     assert ai_msg is not None, "ai row should exist for StopWithAi"
     assert ai_msg.finish_reason == "user_stopped"
 
@@ -517,9 +563,12 @@ async def test_lock_released_on_non_http_exception_between_commit1_and_create_ta
 
     # 种子一个已知 sid 的 session，使 handler 使用此 sid
     from uuid import uuid4 as _uuid4
+
     known_sid = _uuid4()
     lifecycle_ctx.seed_sess.add(
-        SessionModel(id=known_sid, child_user_id=child.id, title="注入测试", status=MessageStatus.active)
+        SessionModel(
+            id=known_sid, child_user_id=child.id, title="注入测试", status=MessageStatus.active
+        )
     )
     await lifecycle_ctx.seed_sess.commit()
 
@@ -551,6 +600,5 @@ async def test_lock_released_on_non_http_exception_between_commit1_and_create_ta
     # except Exception 块应已调用 release_session_lock（无 180s 残留）
     lock_exists = await lifecycle_ctx.redis_client.exists(f"chat:lock:{known_sid}")
     assert not lock_exists, (
-        f"Session lock chat:lock:{known_sid} should have been released "
-        f"by except Exception handler"
+        f"Session lock chat:lock:{known_sid} should have been released by except Exception handler"
     )

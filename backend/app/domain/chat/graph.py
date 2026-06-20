@@ -327,7 +327,7 @@ async def _handle_compress(
         summary,
         to_compress,
     )
-    c_llm = build_compression_llm(ctx.settings)
+    c_llm = build_compression_llm(ctx.settings, http_async_client=ctx.shared_http_client)
     c_result = await c_llm.ainvoke(c_input)
     raw = c_result.content if hasattr(c_result, "content") else str(c_result)
     new_summary = extract_compression_summary(raw)
@@ -643,7 +643,7 @@ async def call_main_llm(
     return await _stream_llm_chunks(
         state,
         ctx,
-        llm=build_main_llm(ctx.settings),
+        llm=build_main_llm(ctx.settings, http_async_client=ctx.shared_http_client),
         # 由 Role.MAIN 解析模型档,reasoning 字段提取路径与 main 角色绑定一致。
         profile=role_profile(Role.MAIN),
         intervention_type=InterventionType.guided if guidance is not None else None,
@@ -671,7 +671,7 @@ async def call_crisis_llm(
     return await _stream_llm_chunks(
         state,
         ctx,
-        llm=build_crisis_llm(ctx.settings),
+        llm=build_crisis_llm(ctx.settings, http_async_client=ctx.shared_http_client),
         # crisis 复用 main 角色绑定,模型档同步沿用 main。
         profile=role_profile(Role.MAIN),
         intervention_type=InterventionType.crisis,
