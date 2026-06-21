@@ -29,13 +29,16 @@ from app.core.locks import (
 )
 from app.core.redis import get_redis
 from app.core.runtime import RuntimeResources
-from app.core.time import SHANGHAI, age_at
+from app.core.time import SHANGHAI
 from app.domain.accounts.models import ChildProfile, User
 from app.domain.accounts.schemas import (
     AccountOut,
     ChildProfileOut,
-    ChildProfileSnapshot,
     CurrentAccount,
+)
+from app.domain.accounts.service import (
+    build_child_profile_snapshot,
+    load_child_profile,
 )
 from app.domain.auth.deps import get_current_account, require_child
 from app.domain.chat.context_schema import ChatContextSchema
@@ -518,21 +521,11 @@ async def chat_stream(
                 raise HTTPException(status.HTTP_403_FORBIDDEN, "SessionForbidden")
 
             # ---- 准备 child_profile 数据 ----
-            child_profile = await db.scalar(
-                select(ChildProfile).where(ChildProfile.child_user_id == current.id)
-            )
+            child_profile = await load_child_profile(db, current.id)
             if child_profile is None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "ChildProfileNotFound")
 
-            profile_snapshot = ChildProfileSnapshot(
-                child_user_id=child_profile.child_user_id,
-                nickname=child_profile.nickname,
-                gender=child_profile.gender.value,
-                birth_date=child_profile.birth_date,
-                age=age_at(child_profile.birth_date, tz="Asia/Shanghai"),
-                sensitivity=child_profile.sensitivity,
-                custom_redlines=child_profile.custom_redlines,
-            )
+            profile_snapshot = build_child_profile_snapshot(child_profile)
 
             # ---- 决策矩阵 + 首轮 / 续轮事务 ----
             result = await intake_human_message(db, sid, session, req)

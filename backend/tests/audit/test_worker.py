@@ -37,6 +37,7 @@ def _fake_child_profile_dict() -> dict:
         "age": 12,
         "sensitivity": None,
         "custom_redlines": None,
+        "concerns": None,
     }
 
 

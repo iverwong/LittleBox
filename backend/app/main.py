@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.auth import router as auth_router
 from app.api.bind_tokens import router as bind_tokens_router
+from app.api.child_profiles import router as child_profiles_router
 from app.api.children import router as children_router
 from app.api.health import router as health_router
 from app.api.me import router as me_router
@@ -116,6 +117,7 @@ def create_app() -> FastAPI:
     application.include_router(health_router)
     application.include_router(auth_router)
     application.include_router(children_router)
+    application.include_router(child_profiles_router)
     application.include_router(bind_tokens_router)
     application.include_router(me_router)
     return application

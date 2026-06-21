@@ -116,6 +116,79 @@ class ChildProfileOut(BaseModel):
     birth_date: date
 
 
+class SensitivityConfig(BaseModel):
+    """家长对 6 个风险维度的关注度配置(1–9,默认 5)。
+
+    数值语义对齐 audit/prompts.py 的 LEVEL_MAP(1=完全不关注 … 5=正常关注 …
+    9=极度关注):配置越高 = 该维度家长越关注、审查越严;越低 = 越宽容。作为
+    前端 / API / 审查 prompt 共用 6 个 key 的单一事实源。
+
+    Attributes:
+        emotional: 情绪与心理。
+        social: 人际与社交。
+        values: 价值观与世界观。
+        boundaries: AI 应用边界。
+        academic: 学习独立性。
+        lifestyle: 生活方式。
+    """
+
+    emotional: int = Field(5, ge=1, le=9, description="情绪与心理")
+    social: int = Field(5, ge=1, le=9, description="人际与社交")
+    values: int = Field(5, ge=1, le=9, description="价值观与世界观")
+    boundaries: int = Field(5, ge=1, le=9, description="AI 应用边界")
+    academic: int = Field(5, ge=1, le=9, description="学习独立性")
+    lifestyle: int = Field(5, ge=1, le=9, description="生活方式")
+
+
+class UpdateChildProfileRequest(BaseModel):
+    """PATCH /api/v1/child-profiles/{child_user_id} 请求体(部分更新)。
+
+    全字段 Optional:未传 = 不动。可空字段(concerns / custom_redlines /
+    sensitivity)传 null = 清空;非空字段(nickname / age / gender)传 null 视为
+    不动(DB NOT NULL,语义不允许清空)。sensitivity 为整体替换(提交完整
+    6 维),不做维度级 merge。
+
+    Attributes:
+        nickname: 家长设置的子女昵称,长度 1-32。
+        age: 子女年龄,合法范围 3-21 岁;后端重算 birth_date。
+        gender: 性别,枚举值 male / female / unknown。
+        concerns: 家长自然语言描述的关注点,空串视为清空。
+        sensitivity: 6 维度关注度配置,整体替换。
+        custom_redlines: 家长自定义红线话题,空串视为清空。
+    """
+
+    nickname: Optional[str] = Field(None, min_length=1, max_length=32)
+    age: Optional[int] = Field(None, ge=3, le=21)
+    gender: Optional[Literal["male", "female", "unknown"]] = None
+    concerns: Optional[str] = None
+    sensitivity: Optional[SensitivityConfig] = None
+    custom_redlines: Optional[str] = None
+
+
+class ChildProfileDetail(BaseModel):
+    """GET / PATCH /api/v1/child-profiles/{child_user_id} 响应体(父端全字段)。
+
+    Attributes:
+        child_user_id: 子用户 UUID。
+        nickname: 子女昵称。
+        gender: 性别。
+        birth_date: 出生日期。
+        age: 由 `birth_date` + 时区即时换算的整岁数(消费方零开销读)。
+        concerns: 家长自然语言描述的关注点,可空。
+        sensitivity: 6 维度关注度配置,可空;读回经 `SensitivityConfig` 规整。
+        custom_redlines: 家长自定义红线话题,可空。
+    """
+
+    child_user_id: uuid.UUID
+    nickname: str
+    gender: Literal["male", "female", "unknown"]
+    birth_date: date
+    age: int
+    concerns: Optional[str]
+    sensitivity: Optional[SensitivityConfig]
+    custom_redlines: Optional[str]
+
+
 @dataclass(frozen=True)
 class ChildProfileSnapshot:
     """跨域传输的 child profile 投影,chat 与 audit 共用。
@@ -136,6 +209,7 @@ class ChildProfileSnapshot:
         age: 由 `birth_date` + 时区即时换算的整岁数(消费方零开销读)。
         sensitivity: 6 维度敏感度 JSON,可空。
         custom_redlines: 家长自定义红线文本,可空。
+        concerns: 家长自然语言描述的关注点,注入审查 prompt(仅 audit)。
     """
 
     child_user_id: uuid.UUID
@@ -143,5 +217,6 @@ class ChildProfileSnapshot:
     gender: str
     birth_date: date
     age: int
-    sensitivity: dict | None
-    custom_redlines: str | None
+    sensitivity: Optional[dict]
+    custom_redlines: Optional[str]
+    concerns: Optional[str]

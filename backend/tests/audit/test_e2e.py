@@ -90,6 +90,7 @@ async def test_e2e_enqueue_to_ready(concurrent_db_sessions):
         age=12,
         sensitivity=None,
         custom_redlines=None,
+            concerns=None,
     )
 
     # 1) enqueue_audit → pending（§H.2：arq_pool + audit_redis 直接注入）

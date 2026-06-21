@@ -26,6 +26,7 @@ class TestAuditSystemPrompt:
             age=12,
             sensitivity=None,
             custom_redlines=None,
+            concerns=None,
         )
         return build_audit_system_prompt(profile, max_iter=5).content
 

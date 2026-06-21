@@ -49,6 +49,7 @@ def _make_fake_runtime() -> object:
         age=12,
         sensitivity=None,
         custom_redlines=None,
+            concerns=None,
     )
     ctx = AuditContextSchema(
         session_id=SID,

@@ -14,14 +14,15 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, timezone
 
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 from redis.asyncio import Redis
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.enums import UserRole
+from app.core.enums import Gender, UserRole
 from app.core.redis import commit_with_redis
+from app.core.time import age_at
 from app.domain.accounts.models import (
     AuthToken,
     ChildProfile,
@@ -32,9 +33,11 @@ from app.domain.accounts.models import (
     User,
 )
 from app.domain.accounts.schemas import (
+    ChildProfileSnapshot,
     ChildSummary,
     CreateChildRequest,
     CurrentAccount,
+    UpdateChildProfileRequest,
 )
 from app.domain.audit.models import AuditRecord, RollingSummary
 from app.domain.auth.tokens import revoke_all_active_tokens
@@ -328,3 +331,126 @@ async def hard_delete_child(
     )
 
     return deleted_tables
+
+
+# ---------------------------------------------------------------------------
+# ChildProfile 查询复用 + snapshot 构造 + 部分更新
+# ---------------------------------------------------------------------------
+
+
+async def load_child_profile(db: AsyncSession, child_user_id: uuid.UUID) -> ChildProfile | None:
+    """按 child_user_id 加载 profile(自身 / LLM 路径用,无 family 约束)。
+
+    Args:
+        db: 数据库会话。
+        child_user_id: 子账号 `User.id`。
+
+    Returns:
+        命中的 `ChildProfile`;不存在返回 `None`。
+    """
+    return (
+        await db.execute(select(ChildProfile).where(ChildProfile.child_user_id == child_user_id))
+    ).scalar_one_or_none()
+
+
+async def load_child_profile_in_family(
+    db: AsyncSession, *, child_user_id: uuid.UUID, family_id: uuid.UUID
+) -> ChildProfile | None:
+    """父端访问 child profile 的唯一入口,family 归属焊进同一条 WHERE(防 IDOR)。
+
+    Args:
+        db: 数据库会话。
+        child_user_id: 目标子账号 `User.id`。
+        family_id: 当前父账号所属 family,作为 WHERE 约束的一部分。
+
+    Returns:
+        本 family 内命中的 `ChildProfile`;不存在或越权返回 `None`。
+    """
+    return (
+        await db.execute(
+            select(ChildProfile)
+            .join(User, User.id == ChildProfile.child_user_id)
+            .where(
+                ChildProfile.child_user_id == child_user_id,
+                User.family_id == family_id,
+                User.role == UserRole.child,
+                User.is_active.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+
+
+def build_child_profile_snapshot(profile: ChildProfile) -> ChildProfileSnapshot:
+    """构造 snapshot,收口 age_at 换算与字段映射(含 concerns)。
+
+    Args:
+        profile: 已加载的 `ChildProfile` ORM 对象。
+
+    Returns:
+        填好全部字段的 `ChildProfileSnapshot`(frozen)。
+    """
+    return ChildProfileSnapshot(
+        child_user_id=profile.child_user_id,
+        nickname=profile.nickname,
+        gender=profile.gender.value,
+        birth_date=profile.birth_date,
+        age=age_at(profile.birth_date, tz="Asia/Shanghai"),
+        sensitivity=profile.sensitivity,
+        custom_redlines=profile.custom_redlines,
+        concerns=profile.concerns,
+    )
+
+
+async def update_child_profile(
+    db: AsyncSession,
+    redis: Redis,
+    *,
+    parent: CurrentAccount,
+    child_user_id: uuid.UUID,
+    payload: UpdateChildProfileRequest,
+) -> ChildProfile:
+    """父端部分更新子账号配置。
+
+    PATCH 语义:仅 `exclude_unset` 的字段参与更新;非空字段(nickname / age /
+    gender)传 null 视为不动,可空字段(concerns / custom_redlines /
+    sensitivity)传 null 即清空;sensitivity 为整体替换。family 归属在
+    `load_child_profile_in_family` 内焊入 WHERE。
+
+    Args:
+        db: 数据库会话。
+        redis: Redis 客户端,随 commit 一并 flush staged ops。
+        parent: 当前父账号上下文,提供 `family_id`。
+        child_user_id: 目标子账号 `User.id`。
+        payload: 部分更新请求体。
+
+    Returns:
+        更新后的 `ChildProfile`。
+
+    Raises:
+        HTTPException: child 不存在或非本 family 时抛 404。
+    """
+    profile = await load_child_profile_in_family(
+        db, child_user_id=child_user_id, family_id=parent.family_id
+    )
+    if profile is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "child not found in family")
+
+    data = payload.model_dump(exclude_unset=True)  # PATCH:仅动传入字段
+    # 非空字段:传 null 视为不动
+    if data.get("nickname") is not None:
+        profile.nickname = data["nickname"]
+    if data.get("gender") is not None:
+        profile.gender = Gender(data["gender"])
+    if data.get("age") is not None:
+        profile.birth_date = age_to_birth_date(data["age"])  # 重算出生日期
+    # 可空字段:传 null 即清空
+    if "concerns" in data:
+        profile.concerns = data["concerns"]
+    if "custom_redlines" in data:
+        profile.custom_redlines = data["custom_redlines"]
+    if "sensitivity" in data:
+        # SensitivityConfig 已校验,dict | None 直落 JSONB
+        profile.sensitivity = data["sensitivity"]
+
+    await commit_with_redis(db, redis)  # 无 staged Redis op → 等价干净 DB commit
+    return profile
