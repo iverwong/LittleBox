@@ -19,6 +19,7 @@ from app.core.time import age_at
 from app.domain.accounts.models import ChildProfile
 from app.domain.accounts.schemas import (
     ChildProfileDetail,
+    CurrentAccount,
     SensitivityConfig,
     UpdateChildProfileRequest,
 )
@@ -55,7 +56,7 @@ def _to_detail(profile: ChildProfile) -> ChildProfileDetail:
 @router.get("/{child_user_id}", response_model=ChildProfileDetail)
 async def get_child_profile(
     child_user_id: uuid.UUID,
-    parent: Annotated[..., Depends(require_parent)],
+    parent: Annotated[CurrentAccount, Depends(require_parent)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ChildProfileDetail:
     """父端读取子账号配置,``GET /api/v1/child-profiles/{child_user_id}``。仅 parent。
@@ -88,7 +89,7 @@ async def get_child_profile(
 async def patch_child_profile(
     child_user_id: uuid.UUID,
     payload: UpdateChildProfileRequest,
-    parent: Annotated[..., Depends(require_parent)],
+    parent: Annotated[CurrentAccount, Depends(require_parent)],
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> ChildProfileDetail:
