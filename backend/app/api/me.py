@@ -133,7 +133,7 @@ async def get_my_profile(
     return ChildProfileOut(
         child_user_id=profile.child_user_id,
         nickname=profile.nickname,
-        gender=profile.gender.value,
+        gender=profile.gender,
         birth_date=profile.birth_date,
     )
 

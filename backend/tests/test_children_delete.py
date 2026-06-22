@@ -313,7 +313,7 @@ class TestDeleteChildTransactionRollback:
         ))
         db_session.add(ChildProfile(
             child_user_id=child.id, created_by=parent.id,
-            birth_date=date(2015, 1, 1), gender="unknown", nickname="rollback_test",
+            birth_date=date(2015, 1, 1), gender="unknown", nickname="rb_test",
         ))
         await db_session.flush()
 

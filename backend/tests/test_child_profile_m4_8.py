@@ -1,4 +1,4 @@
-"""M4.8 B1 TDD：ChildProfile.nickname 约束验证。"""
+"""M4.8 B1 TDD:ChildProfile.nickname 约束验证。"""
 from __future__ import annotations
 
 from datetime import date
@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 @pytest_asyncio.fixture
 async def _family_and_parent(db_session: AsyncSession) -> tuple[Family, User]:
-    """最小 family + parent，用于构造 ChildProfile。"""
+    """最小 family + parent,用于构造 ChildProfile。"""
     fam = Family()
     db_session.add(fam)
     await db_session.flush()
@@ -30,12 +30,12 @@ async def _family_and_parent(db_session: AsyncSession) -> tuple[Family, User]:
 
 class TestNicknameMaxLength:
     @pytest.mark.asyncio
-    async def test_nickname_32_chars_ok(
+    async def test_nickname_12_chars_ok(
         self,
         db_session: AsyncSession,
         _family_and_parent: tuple[Family, User],
     ) -> None:
-        """nickname 32 字符 → 成功（边界值）"""
+        """nickname 12 字符 → 成功(M11 收窄后的边界值)。"""
         fam, parent = _family_and_parent
 
         child = User(family_id=fam.id, role=UserRole.child, is_active=True)
@@ -45,7 +45,7 @@ class TestNicknameMaxLength:
         profile = ChildProfile(
             child_user_id=child.id,
             created_by=parent.id,
-            nickname="a" * 32,
+            nickname="a" * 12,
             birth_date=date(2016, 4, 27),
             gender=Gender.unknown,
         )
@@ -54,12 +54,12 @@ class TestNicknameMaxLength:
         await db_session.rollback()
 
     @pytest.mark.asyncio
-    async def test_nickname_max_length_32(
+    async def test_nickname_max_length_12(
         self,
         db_session: AsyncSession,
         _family_and_parent: tuple[Family, User],
     ) -> None:
-        """nickname 33 字符 → PostgreSQL 抛 StringDataRightTruncation（VARCHAR(32) 约束）"""
+        """nickname 13 字符 → PostgreSQL 抛 StringDataRightTruncation(VARCHAR(12) 约束)。"""
         fam, parent = _family_and_parent
 
         child = User(family_id=fam.id, role=UserRole.child, is_active=True)
@@ -69,15 +69,15 @@ class TestNicknameMaxLength:
         profile = ChildProfile(
             child_user_id=child.id,
             created_by=parent.id,
-            nickname="a" * 33,  # 超出 VARCHAR(32)
+            nickname="a" * 13,  # 超出 VARCHAR(12)
             birth_date=date(2016, 4, 27),
             gender=Gender.unknown,
         )
         db_session.add(profile)
-        # PostgreSQL VARCHAR(32) 强制截断检查
+        # PostgreSQL VARCHAR(12) 强制截断检查
         with pytest.raises(Exception) as exc_info:
             await db_session.flush()
-        # 验证是 DB 层面异常（非 SQLAlchemy 包装）
+        # 验证是 DB 层面异常(非 SQLAlchemy 包装)
         assert "StringDataRightTruncation" in str(type(exc_info.value).__name__) or \
                "value too long" in str(exc_info.value).lower()
         await db_session.rollback()

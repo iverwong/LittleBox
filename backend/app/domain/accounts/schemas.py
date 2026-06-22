@@ -12,9 +12,10 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from app.core.enums import UserRole
+from app.core.enums import Gender, UserRole
+from app.core.time import age_at
 
 
 class AccountOut(BaseModel):
@@ -60,12 +61,12 @@ class CreateChildRequest(BaseModel):
     """POST /children 请求体。
 
     Attributes:
-        nickname: 家长设置的子女昵称,长度 1-32。
+        nickname: 家长设置的子女昵称,长度 1-12。
         age: 子女年龄,合法范围 3-21 岁。
         gender: 性别,枚举值 male / female / unknown。
     """
 
-    nickname: str = Field(min_length=1, max_length=32, description="家长设置的子女昵称")
+    nickname: str = Field(min_length=1, max_length=12, description="家长设置的子女昵称")
     age: int = Field(ge=3, le=21, description="子女年龄(岁)")
     gender: Literal["male", "female", "unknown"] = Field(description="性别(必填,仅三值之一)")
 
@@ -112,7 +113,7 @@ class ChildProfileOut(BaseModel):
 
     child_user_id: uuid.UUID
     nickname: str
-    gender: Literal["male", "female", "unknown"]
+    gender: Gender
     birth_date: date
 
 
@@ -140,40 +141,61 @@ class SensitivityConfig(BaseModel):
     lifestyle: int = Field(5, ge=1, le=9, description="生活方式")
 
 
-class UpdateChildProfileRequest(BaseModel):
-    """PATCH /api/v1/child-profiles/{child_user_id} 请求体(部分更新)。
+class PutChildProfileRequest(BaseModel):
+    """PUT /api/v1/child-profiles/{child_user_id} 请求体(全量提交语义)。
 
-    全字段 Optional:未传 = 不动。可空字段(concerns / custom_redlines /
-    sensitivity)传 null = 清空;非空字段(nickname / age / gender)传 null 视为
-    不动(DB NOT NULL,语义不允许清空)。sensitivity 为整体替换(提交完整
-    6 维),不做维度级 merge。
+    每次携带全部可编辑字段。必输:nickname / birth_date / gender /
+    sensitivity。可空(选填):concerns / custom_redlines,空串归一为 None
+    = 清空。不收 age:年龄展示由前端用 birth_date 本地换算。
 
     Attributes:
-        nickname: 家长设置的子女昵称,长度 1-32。
-        age: 子女年龄,合法范围 3-21 岁;后端重算 birth_date。
-        gender: 性别,枚举值 male / female / unknown。
-        concerns: 家长自然语言描述的关注点,空串视为清空。
+        nickname: 家长设置的子女昵称,长度 1-12。
+        birth_date: 出生日期;服务端按 Asia/Shanghai 时区即时换算整岁,
+            越界 [3, 21] → 422。
+        gender: 性别枚举。
+        concerns: 家长自然语言描述的关注点,空串归一为 None。
         sensitivity: 6 维度关注度配置,整体替换。
-        custom_redlines: 家长自定义红线话题,空串视为清空。
+        custom_redlines: 家长自定义红线话题,空串归一为 None。
     """
 
-    nickname: Optional[str] = Field(None, min_length=1, max_length=32)
-    age: Optional[int] = Field(None, ge=3, le=21)
-    gender: Optional[Literal["male", "female", "unknown"]] = None
-    concerns: Optional[str] = None
-    sensitivity: Optional[SensitivityConfig] = None
-    custom_redlines: Optional[str] = None
+    nickname: str = Field(min_length=1, max_length=12)
+    birth_date: date
+    gender: Gender
+    sensitivity: SensitivityConfig
+    concerns: Optional[str] = Field(None, max_length=500)
+    custom_redlines: Optional[str] = Field(None, max_length=500)
+
+    @field_validator("birth_date")
+    @classmethod
+    def _age_in_range(cls, v: date) -> date:
+        """birth_date 换算整岁必须 ∈ [3, 21],否则 422。
+
+        与 `app.core.time.age_at` 对齐时区,前端拿到 birth_date 后本地
+        用同一函数做显示换算。
+        """
+        age = age_at(v, tz="Asia/Shanghai")
+        if not (3 <= age <= 21):
+            raise ValueError("birth_date out of supported age range [3, 21]")
+        return v
+
+    @field_validator("concerns", "custom_redlines")
+    @classmethod
+    def _blank_to_none(cls, v: Optional[str]) -> Optional[str]:
+        """空串 / 纯空格归一为 None,落库即清空(DB 列允许 NULL)。"""
+        if v is None:
+            return None
+        v = v.strip()
+        return v or None
 
 
 class ChildProfileDetail(BaseModel):
-    """GET / PATCH /api/v1/child-profiles/{child_user_id} 响应体(父端全字段)。
+    """GET / PUT /api/v1/child-profiles/{child_user_id} 响应体(父端全字段)。
 
     Attributes:
         child_user_id: 子用户 UUID。
         nickname: 子女昵称。
-        gender: 性别。
+        gender: 性别枚举。
         birth_date: 出生日期。
-        age: 由 `birth_date` + 时区即时换算的整岁数(消费方零开销读)。
         concerns: 家长自然语言描述的关注点,可空。
         sensitivity: 6 维度关注度配置,可空;读回经 `SensitivityConfig` 规整。
         custom_redlines: 家长自定义红线话题,可空。
@@ -181,9 +203,8 @@ class ChildProfileDetail(BaseModel):
 
     child_user_id: uuid.UUID
     nickname: str
-    gender: Literal["male", "female", "unknown"]
+    gender: Gender
     birth_date: date
-    age: int
     concerns: Optional[str]
     sensitivity: Optional[SensitivityConfig]
     custom_redlines: Optional[str]

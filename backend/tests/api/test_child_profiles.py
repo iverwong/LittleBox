@@ -142,13 +142,12 @@ class TestGetChildProfile:
     """GET /api/v1/child-profiles/{child_user_id} happy / 鉴权 / 越权。"""
 
     @pytest.mark.asyncio
-    async def test_parent_get_returns_full_fields(
-        self, api_client, parent_with_child
-    ) -> None:
+    async def test_parent_get_returns_full_fields(self, api_client, parent_with_child) -> None:
         """Given parent token + 本 family child
         When GET /api/v1/child-profiles/{id}
-        Then 200,返回包含 nickname / gender / birth_date / age / concerns /
-            sensitivity / custom_redlines 的全字段。
+        Then 200,返回包含 nickname / gender / birth_date / concerns /
+            sensitivity / custom_redlines 的全字段;age 不在响应体
+            (前端本地用 birth_date 换算)。
         """
         _, parent_token, child, _, _ = parent_with_child
 
@@ -165,7 +164,7 @@ class TestGetChildProfile:
         assert data["nickname"] == "小明"
         assert data["gender"] == "male"
         assert "birth_date" in data
-        assert "age" in data
+        assert "age" not in data  # 移除:年龄由前端用 birth_date 本地换算
         # 新增字段
         assert "concerns" in data
         assert "sensitivity" in data
@@ -218,22 +217,36 @@ class TestGetChildProfile:
         assert resp.status_code == 404
 
 
-class TestPatchChildProfile:
-    """PATCH /api/v1/child-profiles/{child_user_id} happy / 鉴权 / 越权。"""
+class TestPutChildProfile:
+    """PUT /api/v1/child-profiles/{child_user_id} 全量提交 happy / 鉴权 / 越权。"""
 
     @pytest.mark.asyncio
-    async def test_parent_patch_partial_update(
+    async def test_parent_put_full_update(
         self, api_client, db_session: AsyncSession, parent_with_child
     ) -> None:
         """Given parent token + 本 family child
-        When PATCH {nickname: "新昵称", concerns: "近期考试压力大"}
-        Then 200,响应体反映新值,后续 GET 也读到新值。
+        When PUT 提交全部 6 字段
+        Then 200,响应体反映新值,后续 GET 也读到新值;响应不含 age。
         """
         _, parent_token, child, _, _ = parent_with_child
 
-        resp = await api_client.patch(
+        resp = await api_client.put(
             f"/api/v1/child-profiles/{child.id}",
-            json={"nickname": "新昵称", "concerns": "近期考试压力大"},
+            json={
+                "nickname": "新昵称",
+                "birth_date": "2015-06-01",
+                "gender": "male",
+                "sensitivity": {
+                    "emotional": 5,
+                    "social": 5,
+                    "values": 5,
+                    "boundaries": 5,
+                    "academic": 5,
+                    "lifestyle": 5,
+                },
+                "concerns": "近期考试压力大",
+                "custom_redlines": None,
+            },
             headers={
                 "Authorization": f"Bearer {parent_token}",
                 "X-Device-Id": "test_device",
@@ -242,7 +255,11 @@ class TestPatchChildProfile:
         assert resp.status_code == 200, resp.json()
         data = resp.json()
         assert data["nickname"] == "新昵称"
+        assert data["birth_date"] == "2015-06-01"
+        assert data["gender"] == "male"
         assert data["concerns"] == "近期考试压力大"
+        assert data["custom_redlines"] is None
+        assert "age" not in data  # 响应体不再含 age
 
         # 再 GET 确认持久化
         get_resp = await api_client.get(
@@ -253,14 +270,13 @@ class TestPatchChildProfile:
             },
         )
         assert get_resp.json()["nickname"] == "新昵称"
+        assert get_resp.json()["birth_date"] == "2015-06-01"
         assert get_resp.json()["concerns"] == "近期考试压力大"
 
     @pytest.mark.asyncio
-    async def test_parent_patch_sensitivity_replaces(
-        self, api_client, parent_with_child
-    ) -> None:
-        """Given PATCH sensitivity=新 6 维配置
-        When PATCH
+    async def test_parent_put_sensitivity_replaces(self, api_client, parent_with_child) -> None:
+        """Given PUT sensitivity=新 6 维配置
+        When PUT 全量提交
         Then sensitivity 整体替换并经 SensitivityConfig 规整读回。
         """
         _, parent_token, child, _, _ = parent_with_child
@@ -273,9 +289,14 @@ class TestPatchChildProfile:
             "academic": 1,
             "lifestyle": 4,
         }
-        resp = await api_client.patch(
+        resp = await api_client.put(
             f"/api/v1/child-profiles/{child.id}",
-            json={"sensitivity": new_sens},
+            json={
+                "nickname": "小明",
+                "birth_date": "2015-06-01",
+                "gender": "male",
+                "sensitivity": new_sens,
+            },
             headers={
                 "Authorization": f"Bearer {parent_token}",
                 "X-Device-Id": "test_device",
@@ -287,26 +308,50 @@ class TestPatchChildProfile:
     @pytest.mark.asyncio
     async def test_unauthenticated_401(self, api_client, parent_with_child) -> None:
         """Given 无 token
-        When PATCH
+        When PUT
         Then 401。
         """
         _, _, child, _, _ = parent_with_child
-        resp = await api_client.patch(
+        resp = await api_client.put(
             f"/api/v1/child-profiles/{child.id}",
-            json={"nickname": "x"},
+            json={
+                "nickname": "x",
+                "birth_date": "2015-06-01",
+                "gender": "male",
+                "sensitivity": {
+                    "emotional": 5,
+                    "social": 5,
+                    "values": 5,
+                    "boundaries": 5,
+                    "academic": 5,
+                    "lifestyle": 5,
+                },
+            },
         )
         assert resp.status_code == 401
 
     @pytest.mark.asyncio
     async def test_child_token_403(self, api_client, parent_with_child) -> None:
         """Given child token
-        When PATCH
+        When PUT
         Then 403。
         """
         _, _, child, child_token, child_device = parent_with_child
-        resp = await api_client.patch(
+        resp = await api_client.put(
             f"/api/v1/child-profiles/{child.id}",
-            json={"nickname": "x"},
+            json={
+                "nickname": "x",
+                "birth_date": "2015-06-01",
+                "gender": "male",
+                "sensitivity": {
+                    "emotional": 5,
+                    "social": 5,
+                    "values": 5,
+                    "boundaries": 5,
+                    "academic": 5,
+                    "lifestyle": 5,
+                },
+            },
             headers={
                 "Authorization": f"Bearer {child_token}",
                 "X-Device-Id": child_device,
@@ -319,15 +364,27 @@ class TestPatchChildProfile:
         self, api_client, parent_with_child, other_family_with_child
     ) -> None:
         """Given parent A + family B 的 child
-        When PATCH
+        When PUT
         Then 404。
         """
         _, parent_token, _, _, _ = parent_with_child
         _, _, other_child, _ = other_family_with_child
 
-        resp = await api_client.patch(
+        resp = await api_client.put(
             f"/api/v1/child-profiles/{other_child.id}",
-            json={"nickname": "hack"},
+            json={
+                "nickname": "hack",
+                "birth_date": "2015-06-01",
+                "gender": "male",
+                "sensitivity": {
+                    "emotional": 5,
+                    "social": 5,
+                    "values": 5,
+                    "boundaries": 5,
+                    "academic": 5,
+                    "lifestyle": 5,
+                },
+            },
             headers={
                 "Authorization": f"Bearer {parent_token}",
                 "X-Device-Id": "test_device",
@@ -336,21 +393,72 @@ class TestPatchChildProfile:
         assert resp.status_code == 404
 
 
-class TestPatchValidation:
-    """PATCH 请求体 Pydantic 422 校验。"""
+class TestPutValidation:
+    """PUT 请求体 Pydantic 422 校验。"""
+
+    def _valid_body(self, **overrides) -> dict:
+        """合法 PUT 请求体基础版,可按需覆写字段。"""
+        body = {
+            "nickname": "小明",
+            "birth_date": "2015-06-01",
+            "gender": "male",
+            "sensitivity": {
+                "emotional": 5,
+                "social": 5,
+                "values": 5,
+                "boundaries": 5,
+                "academic": 5,
+                "lifestyle": 5,
+            },
+            "concerns": None,
+            "custom_redlines": None,
+        }
+        body.update(overrides)
+        return body
 
     @pytest.mark.asyncio
-    async def test_age_out_of_range_422(
-        self, api_client, parent_with_child
+    async def test_birth_date_persists(
+        self, api_client, db_session: AsyncSession, parent_with_child
     ) -> None:
-        """Given PATCH age=2(<3 合法下界)
-        When PATCH
-        Then 422。
+        """Given 合法 PUT 全量提交
+        When PUT
+        Then 200,DB 落库 birth_date 与提交一致。
         """
         _, parent_token, child, _, _ = parent_with_child
-        resp = await api_client.patch(
+        resp = await api_client.put(
             f"/api/v1/child-profiles/{child.id}",
-            json={"age": 2},
+            json=self._valid_body(nickname="新昵称", birth_date="2014-03-15"),
+            headers={
+                "Authorization": f"Bearer {parent_token}",
+                "X-Device-Id": "test_device",
+            },
+        )
+        assert resp.status_code == 200, resp.json()
+        data = resp.json()
+        assert data["birth_date"] == "2014-03-15"
+        assert data["nickname"] == "新昵称"
+
+        # DB 持久化验证
+        from sqlalchemy import select
+
+        refreshed = (
+            await db_session.execute(
+                select(ChildProfile).where(ChildProfile.child_user_id == child.id)
+            )
+        ).scalar_one()
+        assert refreshed.birth_date == date(2014, 3, 15)
+        assert refreshed.nickname == "新昵称"
+
+    @pytest.mark.asyncio
+    async def test_birth_date_too_young_422(self, api_client, parent_with_child) -> None:
+        """Given PUT birth_date=今天(算出 ~0 岁,过小)
+        When PUT
+        Then 422(field_validator 拒绝)。
+        """
+        _, parent_token, child, _, _ = parent_with_child
+        resp = await api_client.put(
+            f"/api/v1/child-profiles/{child.id}",
+            json=self._valid_body(birth_date=date.today().isoformat()),
             headers={
                 "Authorization": f"Bearer {parent_token}",
                 "X-Device-Id": "test_device",
@@ -359,20 +467,148 @@ class TestPatchValidation:
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_sensitivity_out_of_range_422(
-        self, api_client, parent_with_child
-    ) -> None:
-        """Given PATCH sensitivity.emotional=10(>9)
-        When PATCH
-        Then 422。
+    async def test_birth_date_too_old_422(self, api_client, parent_with_child) -> None:
+        """Given PUT birth_date=1980-01-01(算出 ~46 岁,过大)
+        When PUT
+        Then 422(field_validator 拒绝)。
         """
         _, parent_token, child, _, _ = parent_with_child
-        resp = await api_client.patch(
+        resp = await api_client.put(
             f"/api/v1/child-profiles/{child.id}",
-            json={"sensitivity": {"emotional": 10}},
+            json=self._valid_body(birth_date="1980-01-01"),
             headers={
                 "Authorization": f"Bearer {parent_token}",
                 "X-Device-Id": "test_device",
             },
         )
         assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_nickname_too_long_422(self, api_client, parent_with_child) -> None:
+        """Given PUT nickname 长度 13(>12)
+        When PUT
+        Then 422。
+        """
+        _, parent_token, child, _, _ = parent_with_child
+        resp = await api_client.put(
+            f"/api/v1/child-profiles/{child.id}",
+            json=self._valid_body(nickname="x" * 13),
+            headers={
+                "Authorization": f"Bearer {parent_token}",
+                "X-Device-Id": "test_device",
+            },
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_nickname_missing_422(self, api_client, parent_with_child) -> None:
+        """Given PUT 缺 nickname(必输)
+        When PUT
+        Then 422。
+        """
+        _, parent_token, child, _, _ = parent_with_child
+        body = self._valid_body()
+        del body["nickname"]
+        resp = await api_client.put(
+            f"/api/v1/child-profiles/{child.id}",
+            json=body,
+            headers={
+                "Authorization": f"Bearer {parent_token}",
+                "X-Device-Id": "test_device",
+            },
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_birth_date_missing_422(self, api_client, parent_with_child) -> None:
+        """Given PUT 缺 birth_date(必输)
+        When PUT
+        Then 422。
+        """
+        _, parent_token, child, _, _ = parent_with_child
+        body = self._valid_body()
+        del body["birth_date"]
+        resp = await api_client.put(
+            f"/api/v1/child-profiles/{child.id}",
+            json=body,
+            headers={
+                "Authorization": f"Bearer {parent_token}",
+                "X-Device-Id": "test_device",
+            },
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_sensitivity_missing_422(self, api_client, parent_with_child) -> None:
+        """Given PUT 缺 sensitivity(必输)
+        When PUT
+        Then 422。
+        """
+        _, parent_token, child, _, _ = parent_with_child
+        body = self._valid_body()
+        del body["sensitivity"]
+        resp = await api_client.put(
+            f"/api/v1/child-profiles/{child.id}",
+            json=body,
+            headers={
+                "Authorization": f"Bearer {parent_token}",
+                "X-Device-Id": "test_device",
+            },
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_sensitivity_out_of_range_422(self, api_client, parent_with_child) -> None:
+        """Given PUT sensitivity.emotional=10(>9)
+        When PUT
+        Then 422。
+        """
+        _, parent_token, child, _, _ = parent_with_child
+        bad_sens = {
+            "emotional": 10,
+            "social": 5,
+            "values": 5,
+            "boundaries": 5,
+            "academic": 5,
+            "lifestyle": 5,
+        }
+        resp = await api_client.put(
+            f"/api/v1/child-profiles/{child.id}",
+            json=self._valid_body(sensitivity=bad_sens),
+            headers={
+                "Authorization": f"Bearer {parent_token}",
+                "X-Device-Id": "test_device",
+            },
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_concerns_blank_to_none(
+        self, api_client, db_session: AsyncSession, parent_with_child
+    ) -> None:
+        """Given PUT concerns="   "(纯空格)+ custom_redlines=""(空串)
+        When PUT
+        Then 200,DB 落库 concerns / custom_redlines 为 None(空串归一)。
+        """
+        _, parent_token, child, _, _ = parent_with_child
+        resp = await api_client.put(
+            f"/api/v1/child-profiles/{child.id}",
+            json=self._valid_body(concerns="   ", custom_redlines=""),
+            headers={
+                "Authorization": f"Bearer {parent_token}",
+                "X-Device-Id": "test_device",
+            },
+        )
+        assert resp.status_code == 200, resp.json()
+        assert resp.json()["concerns"] is None
+        assert resp.json()["custom_redlines"] is None
+
+        from sqlalchemy import select
+
+        refreshed = (
+            await db_session.execute(
+                select(ChildProfile).where(ChildProfile.child_user_id == child.id)
+            )
+        ).scalar_one()
+        assert refreshed.concerns is None
+        assert refreshed.custom_redlines is None

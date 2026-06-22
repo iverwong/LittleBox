@@ -123,7 +123,7 @@ class ChildProfile(BaseMixin, Base):
         created_by: 创建者父账号 ID(审计用;权限按 family_id 控制)。
         birth_date: 出生日期,由 `age_to_birth_date` 反推存库。
         gender: 性别,枚举值。
-        nickname: 家长设置的子女昵称,长度 1-32。
+        nickname: 家长设置的子女昵称,长度 1-12。
         concerns: 家长自然语言描述的关注点,注入审查提示词与日终专家提示词。
         sensitivity: 6 维度 0-9 的 JSON 字典,默认 5。
         custom_redlines: 家长自然语言描述的红线话题,审查 Agent 作为 0/1 判定条件,
@@ -152,9 +152,9 @@ class ChildProfile(BaseMixin, Base):
     )
     gender: Mapped[Gender] = mapped_column(nullable=False)
     nickname: Mapped[str] = mapped_column(
-        String(32),
+        String(12),
         nullable=False,
-        comment="家长设置的子女昵称",
+        comment="家长设置的子女昵称,长度 1-12",
     )
     concerns: Mapped[Optional[str]] = mapped_column(
         Text,

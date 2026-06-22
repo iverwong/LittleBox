@@ -1,11 +1,11 @@
-"""M10 TDD:update_child_profile service 行为。
+"""M10/M11 TDD:update_child_profile service 行为。
 
-覆盖:
-- 部分更新只动传入字段(其它字段保持原值)
-- `age` 重算 `birth_date`
-- 可空字段 `null` 即清空
-- sensitivity 整体替换
+覆盖(M10 → M11 后改为全量提交):
+- PUT 全量替换(nickname / birth_date / gender / concerns / sensitivity /
+  custom_redlines 全部按提交值落库)
+- 必输字段校验(field_validator [3, 21] + 空串归一)
 - 跨 family 访问 → 404
+- snapshot builder 正确填所有字段
 
 测试函数级 docstring 用 Given / When / Then。"""
 
@@ -18,8 +18,8 @@ from app.core.enums import Gender, UserRole
 from app.domain.accounts.models import ChildProfile, Family, FamilyMember, User
 from app.domain.accounts.schemas import (
     CurrentAccount,
+    PutChildProfileRequest,
     SensitivityConfig,
-    UpdateChildProfileRequest,
 )
 from app.domain.accounts.service import (
     age_to_birth_date,
@@ -28,6 +28,7 @@ from app.domain.accounts.service import (
     update_child_profile,
 )
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -50,9 +51,7 @@ async def parent_in_family(db_session: AsyncSession):
     db_session.add(FamilyMember(family_id=fam.id, user_id=parent.id, role=UserRole.parent))
     await db_session.commit()
 
-    ctx = CurrentAccount(
-        id=parent.id, role=parent.role, family_id=fam.id, expires_at=None
-    )
+    ctx = CurrentAccount(id=parent.id, role=parent.role, family_id=fam.id, expires_at=None)
     return fam, parent, ctx
 
 
@@ -111,11 +110,11 @@ async def other_family(db_session: AsyncSession):
     return other_fam, other_parent
 
 
-class TestUpdateChildProfilePartial:
-    """PATCH 语义:仅 `exclude_unset` 的字段参与更新。"""
+class TestPutChildProfile:
+    """PUT 语义:payload 携带全部字段,服务层显式逐字段全量赋值。"""
 
     @pytest.mark.asyncio
-    async def test_only_nickname_changed(
+    async def test_full_update_persists_all_fields(
         self,
         db_session: AsyncSession,
         parent_in_family,
@@ -123,19 +122,28 @@ class TestUpdateChildProfilePartial:
         redis_client,
     ) -> None:
         """Given 已存在的 child profile
-        When 仅 PATCH nickname
-        Then nickname 更新,其它字段(gender / age-derived birth_date /
-            concerns / sensitivity / custom_redlines)保持原值。
+        When PUT 提交 6 字段全部新值
+        Then DB 6 字段按提交值落库,无残留。
         """
         _, _, ctx = parent_in_family
-        child, profile = child_with_profile
+        child, _ = child_with_profile
 
+        payload = PutChildProfileRequest(
+            nickname="new_nick",
+            birth_date=date(2014, 6, 15),
+            gender=Gender.female,
+            sensitivity=SensitivityConfig(
+                emotional=9, social=2, values=7, boundaries=8, academic=1, lifestyle=4
+            ),
+            concerns="new concerns",
+            custom_redlines="new redline",
+        )
         await update_child_profile(
             db_session,
             redis_client,
             parent=ctx,
             child_user_id=child.id,
-            payload=UpdateChildProfileRequest(nickname="new_nick"),
+            payload=payload,
         )
 
         refreshed = await load_child_profile_in_family(
@@ -143,144 +151,8 @@ class TestUpdateChildProfilePartial:
         )
         assert refreshed is not None
         assert refreshed.nickname == "new_nick"
-        assert refreshed.gender == Gender.male
-        assert refreshed.birth_date == profile.birth_date
-        assert refreshed.concerns == "orig concerns"
-        assert refreshed.custom_redlines == "orig redline"
-        assert refreshed.sensitivity == profile.sensitivity
-
-    @pytest.mark.asyncio
-    async def test_age_recomputes_birth_date(
-        self,
-        db_session: AsyncSession,
-        parent_in_family,
-        child_with_profile,
-        redis_client,
-    ) -> None:
-        """Given PATCH age=12
-        When update_child_profile
-        Then birth_date 重算为 today() - 12 years(其他字段不变)。
-        """
-        _, _, ctx = parent_in_family
-        child, profile = child_with_profile
-        original_nickname = profile.nickname
-
-        await update_child_profile(
-            db_session,
-            redis_client,
-            parent=ctx,
-            child_user_id=child.id,
-            payload=UpdateChildProfileRequest(age=12),
-        )
-
-        refreshed = await load_child_profile_in_family(
-            db_session, child_user_id=child.id, family_id=ctx.family_id
-        )
-        assert refreshed is not None
-        assert refreshed.birth_date == age_to_birth_date(12)
-        assert refreshed.nickname == original_nickname
-        assert refreshed.gender == Gender.male
-
-
-class TestUpdateChildProfileNullableClear:
-    """可空字段传 null 即清空。"""
-
-    @pytest.mark.asyncio
-    async def test_concerns_null_clears(
-        self,
-        db_session: AsyncSession,
-        parent_in_family,
-        child_with_profile,
-        redis_client,
-    ) -> None:
-        """Given PATCH concerns=null
-        When update_child_profile
-        Then profile.concerns 变为 None(其它字段保留)。
-        """
-        _, _, ctx = parent_in_family
-        child, _ = child_with_profile
-
-        await update_child_profile(
-            db_session,
-            redis_client,
-            parent=ctx,
-            child_user_id=child.id,
-            payload=UpdateChildProfileRequest(concerns=None),
-        )
-
-        refreshed = await load_child_profile_in_family(
-            db_session, child_user_id=child.id, family_id=ctx.family_id
-        )
-        assert refreshed is not None
-        assert refreshed.concerns is None
-        # 其它字段保留
-        assert refreshed.custom_redlines == "orig redline"
-        assert refreshed.nickname == "orig_nick"
-
-    @pytest.mark.asyncio
-    async def test_sensitivity_null_clears(
-        self,
-        db_session: AsyncSession,
-        parent_in_family,
-        child_with_profile,
-        redis_client,
-    ) -> None:
-        """Given PATCH sensitivity=null
-        When update_child_profile
-        Then profile.sensitivity 变为 None(JSONB 列允许 null)。
-        """
-        _, _, ctx = parent_in_family
-        child, _ = child_with_profile
-
-        await update_child_profile(
-            db_session,
-            redis_client,
-            parent=ctx,
-            child_user_id=child.id,
-            payload=UpdateChildProfileRequest(sensitivity=None),
-        )
-
-        refreshed = await load_child_profile_in_family(
-            db_session, child_user_id=child.id, family_id=ctx.family_id
-        )
-        assert refreshed is not None
-        assert refreshed.sensitivity is None
-
-
-class TestUpdateChildProfileSensitivityReplace:
-    """sensitivity 整体替换(不做维度级 merge)。"""
-
-    @pytest.mark.asyncio
-    async def test_sensitivity_replaces_whole_dict(
-        self,
-        db_session: AsyncSession,
-        parent_in_family,
-        child_with_profile,
-        redis_client,
-    ) -> None:
-        """Given PATCH sensitivity=新 6 维字典
-        When update_child_profile
-        Then 整个 JSONB 被替换为新字典(原 dict 完全消失)。
-        """
-        _, _, ctx = parent_in_family
-        child, _ = child_with_profile
-
-        new_sensitivity = SensitivityConfig(
-            emotional=9, social=2, values=7, boundaries=8, academic=1, lifestyle=4
-        )
-        await update_child_profile(
-            db_session,
-            redis_client,
-            parent=ctx,
-            child_user_id=child.id,
-            payload=UpdateChildProfileRequest(sensitivity=new_sensitivity),
-        )
-
-        refreshed = await load_child_profile_in_family(
-            db_session, child_user_id=child.id, family_id=ctx.family_id
-        )
-        assert refreshed is not None
-        # 整体替换后的 6 维与原 dict 完全无关
+        assert refreshed.birth_date == date(2014, 6, 15)
+        assert refreshed.gender == Gender.female
         assert refreshed.sensitivity == {
             "emotional": 9,
             "social": 2,
@@ -289,6 +161,88 @@ class TestUpdateChildProfileSensitivityReplace:
             "academic": 1,
             "lifestyle": 4,
         }
+        assert refreshed.concerns == "new concerns"
+        assert refreshed.custom_redlines == "new redline"
+
+    @pytest.mark.asyncio
+    async def test_blank_concerns_normalized_to_none(
+        self,
+        db_session: AsyncSession,
+        parent_in_family,
+        child_with_profile,
+        redis_client,
+    ) -> None:
+        """Given PUT concerns="   "(纯空格)
+        When update_child_profile
+        Then DB 落库 concerns=None(field_validator 空串归一)。
+        """
+        _, _, ctx = parent_in_family
+        child, _ = child_with_profile
+
+        payload = PutChildProfileRequest(
+            nickname="new_nick",
+            birth_date=date(2015, 6, 1),
+            gender=Gender.male,
+            sensitivity=SensitivityConfig(),
+            concerns="   ",
+            custom_redlines=None,
+        )
+        await update_child_profile(
+            db_session,
+            redis_client,
+            parent=ctx,
+            child_user_id=child.id,
+            payload=payload,
+        )
+
+        refreshed = await load_child_profile_in_family(
+            db_session, child_user_id=child.id, family_id=ctx.family_id
+        )
+        assert refreshed is not None
+        assert refreshed.concerns is None
+        assert refreshed.custom_redlines is None
+
+    def test_birth_date_too_young_rejected(self) -> None:
+        """Given PutChildProfileRequest(birth_date=今天,~0 岁)
+        When 构造 payload
+        Then Pydantic ValidationError(age 范围 [3, 21])。
+        """
+        with pytest.raises(ValidationError) as exc_info:
+            PutChildProfileRequest(
+                nickname="x",
+                birth_date=date.today(),
+                gender=Gender.male,
+                sensitivity=SensitivityConfig(),
+            )
+        assert "birth_date" in str(exc_info.value)
+
+    def test_birth_date_too_old_rejected(self) -> None:
+        """Given PutChildProfileRequest(birth_date=1980,~46 岁)
+        When 构造 payload
+        Then Pydantic ValidationError。
+        """
+        with pytest.raises(ValidationError) as exc_info:
+            PutChildProfileRequest(
+                nickname="x",
+                birth_date=date(1980, 1, 1),
+                gender=Gender.male,
+                sensitivity=SensitivityConfig(),
+            )
+        assert "birth_date" in str(exc_info.value)
+
+    def test_nickname_too_long_rejected(self) -> None:
+        """Given PutChildProfileRequest(nickname 长度 13)
+        When 构造 payload
+        Then Pydantic ValidationError(max_length=12)。
+        """
+        with pytest.raises(ValidationError) as exc_info:
+            PutChildProfileRequest(
+                nickname="x" * 13,
+                birth_date=date(2015, 6, 1),
+                gender=Gender.male,
+                sensitivity=SensitivityConfig(),
+            )
+        assert "nickname" in str(exc_info.value)
 
 
 class TestUpdateChildProfileCrossFamilyForbidden:
@@ -318,13 +272,19 @@ class TestUpdateChildProfileCrossFamilyForbidden:
             expires_at=None,
         )
 
+        payload = PutChildProfileRequest(
+            nickname="hack",
+            birth_date=date(2015, 6, 1),
+            gender=Gender.male,
+            sensitivity=SensitivityConfig(),
+        )
         with pytest.raises(HTTPException) as exc_info:
             await update_child_profile(
                 db_session,
                 redis_client,
                 parent=other_ctx,
                 child_user_id=child.id,
-                payload=UpdateChildProfileRequest(nickname="hack"),
+                payload=payload,
             )
         assert exc_info.value.status_code == 404
 

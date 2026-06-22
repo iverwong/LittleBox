@@ -1,6 +1,6 @@
 """父端 child profile 资源:``/api/v1/child-profiles``。
 
-父账号读取与部分更新子账号的配置(基础信息 + 关注点 + 高级配置
+父账号读取与全量更新子账号的配置(基础信息 + 关注点 + 高级配置
 sensitivity / custom_redlines)。仅 parent 可访问,family 归属通过
 ``load_child_profile_in_family`` 焊进同一条 WHERE 防 IDOR。"""
 
@@ -15,13 +15,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
 from app.core.redis import get_redis
-from app.core.time import age_at
 from app.domain.accounts.models import ChildProfile
 from app.domain.accounts.schemas import (
     ChildProfileDetail,
     CurrentAccount,
+    PutChildProfileRequest,
     SensitivityConfig,
-    UpdateChildProfileRequest,
 )
 from app.domain.accounts.service import (
     load_child_profile_in_family,
@@ -39,14 +38,13 @@ def _to_detail(profile: ChildProfile) -> ChildProfileDetail:
         profile: 已加载的 `ChildProfile`。
 
     Returns:
-        填好 age 换算与 sensitivity 规整的 `ChildProfileDetail`。
+        填好 sensitivity 规整的 `ChildProfileDetail`。
     """
     return ChildProfileDetail(
         child_user_id=profile.child_user_id,
         nickname=profile.nickname,
-        gender=profile.gender.value,
+        gender=profile.gender,
         birth_date=profile.birth_date,
-        age=age_at(profile.birth_date, tz="Asia/Shanghai"),
         concerns=profile.concerns,
         sensitivity=SensitivityConfig(**profile.sensitivity) if profile.sensitivity else None,
         custom_redlines=profile.custom_redlines,
@@ -85,23 +83,27 @@ async def get_child_profile(
     return _to_detail(profile)
 
 
-@router.patch("/{child_user_id}", response_model=ChildProfileDetail)
-async def patch_child_profile(
+@router.put("/{child_user_id}", response_model=ChildProfileDetail)
+async def put_child_profile(
     child_user_id: uuid.UUID,
-    payload: UpdateChildProfileRequest,
+    payload: PutChildProfileRequest,
     parent: Annotated[CurrentAccount, Depends(require_parent)],
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> ChildProfileDetail:
-    """父端部分更新子账号配置,``PATCH /api/v1/child-profiles/{child_user_id}``。仅 parent。
+    """父端全量替换子账号配置,``PUT /api/v1/child-profiles/{child_user_id}``。仅 parent。
 
-    委托 ``accounts.service.update_child_profile`` 执行 PATCH 语义:
-    字段未传 = 不动,可空字段传 null = 清空,sensitivity 整体替换。
+    PUT 语义:每次必须携带全部可编辑字段(nickname / birth_date / gender /
+    concerns / sensitivity / custom_redlines)。委托
+    ``accounts.service.update_child_profile`` 执行显式逐字段赋值,
     ``commit_with_redis`` 落盘,后续 chat_stream 自然读到新配置。
+
+    校验已前置到 ``PutChildProfileRequest``:必输字段缺失 / birth_date
+    算整岁越界 [3, 21] / nickname 越界均由 Pydantic 返 422。
 
     Args:
         child_user_id: 目标子账号 `User.id`(path param)。
-        payload: ``UpdateChildProfileRequest``(部分更新请求体)。
+        payload: ``PutChildProfileRequest``(全量提交请求体)。
         parent: 当前父账号上下文(``Depends(require_parent)``)。
         db: 异步 SQLAlchemy session(``Depends(get_db)``)。
         redis: 主业务 Redis(``Depends(get_redis)``)。

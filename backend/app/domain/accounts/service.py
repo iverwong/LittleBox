@@ -20,7 +20,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.enums import Gender, UserRole
+from app.core.enums import UserRole
 from app.core.redis import commit_with_redis
 from app.core.time import age_at
 from app.domain.accounts.models import (
@@ -37,7 +37,7 @@ from app.domain.accounts.schemas import (
     ChildSummary,
     CreateChildRequest,
     CurrentAccount,
-    UpdateChildProfileRequest,
+    PutChildProfileRequest,
 )
 from app.domain.audit.models import AuditRecord, RollingSummary
 from app.domain.auth.tokens import revoke_all_active_tokens
@@ -407,21 +407,24 @@ async def update_child_profile(
     *,
     parent: CurrentAccount,
     child_user_id: uuid.UUID,
-    payload: UpdateChildProfileRequest,
+    payload: PutChildProfileRequest,
 ) -> ChildProfile:
-    """父端部分更新子账号配置。
+    """父端全量替换子账号配置(PUT 语义)。
 
-    PATCH 语义:仅 `exclude_unset` 的字段参与更新;非空字段(nickname / age /
-    gender)传 null 视为不动,可空字段(concerns / custom_redlines /
-    sensitivity)传 null 即清空;sensitivity 为整体替换。family 归属在
-    `load_child_profile_in_family` 内焊入 WHERE。
+    payload 已由 Pydantic 守卫:
+    - 必输字段(nickname / birth_date / gender / sensitivity)缺失 → 422
+    - `birth_date` 换算整岁越界 [3, 21] → 422
+    - `concerns` / `custom_redlines` 空串归一为 None = 清空
+    - `nickname` 长度 [1, 12]、敏感词校验
+
+    family 归属在 `load_child_profile_in_family` 内焊入 WHERE。
 
     Args:
         db: 数据库会话。
         redis: Redis 客户端,随 commit 一并 flush staged ops。
         parent: 当前父账号上下文,提供 `family_id`。
         child_user_id: 目标子账号 `User.id`。
-        payload: 部分更新请求体。
+        payload: 全量提交请求体。
 
     Returns:
         更新后的 `ChildProfile`。
@@ -435,22 +438,13 @@ async def update_child_profile(
     if profile is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "child not found in family")
 
-    data = payload.model_dump(exclude_unset=True)  # PATCH:仅动传入字段
-    # 非空字段:传 null 视为不动
-    if data.get("nickname") is not None:
-        profile.nickname = data["nickname"]
-    if data.get("gender") is not None:
-        profile.gender = Gender(data["gender"])
-    if data.get("age") is not None:
-        profile.birth_date = age_to_birth_date(data["age"])  # 重算出生日期
-    # 可空字段:传 null 即清空
-    if "concerns" in data:
-        profile.concerns = data["concerns"]
-    if "custom_redlines" in data:
-        profile.custom_redlines = data["custom_redlines"]
-    if "sensitivity" in data:
-        # SensitivityConfig 已校验,dict | None 直落 JSONB
-        profile.sensitivity = data["sensitivity"]
+    # 全量替换:payload 已由 Pydantic 守卫(含 [3,21]、空串归一)
+    profile.nickname = payload.nickname
+    profile.birth_date = payload.birth_date
+    profile.gender = payload.gender  # 已是 Gender 枚举,无需 Gender() 包装
+    profile.sensitivity = payload.sensitivity.model_dump()
+    profile.concerns = payload.concerns
+    profile.custom_redlines = payload.custom_redlines
 
     await commit_with_redis(db, redis)  # 无 staged Redis op → 等价干净 DB commit
     return profile

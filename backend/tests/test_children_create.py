@@ -276,7 +276,7 @@ class TestCreateChildLimit:
         for i in range(3):
             resp = await api_client.post(
                 "/api/v1/children",
-                json=make_payload(nickname=f"family_a_child{i}"),
+                json=make_payload(nickname=f"a_kid_{i}"),
                 headers={"Authorization": f"Bearer {token_a}", "X-Device-Id": "test_device"},
             )
             assert resp.status_code == 201
@@ -308,7 +308,7 @@ class TestCreateChildLimit:
 
         resp = await api_client.post(
             "/api/v1/children",
-            json=make_payload(nickname="family_b_child"),
+            json=make_payload(nickname="b_kid"),
             headers={"Authorization": f"Bearer {token_b}", "X-Device-Id": "family_b_device"},
         )
         assert resp.status_code == 201, f"family B should succeed: {resp.json()}"

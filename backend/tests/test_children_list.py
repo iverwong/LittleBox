@@ -322,7 +322,7 @@ class TestListChildrenCrossFamily:
         token_a = await _login(api_client, parent_a, pw_a)
 
         # A 家创建一个 child
-        child_a = await _make_child(api_client, token_a, "family_a_child", age=10, gender="unknown")
+        child_a = await _make_child(api_client, token_a, "a_kid", age=10, gender="unknown")
 
         # 创建 B 家 parent + family
         family_b = Family()
@@ -377,7 +377,7 @@ class TestListChildrenAuth:
 
         # 创建 child 并绑定
         child = await _make_child(
-            api_client, parent_token, "child_who_forbidden", age=10, gender="unknown"
+            api_client, parent_token, "forbidden", age=10, gender="unknown"
         )
         bind_resp = await api_client.post(
             "/api/v1/bind-tokens",
