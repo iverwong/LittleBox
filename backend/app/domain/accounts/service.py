@@ -415,7 +415,7 @@ async def update_child_profile(
     - 必输字段(nickname / birth_date / gender / sensitivity)缺失 → 422
     - `birth_date` 换算整岁越界 [3, 21] → 422
     - `concerns` / `custom_redlines` 空串归一为 None = 清空
-    - `nickname` 长度 [1, 12]、敏感词校验
+    - `nickname` 长度 [1, 12]
 
     family 归属在 `load_child_profile_in_family` 内焊入 WHERE。
 
