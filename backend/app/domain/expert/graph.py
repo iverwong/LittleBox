@@ -26,7 +26,7 @@ from langgraph.graph import StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import ValidationError
-from sqlalchemy import text
+from sqlalchemy import select
 from typing_extensions import TypedDict
 
 from app.core.enums import DailyStatus
@@ -170,42 +170,44 @@ async def load_context(
     # --- 今日对话材料 ---
     if owned_sids:
         async with ctx.db_session_factory() as db:
+            from app.domain.audit.models import AuditRecord, RollingSummary
+
             # Rolling summaries: session_notes + turn_summaries
-            rs_stmt = text("""
-                SELECT session_id::text, session_notes, turn_summaries
-                FROM rolling_summaries
-                WHERE session_id = ANY(:sids)
-            """)
-            rs_rows = (await db.execute(rs_stmt, {"sids": owned_sids})).fetchall()
+            rs_rows = (
+                (
+                    await db.execute(
+                        select(RollingSummary).where(RollingSummary.session_id.in_(owned_sids))
+                    )
+                )
+                .scalars()
+                .all()
+            )
 
             # Today's audit records: crisis markers + dimension scores
-            ar_stmt = text("""
-                SELECT session_id::text, turn_number, crisis_detected, crisis_topic
-                FROM audit_records
-                WHERE session_id = ANY(:sids)
-                  AND created_at >= :start
-                  AND created_at < :end
-                ORDER BY created_at
-            """)
             ar_rows = (
-                await db.execute(
-                    ar_stmt,
-                    {
-                        "sids": owned_sids,
-                        "start": day_start,
-                        "end": day_end,
-                    },
+                (
+                    await db.execute(
+                        select(AuditRecord)
+                        .where(
+                            AuditRecord.session_id.in_(owned_sids),
+                            AuditRecord.created_at >= day_start,
+                            AuditRecord.created_at < day_end,
+                        )
+                        .order_by(AuditRecord.created_at)
+                    )
                 )
-            ).fetchall()
+                .scalars()
+                .all()
+            )
 
         # 时间线
         parts.append("## 今日对话材料")
         crisis_markers = [r for r in ar_rows if r.crisis_detected]
 
         for rs_row in rs_rows:
-            sid: str = rs_row.session_id
-            session_notes: str = rs_row.session_notes or ""
-            turn_summaries: list[dict[str, Any]] = rs_row.turn_summaries or []
+            sid = rs_row.session_id
+            session_notes = rs_row.session_notes or ""
+            turn_summaries = rs_row.turn_summaries or []
 
             if turn_summaries:
                 parts.append(f"### Session: {sid}")

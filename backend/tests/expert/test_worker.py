@@ -49,56 +49,48 @@ def _make_mock_arq_ctx(
     # 构造 mock DB session
     mock_db = AsyncMock()
 
-    # child query: return list of child IDs
-    child_rows_mock = MagicMock()
-    child_rows_mock.fetchall.return_value = [(cid,) for cid in children]
-    mock_db.execute.return_value = child_rows_mock
-
-    # 更精细的 execute mock: 根据查询内容返回不同结果
     async def _mock_execute(stmt, params=None, **kwargs):
-        _ = kwargs  # 兼容 execute(stmt) 和 execute(stmt, params) 两种调用
+        _ = kwargs
         sql_str = str(stmt)
-        if "FROM users u" in sql_str and "child" in sql_str:
-            # child query
-            result = MagicMock()
-            result.fetchall.return_value = [(cid,) for cid in children]
-            return result
-        elif "FROM sessions" in sql_str and "child_user_id" in sql_str:
-            # session id query
-            result = MagicMock()
-            result.fetchall.return_value = [(SID_1,)]
-            return result
-        elif "FROM child_profiles" in sql_str:
-            # profile query
-            result = MagicMock()
-            result.first.return_value = MagicMock(
-                id=CUID_1,
-                nickname="test",
-                gender="male",
-                birth_date=date(2015, 1, 1),
-                sensitivity=None,
-                custom_redlines=None,
-                concerns=None,
-            )
-            return result
-        elif "audit_records" in sql_str and "EXISTS" in sql_str:
-            # crisis check
-            result = MagicMock()
-            result.scalar.return_value = crisis_today
-            return result
+        result = MagicMock()
+
+        if "FROM users" in sql_str and "child_profiles" in sql_str:
+            # 孩子列表查询（ORM select(User).join(ChildProfile)）
+            mock_users = []
+            for cid in children:
+                u = MagicMock()
+                u.id = cid
+                mock_users.append(u)
+            result.scalars.return_value.all.return_value = mock_users
+        elif "FROM sessions" in sql_str and "WHERE sessions" in sql_str:
+            # owned_session_ids 查询（ORM select(Session.id)）
+            result.scalars.return_value.all.return_value = [SID_1]
+        elif "FROM child_profiles" in sql_str and "WHERE child_profiles" in sql_str:
+            # ChildProfile 查询（ORM select(ChildProfile)）
+            profile = MagicMock()
+            profile.child_user_id = CUID_1
+            profile.nickname = "test"
+            profile.gender = MagicMock()
+            profile.gender.value = "male"
+            profile.birth_date = date(2015, 1, 1)
+            profile.sensitivity = None
+            profile.custom_redlines = None
+            profile.concerns = None
+            result.scalars.return_value.first.return_value = profile
         elif "dimension_scores" in sql_str:
-            # aggregate dimensions
-            result = MagicMock()
-            result.fetchall.return_value = []
-            return result
+            # 维度聚合查询（ORM select(AuditRecord.dimension_scores)）
+            result.scalars.return_value.all.return_value = []
         elif "FROM daily_reports" in sql_str:
-            # recent reports
-            result = MagicMock()
-            result.fetchall.return_value = []
-            return result
-        return MagicMock()
+            # 历史报告查询（ORM select(DailyReport)）
+            result.scalars.return_value.all.return_value = []
+
+        return result
 
     mock_db.execute = _mock_execute
+    # crisis check 使用 db.scalar()，单独 mock
+    mock_db.scalar = AsyncMock(return_value=crisis_today)
+    # 兼容 db.scalar() 和 db.execute() 两种调用方式
+    # （_check_crisis_today 使用 db.scalar，其余使用 db.execute）
 
     db_cm = AsyncMock()
     db_cm.__aenter__.return_value = mock_db

@@ -11,7 +11,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import select
 
 from app.core.time import SHANGHAI, logical_day
 
@@ -40,22 +40,22 @@ async def _check_crisis_today(
     Returns:
         True 表示当日有 crisis 标记。
     """
-    stmt = text("""
-        SELECT EXISTS(
-            SELECT 1
-            FROM audit_records ar
-            JOIN sessions s ON s.id = ar.session_id
-            WHERE s.child_user_id = :child_id
-              AND ar.crisis_detected = True
-              AND ar.created_at >= :start
-              AND ar.created_at < :end
+    from app.domain.audit.models import AuditRecord
+    from app.domain.chat.models import Session
+
+    stmt = select(
+        select(AuditRecord.id)
+        .join(Session, Session.id == AuditRecord.session_id)
+        .where(
+            Session.child_user_id == child_user_id,
+            AuditRecord.crisis_detected,
+            AuditRecord.created_at >= day_start,
+            AuditRecord.created_at < day_end,
         )
-    """)
-    row = await db.execute(
-        stmt,
-        {"child_id": child_user_id, "start": day_start, "end": day_end},
+        .exists()
     )
-    return row.scalar() or False
+    result = await db.scalar(stmt)
+    return bool(result)
 
 
 async def _aggregate_dimensions(
@@ -86,19 +86,19 @@ async def _aggregate_dimensions(
     if not sids:
         return {d: {"peak": 0, "mean": 0.0, "high_ratio": 0.0} for d in DIMENSIONS}
 
-    stmt = text("""
-        SELECT dimension_scores
-        FROM audit_records
-        WHERE session_id = ANY(:sids)
-          AND created_at >= :start
-          AND created_at < :end
-          AND dimension_scores IS NOT NULL
-    """)
-    rows = (await db.execute(stmt, {"sids": sids, "start": day_start, "end": day_end})).fetchall()
+    from app.domain.audit.models import AuditRecord
+
+    stmt = select(AuditRecord.dimension_scores).where(
+        AuditRecord.session_id.in_(sids),
+        AuditRecord.created_at >= day_start,
+        AuditRecord.created_at < day_end,
+        AuditRecord.dimension_scores.isnot(None),
+    )
+    rows = (await db.execute(stmt)).scalars().all()
 
     dim_scores: dict[str, list[int]] = {d: [] for d in DIMENSIONS}
-    for row in rows:
-        ds = row[0] or {}
+    for ds in rows:
+        ds = ds or {}
         for d in DIMENSIONS:
             score = ds.get(d)
             if isinstance(score, (int, float)):
@@ -168,32 +168,25 @@ async def _get_recent_reports(
     Returns:
         list[dict]，每项含 report_date / overall_status / today_overview。
     """
-    stmt = text("""
-        SELECT report_date::text, overall_status, content
-        FROM daily_reports
-        WHERE child_user_id = :child_id
-          AND report_date < :report_date
-          AND report_date >= :min_date
-        ORDER BY report_date DESC
-    """)
-    rows = await db.execute(
-        stmt,
-        {
-            "child_id": child_user_id,
-            "report_date": report_date,
-            "min_date": report_date - timedelta(days=days),
-        },
+    from app.domain.expert.models import DailyReport
+
+    stmt = (
+        select(DailyReport)
+        .where(
+            DailyReport.child_user_id == child_user_id,
+            DailyReport.report_date < report_date,
+            DailyReport.report_date >= report_date - timedelta(days=days),
+        )
+        .order_by(DailyReport.report_date.desc())
     )
+    rows = (await db.execute(stmt)).scalars().all()
     result: list[dict] = []
     for row in rows:
-        report_date_str: str = str(row[0])
-        status: str = str(row[1])
-        content: str = str(row[2]) if row[2] else ""
         result.append(
             {
-                "report_date": report_date_str,
-                "overall_status": status,
-                "today_overview": _parse_today_overview_from_content(content),
+                "report_date": str(row.report_date),
+                "overall_status": str(row.overall_status),
+                "today_overview": _parse_today_overview_from_content(row.content),
             }
         )
     return result
@@ -226,15 +219,16 @@ async def run_daily_reports(ctx: dict[str, Any]) -> None:
 
     # 查所有活跃孩子（JOIN ChildProfile 确保存在画像）
     async with rr.db_session_factory() as db:
-        child_stmt = text("""
-            SELECT u.id
-            FROM users u
-            JOIN child_profiles cp ON cp.child_user_id = u.id
-            WHERE u.role = 'child'
-              AND u.is_active = True
-        """)
-        child_rows = (await db.execute(child_stmt)).fetchall()
-        child_ids = [row[0] for row in child_rows]
+        from app.core.enums import UserRole
+        from app.domain.accounts.models import ChildProfile, User
+
+        child_stmt = (
+            select(User)
+            .join(ChildProfile, ChildProfile.child_user_id == User.id)
+            .where(User.role == UserRole.child, User.is_active)
+        )
+        child_rows = (await db.execute(child_stmt)).scalars().all()
+        child_ids = [r.id for r in child_rows]
 
     if not child_ids:
         logger.info("expert.run_daily_reports no_active_children")
@@ -252,29 +246,27 @@ async def run_daily_reports(ctx: dict[str, Any]) -> None:
         async with sem:
             async with rr.db_session_factory() as child_db:
                 # a. owned_session_ids
-                sid_stmt = text("""
-                    SELECT id FROM sessions WHERE child_user_id = :child_id
-                """)
-                sid_rows = (
-                    await child_db.execute(sid_stmt, {"child_id": child_user_id_val})
-                ).fetchall()
-                owned_sids = frozenset(
-                    uuid.UUID(str(r[0])) if not isinstance(r[0], uuid.UUID) else r[0]
-                    for r in sid_rows
-                )
+                from app.domain.chat.models import Session
+
+                sid_stmt = select(Session.id).where(Session.child_user_id == child_user_id_val)
+                sid_rows = (await child_db.execute(sid_stmt)).scalars().all()
+                owned_sids = frozenset(sid_rows)
 
                 # b. ChildProfile -> ChildProfileSnapshot
-                prof_stmt = text("""
-                    SELECT u.id, cp.nickname, cp.gender::text, cp.birth_date,
-                           cp.sensitivity, cp.custom_redlines, cp.concerns
-                    FROM child_profiles cp
-                    JOIN users u ON u.id = cp.child_user_id
-                    WHERE cp.child_user_id = :child_id
-                """)
-                prof_row = (
-                    await child_db.execute(prof_stmt, {"child_id": child_user_id_val})
-                ).first()
-                if prof_row is None:
+                from app.domain.accounts.models import ChildProfile
+
+                child_profile = (
+                    (
+                        await child_db.execute(
+                            select(ChildProfile).where(
+                                ChildProfile.child_user_id == child_user_id_val
+                            )
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
+                if child_profile is None:
                     logger.warning(
                         "expert.child_no_profile child=%s",
                         child_user_id_val,
@@ -285,13 +277,13 @@ async def run_daily_reports(ctx: dict[str, Any]) -> None:
 
                 snapshot = ChildProfileSnapshot(
                     child_user_id=child_user_id_val,
-                    nickname=prof_row.nickname,
-                    gender=str(prof_row.gender),
-                    birth_date=prof_row.birth_date,
-                    age=age_at(prof_row.birth_date),
-                    sensitivity=prof_row.sensitivity,
-                    custom_redlines=prof_row.custom_redlines,
-                    concerns=prof_row.concerns,
+                    nickname=child_profile.nickname,
+                    gender=child_profile.gender.value,
+                    birth_date=child_profile.birth_date,
+                    age=age_at(child_profile.birth_date),
+                    sensitivity=child_profile.sensitivity,
+                    custom_redlines=child_profile.custom_redlines,
+                    concerns=child_profile.concerns,
                 )
 
                 # c. crisis_detected_today

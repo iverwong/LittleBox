@@ -42,6 +42,8 @@ async def write_expert_results(
         f"## 具体建议\n\n{output.suggestions}\n\n"
         f"## 异常时段标注\n\n{output.anomaly_periods}"
     )
+    # 注：使用原始 SQL 因为 PostgreSQL ``INSERT ... ON CONFLICT DO UPDATE``
+    # 是 PostgreSQL 专有语法，SQLAlchemy ORM 的 merge() 不适用于此批量 upsert 路径。
     stmt = text("""
         INSERT INTO daily_reports
             (child_user_id, report_date, overall_status, dimension_summary, content, degraded)

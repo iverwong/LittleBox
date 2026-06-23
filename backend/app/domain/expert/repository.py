@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # ---------------------------------------------------------------------------
@@ -119,17 +119,19 @@ async def _get_session_time_range(
     Returns:
         格式化的时间范围字符串；若 session 不存在或无消息则返回 None。
     """
-    stmt = text("""
-        SELECT
-            to_char(min(m.created_at), 'YYYY-MM-DD"T"HH24:MI:SS'),
-            to_char(max(m.created_at), 'YYYY-MM-DD"T"HH24:MI:SS')
-        FROM messages m
-        WHERE m.session_id = :session_id
-    """)
-    row = (await db.execute(stmt, {"session_id": session_id})).one_or_none()
+    from app.domain.chat.models import Message
+
+    stmt = select(
+        func.min(Message.created_at),
+        func.max(Message.created_at),
+    ).where(Message.session_id == session_id)
+    row = (await db.execute(stmt)).one_or_none()
     if row is None or row[0] is None:
         return None
-    return f"{row[0]} ~ {row[1]}"
+    return "{} ~ {}".format(
+        row[0].strftime("%Y-%m-%dT%H:%M:%S"),
+        row[1].strftime("%Y-%m-%dT%H:%M:%S"),
+    )
 
 
 def _match_matched(
@@ -175,6 +177,9 @@ async def search_turn_summaries(
 
     Returns:
         搜索结果列表。
+
+    注：使用原始 SQL 因为 (1) ``jsonb_array_elements`` 是 PostgreSQL 专有函数，
+    SQLAlchemy ORM 无对应构造；(2) ``ILIKE ANY`` 多模式匹配需要原生语法。
     """
     if not keywords:
         return []
@@ -261,6 +266,9 @@ async def search_session_notes(
 
     Returns:
         搜索结果列表。
+
+    注：使用原始 SQL 因为 ``ILIKE ANY`` 多模式匹配需要 PostgreSQL 原生语法，
+    SQLAlchemy ORM 无对应构造。
     """
     if not keywords:
         return []
@@ -344,6 +352,9 @@ async def search_crisis_topics(
 
     Returns:
         搜索结果列表。
+
+    注：使用原始 SQL 因为 ``ILIKE ANY`` 多模式匹配需要 PostgreSQL 原生语法，
+    SQLAlchemy ORM 无对应构造。
     """
     if not keywords:
         return []
@@ -425,6 +436,9 @@ async def search_daily_reports(
 
     Returns:
         搜索结果列表。
+
+    注：使用原始 SQL 因为 ``ILIKE ANY`` 多模式匹配需要 PostgreSQL 原生语法，
+    SQLAlchemy ORM 无对应构造。
     """
     if not keywords:
         return []
@@ -506,15 +520,15 @@ async def fetch_turn(
     Returns:
         包含 turn_summary、messages、crisis 标记的 dict；若不存在则返回 None。
     """
+    from app.domain.audit.models import AuditRecord, RollingSummary
+    from app.domain.chat.models import Message
+
     # 1. 获取 turn_summary
-    ts_stmt = text("""
-        SELECT
-            rs.turn_summaries,
-            rs.session_notes
-        FROM rolling_summaries rs
-        WHERE rs.session_id = :session_id
-    """)
-    ts_row = (await db.execute(ts_stmt, {"session_id": session_id})).one_or_none()
+    ts_row = (
+        (await db.execute(select(RollingSummary).where(RollingSummary.session_id == session_id)))
+        .scalars()
+        .first()
+    )
     if ts_row is None:
         return None
 
@@ -527,24 +541,18 @@ async def fetch_turn(
                 break
 
     # 2. 获取 crisis 标记
-    crisis_stmt = text("""
-        SELECT
-            ar.crisis_detected,
-            ar.crisis_topic
-        FROM audit_records ar
-        WHERE ar.session_id = :session_id
-          AND ar.turn_number = :turn_number
-        LIMIT 1
-    """)
     crisis_row = (
-        await db.execute(
-            crisis_stmt,
-            {
-                "session_id": session_id,
-                "turn_number": turn_number,
-            },
+        (
+            await db.execute(
+                select(AuditRecord).where(
+                    AuditRecord.session_id == session_id,
+                    AuditRecord.turn_number == turn_number,
+                )
+            )
         )
-    ).one_or_none()
+        .scalars()
+        .first()
+    )
 
     crisis_detected = crisis_row.crisis_detected if crisis_row else False
     crisis_topic = crisis_row.crisis_topic if crisis_row else None
@@ -553,34 +561,27 @@ async def fetch_turn(
     min_turn = max(1, turn_number - context_turns)
     max_turn = turn_number + context_turns
 
-    msg_stmt = text("""
-        SELECT
-            m.role,
-            m.content,
-            m.turn_number,
-            m.created_at
-        FROM messages m
-        WHERE m.session_id = :session_id
-          AND m.turn_number BETWEEN :min_turn AND :max_turn
-          AND m.status = 'active'
-        ORDER BY m.turn_number, m.created_at
-    """)
     msg_rows = (
-        await db.execute(
-            msg_stmt,
-            {
-                "session_id": session_id,
-                "min_turn": min_turn,
-                "max_turn": max_turn,
-            },
+        (
+            await db.execute(
+                select(Message)
+                .where(
+                    Message.session_id == session_id,
+                    Message.turn_number.between(min_turn, max_turn),
+                    Message.status == "active",
+                )
+                .order_by(Message.turn_number, Message.created_at)
+            )
         )
-    ).fetchall()
+        .scalars()
+        .all()
+    )
 
     messages: list[dict[str, Any]] = []
     for m in msg_rows:
         messages.append(
             {
-                "role": m.role,
+                "role": m.role.value if hasattr(m.role, "value") else m.role,
                 "content": m.content,
                 "turn_number": m.turn_number,
                 "created_at": str(m.created_at) if m.created_at else None,
@@ -615,26 +616,25 @@ async def fetch_notes(
         包含 session_notes、last_turn、session_created_at 的 dict；
         若不存在则返回 None。
     """
-    stmt = text("""
-        SELECT
-            rs.session_notes,
-            rs.last_turn,
-            rs.updated_at,
-            s.created_at AS session_created_at
-        FROM rolling_summaries rs
-        JOIN sessions s ON s.id = rs.session_id
-        WHERE rs.session_id = :session_id
-    """)
-    row = (await db.execute(stmt, {"session_id": session_id})).one_or_none()
+    from app.domain.audit.models import RollingSummary
+    from app.domain.chat.models import Session
+
+    stmt = (
+        select(RollingSummary, Session.created_at)
+        .join(Session, RollingSummary.session_id == Session.id)
+        .where(RollingSummary.session_id == session_id)
+    )
+    row = (await db.execute(stmt)).one_or_none()
     if row is None:
         return None
 
+    rs_row, session_created_at = row
     return {
         "session_id": session_id,
-        "session_notes": row.session_notes,
-        "last_turn": row.last_turn,
-        "updated_at": str(row.updated_at) if row.updated_at else None,
-        "session_created_at": str(row.session_created_at) if row.session_created_at else None,
+        "session_notes": rs_row.session_notes,
+        "last_turn": rs_row.last_turn,
+        "updated_at": str(rs_row.updated_at) if rs_row.updated_at else None,
+        "session_created_at": str(session_created_at) if session_created_at else None,
     }
 
 
@@ -654,20 +654,10 @@ async def fetch_report(
     Raises:
         ValueError: 指定 report_id 不存在。
     """
-    stmt = text("""
-        SELECT
-            dr.id,
-            dr.child_user_id,
-            dr.report_date,
-            dr.overall_status,
-            dr.dimension_summary,
-            dr.content,
-            dr.delivered_at,
-            dr.created_at
-        FROM daily_reports dr
-        WHERE dr.id = :report_id
-    """)
-    row = (await db.execute(stmt, {"report_id": report_id})).one_or_none()
+    from app.domain.expert.models import DailyReport
+
+    stmt = select(DailyReport).where(DailyReport.id == report_id)
+    row = (await db.execute(stmt)).scalars().first()
     if row is None:
         raise ValueError(f"Daily report not found: {report_id}")
 
@@ -675,7 +665,9 @@ async def fetch_report(
         "id": str(row.id),
         "child_user_id": str(row.child_user_id),
         "report_date": str(row.report_date),
-        "overall_status": row.overall_status,
+        "overall_status": row.overall_status.value
+        if hasattr(row.overall_status, "value")
+        else row.overall_status,
         "dimension_summary": row.dimension_summary,
         "content": row.content,
         "delivered_at": str(row.delivered_at) if row.delivered_at else None,
