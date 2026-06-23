@@ -14,7 +14,8 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from app.domain.audit.worker import MAX_TRIES, run_audit
+from app.worker import MAX_TRIES
+from app.domain.audit.worker import run_audit
 from app.core.runtime import RuntimeResources
 from app.domain.audit.schemas import AuditDimensionScores, AuditOutputSchema
 
@@ -218,12 +219,12 @@ class TestWorkerSettings:
     """WorkerSettings 结构正确性。"""
 
     def test_worker_settings_has_required_keys(self) -> None:
-        from app.domain.audit.worker import WORKER_SETTINGS
+        from app.worker import WORKER_SETTINGS
 
         assert "functions" in WORKER_SETTINGS
         assert "redis_settings" in WORKER_SETTINGS
         assert WORKER_SETTINGS["max_tries"] == MAX_TRIES
-        assert WORKER_SETTINGS["job_timeout"] == 60
+        assert WORKER_SETTINGS["job_timeout"] == 3600
         assert WORKER_SETTINGS["on_startup"] is not None
         assert WORKER_SETTINGS["on_shutdown"] is not None
         assert WORKER_SETTINGS["on_job_start"] is not None
