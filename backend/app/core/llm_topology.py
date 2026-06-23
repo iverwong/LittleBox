@@ -69,6 +69,7 @@ class Role(StrEnum):
     MAIN = "main"  # 主对话
     AUDIT = "audit"  # 审查
     COMPRESSION = "compression"  # 后台上下文压缩
+    EXPERT = "expert"  # 日终专家
 
 
 class EndpointName(StrEnum):
@@ -286,5 +287,22 @@ ROLES: dict[Role, RoleBinding] = {
             0.3,
         ),
         retry_attempts=1,
+    ),
+    # expert：与 audit 同配置 — deepseek v4 flash，thinking=ON，
+    # reasoning_effort=MAX，bailian fallback，retry_attempts=3。
+    # 工具由 expert/llm.py 调用方自行 bind（SearchHistory + FetchByRef + ExpertReportSchema）。
+    Role.EXPERT: RoleBinding(
+        EndpointName.DEEPSEEK,
+        _DSV4,
+        True,
+        ReasoningEffort.MAX,
+        None,
+        fallback=RoleBinding(
+            EndpointName.BAILIAN,
+            _DSV4,
+            True,
+            ReasoningEffort.MAX,
+            None,
+        ),
     ),
 }
