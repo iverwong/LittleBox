@@ -1,0 +1,144 @@
+"""Expert 域 Pydantic schemas。
+
+本模块设计为 Pydantic v2 BaseModel 纯数据类,不引入 ORM / LangChain 依赖。
+LLM 工具入口用 `SearchHistoryInput` / `FetchByRefInput` 由 LangChain `bind_tools()` 消费,
+`ExpertReportSchema` 由 `with_structured_output(include_raw=True)` 消费。
+"""
+
+from __future__ import annotations
+
+from datetime import date
+from typing import Optional
+
+from pydantic import BaseModel, Field, field_validator
+
+from app.core.enums import DailyStatus
+
+
+class SearchHistoryInput(BaseModel):
+    """检索历史数据（turn_summary / crisis_topic / session_notes / daily_report）。
+
+    Attributes:
+        keywords: 检索关键词列表,1-8 个,每词至少 2 字符(OR 匹配)。
+        start_date: 检索范围起始日期(可选),默认 = end_date - 30 日。
+        end_date: 检索范围结束日期(可选),默认 = report_date - 1 日。
+        limit: 返回结果上限,1-50 条,默认 15。
+        context_chars: 长源开窗字符数,0-300,默认 100。仅对 session_notes /
+            daily_report 生效(以匹配位置为中心取前后 N 字符);短源
+            (turn_summary / crisis_topic)整段返回。
+        sources: 限定检索数据源子集,可选 4 类枚举值。若不传则检索全部 4 类。
+    """
+
+    keywords: list[str] = Field(
+        min_length=1,
+        max_length=8,
+        description="检索关键词列表,1-8 个,每词至少 2 字符(OR 匹配)",
+    )
+    start_date: Optional[date] = Field(
+        default=None,
+        description="检索范围起始日期(可选),默认 = end_date - 30 日",
+    )
+    end_date: Optional[date] = Field(
+        default=None,
+        description="检索范围结束日期(可选),默认 = report_date - 1 日",
+    )
+    limit: int = Field(
+        default=15,
+        ge=1,
+        le=50,
+        description="返回结果上限,1-50 条,默认 15",
+    )
+    context_chars: int = Field(
+        default=100,
+        ge=0,
+        le=300,
+        description="长源开窗字符数,0-300,默认 100",
+    )
+    sources: Optional[list[str]] = Field(
+        default=None,
+        description="""限定检索数据源子集,可选值:
+- turn_summary: 对话轮次摘要
+- crisis_topic: 危机主题
+- session_notes: 会话笔记
+- daily_report: 历史日终报告""",
+    )
+
+    @field_validator("keywords")
+    @classmethod
+    def _check_keyword_length(cls, v: list[str]) -> list[str]:
+        """校验每个关键词至少 2 字符。"""
+        for kw in v:
+            if len(kw) < 2:
+                raise ValueError(f"关键词长度必须 ≥2,收到 {kw!r}")
+        return v
+
+
+class FetchByRefInput(BaseModel):
+    """按引用键获取完整原文。
+
+    ref 格式:
+    - `turn:{session_id}#{turn}`: 返回 turn_summary + human/ai 原文 + crisis 标记
+    - `notes:{session_id}`: 返回 session_notes 全文 + 元信息
+    - `report:{report_id}`: 返回完整 daily_report content
+
+    Attributes:
+        ref: 引用键字符串,格式如 `turn:uuid#3` / `notes:uuid` / `report:uuid`。
+        context_turns: 仅对 `turn:` 类生效,展开前后各 N 轮原文,0-3,默认 0。
+    """
+
+    ref: str = Field(
+        min_length=1,
+        description="""引用键字符串,格式:
+- turn:{session_id}#{turn}: 返回 turn_summary + human/ai 原文 + crisis 标记
+- notes:{session_id}: 返回 session_notes 全文 + 元信息
+- report:{report_id}: 返回完整 daily_report content""",
+    )
+    context_turns: int = Field(
+        default=0,
+        ge=0,
+        le=3,
+        description="仅对 turn: 类生效,展开前后各 N 轮原文,0-3,默认 0",
+    )
+
+
+class ExpertReportSchema(BaseModel):
+    """日终专家报告结构化输出。
+
+    LLM 综合当日对话材料、历史报告与检索结果,产出 6 段内容的报告。
+    所有字符串字段均需填写,不留空段。
+    """
+
+    overall_status: DailyStatus = Field(
+        description="""当日整体状态:
+- stable: 平稳,无明显风险信号
+- attention: 关注,出现需留意的观察
+- alert: 警示,触发危机/连续高分维度""",
+    )
+    degraded: bool = Field(
+        default=False,
+        description="是否为降级产物(True 表示 max_iter 超限/LLM 未调输出工具)",
+    )
+    today_overview: str = Field(
+        min_length=1,
+        description="1. 今日概览:整体状态一句话概括",
+    )
+    what_was_discussed: str = Field(
+        min_length=1,
+        description="2. 聊了什么:今日主要话题与脉络",
+    )
+    emotion_changes: str = Field(
+        min_length=1,
+        description="3. 情绪变化:情绪波动与诱因描述",
+    )
+    noteworthy: str = Field(
+        min_length=1,
+        description="4. 值得关注:需要家长留意的观察点",
+    )
+    suggestions: str = Field(
+        min_length=1,
+        description="5. 具体建议:给家长的可操作建议",
+    )
+    anomaly_periods: str = Field(
+        min_length=1,
+        description="6. 异常时段标注:异常时段与具体表现",
+    )
