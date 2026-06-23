@@ -49,6 +49,7 @@ def test_build_runtime_returns_frozen():
         shared_http_client=MagicMock(),
         main_graph=MagicMock(),
         audit_graph=MagicMock(),
+        expert_graph=MagicMock(),
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         rr.settings = None  # 任意字段赋值，frozen 拦截
@@ -67,6 +68,7 @@ def test_build_runtime_graphs_compiled():
         shared_http_client=MagicMock(),
         main_graph=MagicMock(),
         audit_graph=MagicMock(),
+        expert_graph=MagicMock(),
     )
     # main_graph 使用 astream（chat 流式），audit_graph 使用 ainvoke（单次调用）
     assert hasattr(rr.main_graph, "astream"), "main_graph 缺少 astream 接口"

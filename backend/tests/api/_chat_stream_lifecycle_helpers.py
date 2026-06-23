@@ -124,6 +124,7 @@ async def lifecycle_ctx(engine, redis_client, concurrent_db_sessions):
             shared_http_client=MagicMock(),
             main_graph=MagicMock(),
             audit_graph=MagicMock(),
+            expert_graph=MagicMock(),
         )
         app.state.resources = rr
 
