@@ -51,12 +51,12 @@ export function Input({
     ? theme.palette.neutral[500]
     : theme.palette.neutral[800];
 
-  // —— 字符计数：showCount + maxLength 都给才渲染。
-  // 阈值(单一门槛 80% + 颜色分级):
-  //   < 80%    → 不渲染
-  //   [80%,90%) → 中性色(palette.neutral[300],与 BirthdayField 的"约 N 岁"同色)
-  //   [90%,100%) → ui.error 红
-  //   = 100%   → 红 + "已达限额"
+  // —— 字符计数：showCount + maxLength 都给才启用。
+  // 颜色分级：
+  //   < 80%    → opacity:0（不可见）
+  //   [80%,90%) → neutral[300]
+  //   [90%,100%) → ui.error（danger 色）
+  //   = 100%    → ui.error + 一次快速抖动
   const showCounter =
     showCount && typeof maxLength === "number" && maxLength > 0;
   const ratio = showCounter ? value.length / maxLength! : 0;
