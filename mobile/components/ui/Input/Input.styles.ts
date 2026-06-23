@@ -14,6 +14,9 @@ type InputStyles = {
   iconLeft: TextStyle;
   iconRight: TextStyle;
   errorText: TextStyle;
+  counter: TextStyle;
+  counterWarn: TextStyle;
+  counterError: TextStyle;
 };
 
 export const createStyles = (theme: Theme): InputStyles => {
@@ -67,6 +70,23 @@ export const createStyles = (theme: Theme): InputStyles => {
     iconRight: { marginLeft: theme.spacing[2] },
     errorText: {
       fontSize: theme.typography.fontSize.xs,
+      color: theme.ui.error,
+    },
+    counter: {
+      // 浮在 input 容器内右下角，绝对定位，不参与布局流。
+      // 位置在 paddingBottom 安全区上方，文字不会与之重叠。
+      position: 'absolute',
+      bottom: 2,
+      right: theme.spacing[3],
+      fontSize: theme.typography.fontSize.xs,
+      color: theme.palette.neutral[300],
+    },
+    counterWarn: {
+      // [90%, 100%)：danger 色提醒
+      color: theme.ui.error,
+    },
+    counterError: {
+      // =100%：danger 色 + 抖动（动画由组件层处理），不再用粗体强调
       color: theme.ui.error,
     },
   });
