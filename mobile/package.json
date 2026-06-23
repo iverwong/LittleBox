@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
+    "@quidone/react-native-wheel-picker": "^1.7.0",
     "@react-navigation/native": "^7.1.8",
     "eslint": "^9.39.4",
     "eslint-config-expo": "~10.0.0",
@@ -31,12 +32,12 @@
     "react-dom": "19.1.0",
     "react-native": "0.81.5",
     "react-native-gesture-handler": "^2.31.1",
+    "react-native-keyboard-controller": "^1.18.0",
     "react-native-qrcode-svg": "^6.3.21",
     "react-native-reanimated": "~4.1.1",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-screens": "~4.16.0",
     "react-native-sse": "^1.2.1",
-    "react-native-keyboard-controller": "^1.18.0",
     "react-native-svg": "15.12.1",
     "react-native-web": "~0.21.0",
     "react-native-worklets": "0.5.1",
@@ -47,5 +48,9 @@
     "react-test-renderer": "19.1.0",
     "typescript": "~5.9.2"
   },
-  "private": true
+  "private": true,
+  "allowScripts": {
+    "fsevents@2.3.3": true,
+    "unrs-resolver@1.11.1": true
+  }
 }
