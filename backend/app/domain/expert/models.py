@@ -7,7 +7,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Date, ForeignKey, Index, Text
+from sqlalchemy import Boolean, Date, ForeignKey, Index, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -31,7 +31,9 @@ class DailyReport(BaseMixin, Base):
     """
 
     __tablename__ = "daily_reports"
-    __table_args__ = (Index("idx_reports_child", "child_user_id", "report_date"),)
+    __table_args__ = (
+        Index("idx_reports_child", "child_user_id", "report_date", unique=True),
+    )
 
     child_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -59,6 +61,13 @@ class DailyReport(BaseMixin, Base):
         Text,
         nullable=False,
         comment="markdown 格式报告",
+    )
+    degraded: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+        comment="True 表示降级产物（交卷耗尽 / token 超限），前端展示降级提示",
     )
     delivered_at: Mapped[Optional[datetime]] = mapped_column(
         TIMESTAMP(timezone=True),
