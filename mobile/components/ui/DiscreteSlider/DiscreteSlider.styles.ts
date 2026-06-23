@@ -1,6 +1,6 @@
-import { StyleSheet } from 'react-native';
-import type { ViewStyle, TextStyle } from 'react-native';
-import type { Theme } from '@/theme';
+import { StyleSheet } from "react-native";
+import type { ViewStyle, TextStyle } from "react-native";
+import type { Theme } from "@/theme";
 
 type DiscreteSliderStyles = {
   container: ViewStyle;
@@ -36,13 +36,13 @@ export const createStyles = (theme: Theme): DiscreteSliderStyles => {
     },
     centerLabelRow: {
       minHeight: 24,
-      alignItems: 'center',
-      justifyContent: 'flex-end',
+      alignItems: "center",
+      justifyContent: "flex-end",
       marginBottom: 4,
     },
     trackRow: {
       height: 44,
-      justifyContent: 'center',
+      justifyContent: "center",
     },
     trackRowDisabled: {
       opacity: 0.6,
@@ -56,9 +56,9 @@ export const createStyles = (theme: Theme): DiscreteSliderStyles => {
       backgroundColor: theme.palette.neutral[200],
     },
     activeTrack: {
-      position: 'absolute',
+      position: "absolute",
       left: 0,
-      top: '50%',
+      top: "50%",
       marginTop: -3,
       height: 6,
       backgroundColor: theme.palette.primary[300],
@@ -68,39 +68,39 @@ export const createStyles = (theme: Theme): DiscreteSliderStyles => {
       backgroundColor: theme.palette.neutral[200],
     },
     nodeDot: {
-      position: 'absolute',
-      width: 14,
-      height: 14,
-      borderRadius: 7,
+      position: "absolute",
+      width: 10,
+      height: 10,
+      borderRadius: 5,
       backgroundColor: theme.palette.primary[500],
       borderWidth: 2,
       borderColor: theme.palette.neutral[50],
-      marginLeft: -7,
-      top: '50%',
-      marginTop: -7,
+      marginLeft: -5,
+      top: "50%",
+      marginTop: -5,
     },
     nodeDotDisabled: {
       backgroundColor: theme.palette.neutral[500],
     },
     node: {
-      width: 14,
-      height: 14,
-      borderRadius: 7,
+      width: 10,
+      height: 10,
+      borderRadius: 5,
       backgroundColor: theme.palette.primary[500],
       borderWidth: 2,
       borderColor: theme.palette.neutral[50],
     },
     thumbOuter: {
-      position: 'absolute',
+      position: "absolute",
       left: 0,
-      top: '50%',
-      marginTop: -15,
-      width: 30,
-      height: 30,
-      borderRadius: 15,
+      top: "50%",
+      marginTop: -12,
+      width: 24,
+      height: 24,
+      borderRadius: 12,
       backgroundColor: theme.surface.paper,
-      alignItems: 'center',
-      justifyContent: 'center',
+      alignItems: "center",
+      justifyContent: "center",
       zIndex: 1,
       elevation: 1,
       // shadow handled via shadow.sm on thumb
@@ -109,9 +109,9 @@ export const createStyles = (theme: Theme): DiscreteSliderStyles => {
       backgroundColor: theme.surface.paper,
     },
     thumb: {
-      width: 24,
-      height: 24,
-      borderRadius: 12,
+      width: 18,
+      height: 18,
+      borderRadius: 9,
       backgroundColor: theme.palette.primary[500],
       ...theme.shadow.sm,
     },
@@ -119,8 +119,8 @@ export const createStyles = (theme: Theme): DiscreteSliderStyles => {
       backgroundColor: theme.palette.neutral[500],
     },
     bottomRow: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
+      flexDirection: "row",
+      justifyContent: "space-between",
       marginTop: -8,
     },
     centerValue: {
