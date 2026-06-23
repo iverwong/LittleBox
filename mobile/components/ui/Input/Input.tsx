@@ -1,23 +1,10 @@
 import { Feather } from "@expo/vector-icons";
-import {
-  TextInput,
-  View,
-  Text,
-  Animated,
-  LayoutAnimation,
-  Platform,
-  UIManager,
-} from "react-native";
+import { TextInput, View, Text, Animated } from "react-native";
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { useTheme } from "@/theme";
 import { createStyles } from "./Input.styles";
 import type { InputProps } from "./Input.types";
 import type { FeatherName } from "../types";
-
-// Android 需显式开启 LayoutAnimation
-if (Platform.OS === "android") {
-  UIManager.setLayoutAnimationEnabledExperimental?.(true);
-}
 
 export function Input({
   value,
@@ -77,15 +64,6 @@ export function Input({
     ratio >= 1 ? "error" : ratio >= 0.9 ? "warn" : "normal";
   // < 80% 不渲染(用户感知不到压力时不需要)
   const renderCounter = showCounter && ratio >= 0.8;
-
-  // —— counter 出现/消失时用 LayoutAnimation 平滑过渡 paddingBottom，无 layout jump ——
-  const prevRenderCounter = useRef(renderCounter);
-  if (renderCounter !== prevRenderCounter.current) {
-    LayoutAnimation.configureNext(
-      LayoutAnimation.create(150, "easeInEaseOut", "opacity"),
-    );
-    prevRenderCounter.current = renderCounter;
-  }
 
   // —— 抖动动画（=100% 瞬间触发一次，6 帧快速衰减，原生线程驱动）——
   const shakeAnim = useRef(new Animated.Value(0)).current;
