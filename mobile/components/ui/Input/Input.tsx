@@ -1,6 +1,6 @@
 import { Feather } from "@expo/vector-icons";
-import { TextInput, View, Text } from "react-native";
-import { useMemo, useState, useCallback } from "react";
+import { TextInput, View, Text, Animated } from "react-native";
+import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { useTheme } from "@/theme";
 import { createStyles } from "./Input.styles";
 import type { InputProps } from "./Input.types";
@@ -65,6 +65,49 @@ export function Input({
   // < 80% 不渲染(用户感知不到压力时不需要)
   const renderCounter = showCounter && ratio >= 0.8;
 
+  // —— 抖动动画（=100% 瞬间触发一次，6 帧快速衰减，原生线程驱动）——
+  const shakeAnim = useRef(new Animated.Value(0)).current;
+  const prevRatioRef = useRef(ratio);
+  useEffect(() => {
+    // 仅在"刚好从 <1 变为 1"的那一刻触发
+    if (ratio >= 1 && prevRatioRef.current < 1) {
+      shakeAnim.setValue(0);
+      Animated.sequence([
+        Animated.timing(shakeAnim, {
+          toValue: 1,
+          duration: 50,
+          useNativeDriver: true,
+        }),
+        Animated.timing(shakeAnim, {
+          toValue: -1,
+          duration: 50,
+          useNativeDriver: true,
+        }),
+        Animated.timing(shakeAnim, {
+          toValue: 0.6,
+          duration: 50,
+          useNativeDriver: true,
+        }),
+        Animated.timing(shakeAnim, {
+          toValue: -0.6,
+          duration: 50,
+          useNativeDriver: true,
+        }),
+        Animated.timing(shakeAnim, {
+          toValue: 0.3,
+          duration: 50,
+          useNativeDriver: true,
+        }),
+        Animated.timing(shakeAnim, {
+          toValue: 0,
+          duration: 40,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
+    prevRatioRef.current = ratio;
+  }, [ratio]);
+
   return (
     <View style={[styles.wrap, style]}>
       {label && (
@@ -122,12 +165,22 @@ export function Input({
           />
         )}
         {showCounter && (
-          <Text
+          <Animated.Text
             style={[
               styles.counter,
               counterVariant === "warn" && styles.counterWarn,
               counterVariant === "error" && styles.counterError,
               { opacity: renderCounter ? 1 : 0 },
+              {
+                transform: [
+                  {
+                    translateX: shakeAnim.interpolate({
+                      inputRange: [-1, 1],
+                      outputRange: [-6, 6],
+                    }),
+                  },
+                ],
+              },
             ]}
             pointerEvents="none"
             accessibilityLabel={
@@ -137,7 +190,7 @@ export function Input({
             }
           >
             {value.length}/{maxLength}
-          </Text>
+          </Animated.Text>
         )}
       </View>
       {error && <Text style={styles.errorText}>{error}</Text>}
