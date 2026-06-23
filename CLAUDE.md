@@ -19,6 +19,7 @@ backend/
 ├── tests/                   # 测试 (api / audit / chat / integration / runtime / unit)
 └── app/                     # 业务代码
     ├── main.py              # FastAPI 工厂与 lifespan 编排
+    ├── worker.py            # ARQ Worker 入口(聚合 audit + expert job + cron)
     │
     ├── core/                # 跨域基础设施(零业务依赖)
     │   ├── config.py        # pydantic-settings(env 前缀 LB_)
@@ -61,12 +62,21 @@ backend/
     │   │   ├── graph.py     # 4 节点 + 1 条件路由(replace-in-notes loop)
     │   │   ├── usecase.py   # write_audit_results
     │   │   ├── signals.py   # AuditSignalsManager 三态信号
-    │   │   └── worker.py    # ARQ 入口 + run_audit
+    │   │   └── worker.py    # run_audit job function(入口在 app/worker.py)
     │   ├── notifications/   # 通知域
     │   │   ├── models.py    # ORM:Notification
     │   │   └── notify_stub.py # 通知桩
     │   └── expert/          # 日终专家域
-    │       └── models.py    # ORM:DailyReport
+    │       ├── models.py        # ORM:DailyReport
+    │       ├── schemas.py       # Pydantic:ExpertReportSchema + 工具入参
+    │       ├── context_schema.py # ExpertContextSchema frozen dataclass
+    │       ├── prompts.py       # 日终专家 system prompt
+    │       ├── llm.py           # build_expert_llm(bind_tools + retry + fallback)
+    │       ├── graph.py         # 4 节点 + 1 条件路由(search/fetch → output loop)
+    │       ├── tools.py         # search_history / fetch_by_ref 工具 handler
+    │       ├── repository.py    # 只读数据源查询(search_* / fetch_*)
+    │       ├── usecase.py       # write_expert_results (upsert)
+    │       └── worker.py        # run_daily_reports cron job
     │
     ├── api/                 # HTTP 协议层(只做协议适配 + 编排)
     │   ├── health.py        # /health
@@ -110,7 +120,7 @@ mobile/
 
 ## 运行环境
 
-后端整套跑在 Docker Compose 上(API / PostgreSQL / Redis / pgAdmin / RedisInsight / audit_worker)。本地代码以卷挂载形式进容器,**所有命令**(迁移、测试、lint、脚本)通过 `docker compose exec api ...` 在容器内执行,不绕过容器直接连库/连服务。
+后端整套跑在 Docker Compose 上(API / PostgreSQL / Redis / pgAdmin / RedisInsight / worker)。本地代码以卷挂载形式进容器,**所有命令**(迁移、测试、lint、脚本)通过 `docker compose exec api ...` 在容器内执行,不绕过容器直接连库/连服务。
 
 ## 工程纪律
 
@@ -150,6 +160,24 @@ DB engine 是全进程唯一实例,由 `RuntimeResources` 托管;lifespan 是唯
 - **HTTPException 状态码**: 必须 `from fastapi import status` + 用 `status.HTTP_xxx_xxx` 常量,禁止裸数字(`status_code=...` 装饰器同样规则)
 - **Python 3.14 PEP 758**: `except` / `except*` 支持不带括号的多个异常类型
 - **`messages.role`**: DB 存 `human` / `ai`(不是 `user` / `assistant`),对齐 LangChain `HumanMessage` / `AIMessage`
+- **中文注释**: 工程代码(domain/core/api)注释与 docstring 统一用中文 Google 风格，半角标点。测试代码可放松。
+- **ORM 优先**: 简单查询走 SQLAlchemy ORM(`select()` + `.where()` + `.join()`)，禁止裸 SQL(`text()`)。允许裸 SQL 的唯一例外：PostgreSQL 专有语法（`jsonb_array_elements`、`ILIKE ANY`、`ON CONFLICT DO UPDATE` 等），此时必须在语句上方注释说明原因。
+
+### DB 迁移纪律
+
+迁移必须从 ORM 模型变更自动生成，**禁止手写迁移文件**。标准流程：
+
+1. 修改 `app/domain/*/models.py` 中的 ORM 模型（增删列、改索引、改注释等）
+2. `docker compose exec api alembic revision --autogenerate -m "<描述>"`
+3. 检查生成的迁移文件中 `upgrade()` / `downgrade()` 是否正确
+4. `docker compose exec api alembic upgrade head` 应用到开发库
+5. `docker compose exec api alembic check` 验证模型与 DB 一致（应输出 `No new upgrade operations detected`）
+
+**反模式**：
+- 手写 `op.add_column()` / `op.create_index()` 等（应让 alembic autogenerate 从 ORM 模型 diff 产出）
+- 先手写迁移再补 ORM 模型字段（顺序必须模型先行）
+- 迁移文件只写 upgrade 不写 downgrade（除非是基线迁移 `1d8a14cc596f` 等不可逆操作）
+- 注释修正（全角→半角、措辞调整）混在功能迁移中——允许但尽可能独立成一个 commit
 
 ## 静态检查与格式
 
