@@ -35,7 +35,7 @@ import { GenderAvatar } from '@/components/business/GenderAvatar'
 
 type Gender = 'male' | 'female' | 'unknown'
 
-export const NICKNAME_MAX = 32
+export const NICKNAME_MAX = 12
 const DEFAULT_AGE = 12
 
 const GENDER_OPTIONS: { value: Gender; label: string }[] = [
@@ -93,7 +93,7 @@ export default function NewChildScreen() {
         return
       }
       if (res.status === 422) {
-        setNicknameErr('昵称格式不被接受，请检查输入')
+        setNicknameErr(`昵称不可超过 ${NICKNAME_MAX} 个字`)
         return
       }
       if (res.status >= 400 && res.status < 500) {
@@ -157,6 +157,7 @@ export default function NewChildScreen() {
                 autoCapitalize="none"
                 autoCorrect={false}
                 maxLength={NICKNAME_MAX}
+                showCount
                 error={nicknameErr ?? undefined}
               />
             </View>
