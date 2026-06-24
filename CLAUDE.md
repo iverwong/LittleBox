@@ -165,19 +165,9 @@ DB engine 是全进程唯一实例,由 `RuntimeResources` 托管;lifespan 是唯
 
 ### DB 迁移纪律
 
-迁移必须从 ORM 模型变更自动生成，**禁止手写迁移文件**。标准流程：
-
-1. 修改 `app/domain/*/models.py` 中的 ORM 模型（增删列、改索引、改注释等）
-2. `docker compose exec api alembic revision --autogenerate -m "<描述>"`
-3. 检查生成的迁移文件中 `upgrade()` / `downgrade()` 是否正确
-4. `docker compose exec api alembic upgrade head` 应用到开发库
-5. `docker compose exec api alembic check` 验证模型与 DB 一致（应输出 `No new upgrade operations detected`）
-
-**反模式**：
-- 手写 `op.add_column()` / `op.create_index()` 等（应让 alembic autogenerate 从 ORM 模型 diff 产出）
-- 先手写迁移再补 ORM 模型字段（顺序必须模型先行）
-- 迁移文件只写 upgrade 不写 downgrade（除非是基线迁移 `1d8a14cc596f` 等不可逆操作）
-- 注释修正（全角→半角、措辞调整）混在功能迁移中——允许但尽可能独立成一个 commit
+- 迁移必须从 ORM 模型变更自动生成,禁止手写 DDL(autogenerate 漏点应回 ORM 修,模型先行)
+- 流程:改 `app/domain/*/models.py` → `alembic revision --autogenerate -m "<描述>"` → 检查 upgrade()/downgrade() → `alembic upgrade head` → `alembic check`(应输出 `No new upgrade operations detected`)
+- 基线迁移(如 `1d8a14cc596f`)可只写 upgrade;注释修正应独立 commit
 
 ## 静态检查与格式
 

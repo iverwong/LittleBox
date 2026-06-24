@@ -31,9 +31,7 @@ class DailyReport(BaseMixin, Base):
     """
 
     __tablename__ = "daily_reports"
-    __table_args__ = (
-        Index("idx_reports_child", "child_user_id", "report_date", unique=True),
-    )
+    __table_args__ = (Index("idx_reports_child", "child_user_id", "report_date", unique=True),)
 
     child_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
