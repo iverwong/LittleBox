@@ -11,7 +11,7 @@ import json
 import logging
 import re
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import ToolMessage
@@ -117,10 +117,6 @@ async def _search_history(
             ),
             tool_call_id=tool_call_id,
         )
-
-    # 转换逻辑日为 UTC datetime 窗口（暂仅构造，供后续扩展）
-    _ = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-    _ = datetime.combine(end_date, datetime.min.time()).replace(tzinfo=timezone.utc)
 
     # ---- 3. 确定 sources ----
     sources: list[str] = validated.sources or EXPERT_SEARCH_SOURCES

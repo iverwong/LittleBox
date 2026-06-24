@@ -8,7 +8,9 @@ list_sessions / get_messages 走 keyset 游标分页,游标为 base64
 - `encode_cursor(sort_key, row_id)` —— base64 URL-safe 编码
 - `decode_cursor(cursor)` —— 解码,失败时抛 `InvalidCursor`
 
-排序键统一 strip tzinfo(naive),与 DB 列声明一致。
+排序键统一 strip tzinfo(naive)：时区信息在 cursor 编码中冗余,strip 后编码
+更紧凑、解码更简单;DB 列实际为 TIMESTAMPTZ,比较由 PostgreSQL 把 naive
+datetime 当作 session timezone 处理,编码/解码两端保持同一条规则即可。
 """
 
 from __future__ import annotations

@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -30,7 +29,6 @@ from sqlalchemy import select
 from typing_extensions import TypedDict
 
 from app.core.enums import DailyStatus
-from app.core.time import SHANGHAI
 from app.domain.expert.llm import build_expert_llm
 from app.domain.expert.prompts import build_expert_system_prompt
 from app.domain.expert.schemas import ExpertReportSchema
@@ -147,12 +145,8 @@ async def load_context(
     ctx = runtime.context
     report_date = ctx.report_date
     owned_sids = list(ctx.owned_session_ids)
-
-    # 逻辑日窗口:report_date 4:00 Shanghai → report_date+1 4:00 Shanghai
-    day_start = datetime.combine(report_date, datetime.min.time()).replace(
-        tzinfo=SHANGHAI
-    ) + timedelta(hours=4)
-    day_end = day_start + timedelta(days=1)
+    day_start = ctx.day_start
+    day_end = ctx.day_end
 
     # 组装 HumanMessage 内容
     parts: list[str] = [f"报告日期: {report_date.isoformat()}", ""]

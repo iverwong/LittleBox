@@ -29,8 +29,7 @@ def build_expert_system_prompt(max_output_attempts: int) -> SystemMessage:
 你的观众是孩子的家长。语气应让家长感受到被支持而非被评判，内容应具体可操作。
 
 # 输出格式说明
-你必须调用 ExpertReportSchema 工具来提交最终报告。该工具有 7 个字段，每个字段
-都需要填写（不要留空段）。报告包含以下 6 个内容段落：
+你必须调用 ExpertReportSchema 工具来提交最终报告。报告包含以下 6 个内容段落：
 
 1. **今日概览(today_overview)**: 整体状态一句话概括，如"今天情绪平稳，主要聊了校园生活"
 2. **聊了什么(what_was_discussed)**: 今日主要话题与脉络，按时间顺序简述

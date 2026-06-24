@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from arq.connections import RedisSettings
+from arq.cron import cron
 
 from app.core.config import settings
 
@@ -70,7 +71,7 @@ async def on_job_end(ctx: dict[str, Any]) -> None:
 
 WORKER_SETTINGS: dict[str, Any] = {
     "functions": [
-        "app.worker.run_audit",
+        "app.domain.audit.worker.run_audit",
         "app.domain.expert.worker.run_daily_reports",
     ],
     "redis_settings": RedisSettings(
@@ -86,11 +87,11 @@ WORKER_SETTINGS: dict[str, Any] = {
     "on_job_start": on_job_start,
     "on_job_end": on_job_end,
     "cron_jobs": [
-        {
-            "hour": settings.expert_cron_hour,
-            "minute": settings.expert_cron_minute,
-            "coroutine": "app.domain.expert.worker.run_daily_reports",
-        }
+        cron(
+            "app.domain.expert.worker.run_daily_reports",
+            hour=settings.expert_cron_hour,
+            minute=settings.expert_cron_minute,
+        ),
     ],
     "ctx": {"settings": settings},
 }

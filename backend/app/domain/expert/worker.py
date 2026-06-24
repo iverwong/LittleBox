@@ -8,12 +8,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.time import SHANGHAI, logical_day, now_utc
+from app.domain.expert.graph import ExpertGraphState
 
 logger = logging.getLogger("expert.worker")
 
@@ -24,7 +26,7 @@ _HIGH_SCORE_THRESHOLD = 7
 
 
 async def _check_crisis_today(
-    db,
+    db: AsyncSession,
     child_user_id: uuid.UUID,
     day_start: datetime,
     day_end: datetime,
@@ -59,7 +61,7 @@ async def _check_crisis_today(
 
 
 async def _aggregate_dimensions(
-    db,
+    db: AsyncSession,
     owned_session_ids: frozenset[uuid.UUID],
     day_start: datetime,
     day_end: datetime,
@@ -152,9 +154,9 @@ def _parse_today_overview_from_content(content: str) -> str:
 
 
 async def _get_recent_reports(
-    db,
+    db: AsyncSession,
     child_user_id: uuid.UUID,
-    report_date,
+    report_date: date,
     days: int = 7,
 ) -> list[dict]:
     """查询近 days 天的历史每日报告概要。
@@ -315,6 +317,8 @@ async def run_daily_reports(ctx: dict[str, Any]) -> None:
                     child_user_id=child_user_id_val,
                     owned_session_ids=owned_sids,
                     report_date=report_date,
+                    day_start=day_start,
+                    day_end=day_end,
                     dimension_summary=dimension_summary,
                     recent_reports_overview=recent_reports,
                     crisis_detected_today=crisis_detected,
@@ -327,7 +331,7 @@ async def run_daily_reports(ctx: dict[str, Any]) -> None:
                 )
 
                 # 构造 ExpertGraphState
-                state: dict[str, Any] = {
+                state: ExpertGraphState = {
                     "messages": [],
                     "output_attempts": 0,
                     "total_output_tokens": 0,

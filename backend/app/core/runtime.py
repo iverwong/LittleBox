@@ -118,7 +118,14 @@ async def build_runtime(settings: Settings) -> RuntimeResources:
         不可变的 `RuntimeResources` 实例。
     """
     # 1. db_engine
-    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+    # asyncpg 用 server_settings 在 connection-time 发送 "SET timezone='UTC'",
+    # 确保每个从池中取出的 connection session timezone 都是 UTC,无论 PG 服务器
+    # 部署在哪个时区;psycopg2 的 options 参数在这里不适用(只用于 PG TEXT)。
+    engine = create_async_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+        connect_args={"server_settings": {"timezone": "UTC"}},
+    )
 
     # 2. session 工厂
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
