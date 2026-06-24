@@ -140,7 +140,7 @@ class TestInfrastructureSmoke:
             )
 
         worker = Worker(
-            functions=["app.worker.run_audit"],
+            functions=["app.domain.audit.worker.run_audit"],
             redis_pool=rr.arq_pool,
             burst=True,
             on_startup=_on_startup,
