@@ -128,19 +128,36 @@ async def _seed_data(db, ids: dict):
     await db.execute(
         text("""
             INSERT INTO daily_reports
-                (child_user_id, report_date, overall_status, content, created_at)
+                (child_user_id, session_id, report_date, overall_status,
+                 today_overview, what_was_discussed, emotion_changes,
+                 noteworthy, suggestions, anomaly_periods,
+                 created_at)
             VALUES
-                (:cuid, :rd1, :status1, :content1, :now1),
-                (:cuid, :rd2, :status2, :content2, :now2)
+                (:cuid, :sid1, :rd1, :status1,
+                 :ov1, :wd1, :ec1, :nt1, :sg1, :ap1, :now1),
+                (:cuid, :sid2, :rd2, :status2,
+                 :ov2, :wd2, :ec2, :nt2, :sg2, :ap2, :now2)
         """),
         {
             "cuid": cid,
+            "sid1": sid1,
+            "sid2": sid2,
             "rd1": REPORT_DATE - timedelta(days=1),
             "rd2": REPORT_DATE - timedelta(days=2),
             "status1": DailyStatus.stable.value,
             "status2": DailyStatus.attention.value,
-            "content1": "## 今日概览\n\n平稳的一天\n\n## 聊了什么\n\n玩了游戏",
-            "content2": "## 今日概览\n\n需要关注\n\n## 聊了什么\n\n情绪波动",
+            "ov1": "平稳的一天",
+            "wd1": "玩了游戏",
+            "ec1": "情绪稳定",
+            "nt1": "无特别",
+            "sg1": "继续观察",
+            "ap1": "无",
+            "ov2": "需要关注",
+            "wd2": "情绪波动",
+            "ec2": "有些焦虑",
+            "nt2": "留意变化",
+            "sg2": "多沟通",
+            "ap2": "傍晚",
             "now1": NOW - timedelta(days=1),
             "now2": NOW - timedelta(days=2),
         },
@@ -342,12 +359,14 @@ class TestFetchReport:
         bundle = await fetch_report(sessions[1], str(row[0]))
         assert bundle is not None
         assert "id" in bundle
-        assert "content" in bundle
+        assert "today_overview" in bundle
+        assert "what_was_discussed" in bundle
+        assert "child_user_id" in bundle
 
     async def test_fetch_non_existent(self, concurrent_db_sessions):
         sessions = await concurrent_db_sessions(count=2, tables=_TABLES)
         ids = _make_ids()
         await _seed_data(sessions[0], ids)
         bad_id = f"{uuid.uuid4()}"
-        with pytest.raises(ValueError, match="Daily report not found"):
-            await fetch_report(sessions[1], bad_id)
+        bundle = await fetch_report(sessions[1], bad_id)
+        assert bundle is None

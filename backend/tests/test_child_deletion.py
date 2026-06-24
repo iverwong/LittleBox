@@ -55,11 +55,20 @@ class TestHardDeleteChildService:
             child_user_id=child.id, created_by=parent.id,
             birth_date=date(2015, 1, 1), gender="unknown", nickname="test",
         ))
-        db_session.add(Session(child_user_id=child.id))
+        child_sess = Session(child_user_id=child.id)
+        db_session.add(child_sess)
+        await db_session.flush()
         db_session.add(DeviceToken(user_id=child.id, platform="ios", token="tok123"))
         db_session.add(DailyReport(
-            child_user_id=child.id, report_date=date.today(),
-            overall_status=DailyStatus.stable, content="test",
+            child_user_id=child.id, session_id=child_sess.id,
+            report_date=date.today(),
+            overall_status=DailyStatus.stable,
+            today_overview="test",
+            what_was_discussed="test",
+            emotion_changes="test",
+            noteworthy="test",
+            suggestions="test",
+            anomaly_periods="test",
         ))
         db_session.add(Notification(parent_user_id=parent.id, child_user_id=child.id, type="crisis"))
         await db_session.commit()

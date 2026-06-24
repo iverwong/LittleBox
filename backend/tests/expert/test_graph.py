@@ -117,6 +117,7 @@ def _make_mock_ctx(**overrides) -> ExpertContextSchema:
     defaults = dict(
         child_user_id=CUID,
         owned_session_ids=frozenset({SID}),
+        session_id=SID,
         report_date=REPORT_DATE,
         day_start=day_start,
         day_end=day_end,

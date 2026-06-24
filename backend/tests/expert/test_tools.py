@@ -30,6 +30,7 @@ def _make_mock_ctx(**overrides: dict) -> ExpertContextSchema:
     defaults = dict(
         child_user_id=CUID,
         owned_session_ids=frozenset({SID}),
+        session_id=SID,
         report_date=REPORT_DATE,
         day_start=day_start,
         day_end=day_end,
@@ -64,38 +65,25 @@ class TestSearchHistoryHandler:
     async def test_valid_args_returns_toolmessage(self):
         """有效入参应返回 ToolMessage。"""
         runtime = _make_mock_runtime()
-        args = {"keywords": ["游戏"]}
+        args = {"keywords": ["游戏"], "source": "turn_summary"}
 
-        with (
-            patch(
-                "app.domain.expert.tools.search_turn_summaries",
-                AsyncMock(return_value=[]),
-            ),
-            patch(
-                "app.domain.expert.tools.search_session_notes",
-                AsyncMock(return_value=[]),
-            ),
-            patch(
-                "app.domain.expert.tools.search_crisis_topics",
-                AsyncMock(return_value=[]),
-            ),
-            patch(
-                "app.domain.expert.tools.search_daily_reports",
-                AsyncMock(return_value=[]),
-            ),
-        ):
+        with patch(
+            "app.domain.expert.tools.search_turn_summaries",
+            AsyncMock(return_value=[]),
+        ) as mock_ts:
             result = await _search_history(args, runtime, "call-1")
 
         assert result.tool_call_id == "call-1"
         payload = json.loads(result.content)
         assert "results" in payload
         assert payload["total"] == 0
+        mock_ts.assert_awaited_once()
 
     async def test_invalid_args_returns_error(self):
         """入参校验失败应返回 error ToolMessage。"""
         runtime = _make_mock_runtime()
         # keywords 空列表 → ValidationError
-        args = {"keywords": []}
+        args = {"keywords": [], "source": "turn_summary"}
         result = await _search_history(args, runtime, "call-err")
         payload = json.loads(result.content)
         assert "error" in payload
@@ -105,6 +93,7 @@ class TestSearchHistoryHandler:
         runtime = _make_mock_runtime()
         args = {
             "keywords": ["游戏"],
+            "source": "turn_summary",
             "start_date": "2026-06-25",
             "end_date": "2026-06-20",
         }
@@ -118,6 +107,7 @@ class TestSearchHistoryHandler:
         runtime = _make_mock_runtime()
         args = {
             "keywords": ["游戏"],
+            "source": "turn_summary",
             "start_date": str(REPORT_DATE - timedelta(days=1)),
             "end_date": str(REPORT_DATE),
         }
@@ -129,15 +119,15 @@ class TestSearchHistoryHandler:
     async def test_keyword_validation_error(self):
         """单字符关键词应导致 Pydantic 校验失败。"""
         runtime = _make_mock_runtime()
-        args = {"keywords": ["a"]}
+        args = {"keywords": ["a"], "source": "turn_summary"}
         result = await _search_history(args, runtime, "call-err")
         payload = json.loads(result.content)
         assert "error" in payload
 
-    async def test_sources_filter(self):
-        """sources 参数应限制搜索范围。"""
+    async def test_source_filter(self):
+        """source 单值应只调对应 repository 函数。"""
         runtime = _make_mock_runtime()
-        args = {"keywords": ["游戏"], "sources": ["turn_summary"]}
+        args = {"keywords": ["游戏"], "source": "turn_summary"}
 
         with (
             patch(
@@ -148,11 +138,16 @@ class TestSearchHistoryHandler:
                 "app.domain.expert.tools.search_session_notes",
                 AsyncMock(return_value=[]),
             ) as mock_sn,
+            patch(
+                "app.domain.expert.tools.search_daily_reports",
+                AsyncMock(return_value=[]),
+            ) as mock_dr,
         ):
             await _search_history(args, runtime, "call-1")
 
         mock_ts.assert_awaited_once()
         mock_sn.assert_not_awaited()
+        mock_dr.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -229,7 +224,14 @@ class TestFetchByRefHandler:
     async def test_valid_report_ref(self):
         """有效 report 引用应返回 bundle。"""
         rid = uuid.uuid4()
-        bundle = {"id": str(rid), "content": "daily report content"}
+        bundle = {
+            "id": str(rid),
+            "child_user_id": str(CUID),
+            "session_id": str(SID),
+            "report_date": "2026-06-22",
+            "today_overview": "平稳",
+            "what_was_discussed": "学校",
+        }
         args = {"ref": f"report:{rid}"}
         runtime = _make_mock_runtime()
         with patch("app.domain.expert.tools.fetch_report", AsyncMock(return_value=bundle)):
@@ -237,20 +239,46 @@ class TestFetchByRefHandler:
 
         payload = json.loads(result.content)
         assert payload["id"] == str(rid)
+        assert payload["today_overview"] == "平稳"
 
-    async def test_report_not_found_raises_valueerror(self):
-        """report 不存在时 fetch_report 抛出 ValueError。"""
+    async def test_report_not_found_returns_error(self):
+        """report 不存在时 fetch_report 返回 None,handler 转 error ToolMessage。"""
         rid = uuid.uuid4()
         args = {"ref": f"report:{rid}"}
         runtime = _make_mock_runtime()
         with patch(
             "app.domain.expert.tools.fetch_report",
-            AsyncMock(side_effect=ValueError(f"Daily report not found: {rid}")),
+            AsyncMock(return_value=None),
         ):
             result = await _fetch_by_ref(args, runtime, "call-err")
 
         payload = json.loads(result.content)
         assert "error" in payload
+        assert "not found" in payload["error"]
+
+    async def test_fetch_by_ref_report_owner_mismatch(self):
+        """report 不属于 ctx.child_user_id 时应返 not owned by child。
+
+        准备 child A 的 report row,ctx.child_user_id 模拟 child B,验证 owner check 兜住。
+        """
+        rid = uuid.uuid4()
+        child_a_id = uuid.uuid4()
+        bundle = {
+            "id": str(rid),
+            "child_user_id": str(child_a_id),
+            "session_id": str(uuid.uuid4()),
+            "report_date": "2026-06-22",
+            "today_overview": "平稳",
+        }
+        args = {"ref": f"report:{rid}"}
+        # ctx 是 child B(CUID),report 属于 child A
+        runtime = _make_mock_runtime()
+        with patch("app.domain.expert.tools.fetch_report", AsyncMock(return_value=bundle)):
+            result = await _fetch_by_ref(args, runtime, "call-err")
+
+        payload = json.loads(result.content)
+        assert "error" in payload
+        assert "not owned by child" in payload["error"]
 
 
 class TestExportedHandlers:

@@ -28,8 +28,16 @@ def _make_mock_arq_ctx(
     expert_graph_side_effect: Exception | None = None,
     children: list[uuid.UUID] | None = None,
     crisis_today: bool = False,
+    today_session_count: int = 1,
 ) -> dict:
-    """构造 mock ARQ ctx 字典。"""
+    """构造 mock ARQ ctx 字典。
+
+    Args:
+        today_session_count: 当日 session 数量,worker 3 路处理:
+          0 → 跳过该 child(产品逻辑"有聊才有报")
+          1 → 正常路径,取 session.id
+          ≥2 → fail loud,被 return_exceptions=True 兜住
+    """
     if expert_graph_result is None:
         expert_graph_result = {"structured_output": MagicMock()}
     if children is None:
@@ -62,6 +70,14 @@ def _make_mock_arq_ctx(
                 u.id = cid
                 mock_users.append(u)
             result.scalars.return_value.all.return_value = mock_users
+        elif "FROM sessions" in sql_str and "WHERE sessions" in sql_str and "created_at" in sql_str:
+            # 当日 Session 查询（ORM select(Session)）,按 today_session_count 控 3 路
+            today_sessions: list[MagicMock] = []
+            for i in range(today_session_count):
+                s = MagicMock()
+                s.id = uuid.uuid4()
+                today_sessions.append(s)
+            result.scalars.return_value.all.return_value = today_sessions
         elif "FROM sessions" in sql_str and "WHERE sessions" in sql_str:
             # owned_session_ids 查询（ORM select(Session.id)）
             result.scalars.return_value.all.return_value = [SID_1]
@@ -158,5 +174,32 @@ class TestRunDailyReports:
 
         ctx = _make_mock_arq_ctx(children=[])
         await run_daily_reports(ctx)
+
+        ctx["resources"].expert_graph.ainvoke.assert_not_called()
+
+    async def test_zero_today_session_skips_child(self):
+        """当日 0 session → 跳过该 child,不调 expert_graph。"""
+        from app.domain.expert.worker import run_daily_reports
+
+        ctx = _make_mock_arq_ctx(children=[CUID_1], today_session_count=0)
+        with patch(
+            "app.domain.expert.worker.logical_day",
+            return_value=REPORT_DATE + timedelta(days=1),
+        ):
+            await run_daily_reports(ctx)
+
+        ctx["resources"].expert_graph.ainvoke.assert_not_called()
+
+    async def test_two_today_sessions_fails_loud(self):
+        """当日 ≥2 session → 1:1 invariant 被破坏,fail loud,expert_graph 不被调。"""
+        from app.domain.expert.worker import run_daily_reports
+
+        ctx = _make_mock_arq_ctx(children=[CUID_1], today_session_count=2)
+        with patch(
+            "app.domain.expert.worker.logical_day",
+            return_value=REPORT_DATE + timedelta(days=1),
+        ):
+            # return_exceptions=True 兜住 RuntimeError,不应上抛
+            await run_daily_reports(ctx)
 
         ctx["resources"].expert_graph.ainvoke.assert_not_called()

@@ -70,12 +70,28 @@ class TestDeleteChildSuccess:
         )
         assert redeem_resp.status_code == 200
 
-        # 写一条日终报告
+        # 写一条日终报告（6 段直写 + session_id 锚定）
+        sess_row = (
+            await db_session.execute(
+                select(Session).where(Session.child_user_id == child_id).limit(1)
+            )
+        ).scalar_one_or_none()
+        if sess_row is None:
+            # 创建测试 session 以满足 FK
+            sess_row = Session(child_user_id=child_id)
+            db_session.add(sess_row)
+            await db_session.flush()
         db_session.add(DailyReport(
             child_user_id=child_id,
+            session_id=sess_row.id,
             report_date=date.today(),
             overall_status=DailyStatus.stable,
-            content="today summary",
+            today_overview="today summary",
+            what_was_discussed="school",
+            emotion_changes="stable",
+            noteworthy="none",
+            suggestions="keep",
+            anomaly_periods="none",
         ))
 
         # 写一条系统级通知（child_user_id IS NULL）

@@ -16,12 +16,12 @@ class TestSearchHistoryInput:
     """SearchHistoryInput schema 校验测试。"""
 
     def test_valid_minimal(self):
-        """最简有效入参：仅 keywords。"""
-        s = SearchHistoryInput(keywords=["游戏"])
+        """最简有效入参：keywords + source（必填）。"""
+        s = SearchHistoryInput(keywords=["游戏"], source="turn_summary")
         assert s.keywords == ["游戏"]
-        assert s.limit == 15
-        assert s.context_chars == 100
-        assert s.sources is None
+        assert s.source == "turn_summary"
+        assert s.limit == 10
+        assert s.context_chars == 80
         assert s.start_date is None
         assert s.end_date is None
 
@@ -31,67 +31,70 @@ class TestSearchHistoryInput:
 
         s = SearchHistoryInput(
             keywords=["游戏", "学校"],
+            source="daily_report",
             start_date=date(2026, 6, 1),
             end_date=date(2026, 6, 20),
             limit=5,
             context_chars=50,
-            sources=["turn_summary", "crisis_topic"],
         )
         assert len(s.keywords) == 2
         assert s.limit == 5
-        assert s.sources == ["turn_summary", "crisis_topic"]
+        assert s.source == "daily_report"
+
+    def test_missing_source_required(self):
+        """source 必填,缺失应报错。"""
+        with pytest.raises(ValidationError):
+            SearchHistoryInput(keywords=["游戏"])
+
+    def test_invalid_source_literal(self):
+        """source 传入非 Literal 候选应报错(Pydantic Literal 收口)。"""
+        with pytest.raises(ValidationError):
+            SearchHistoryInput(keywords=["test"], source="invalid_source")
 
     def test_keyword_too_short(self):
         """关键词长度不足 2 字符应报错。"""
         with pytest.raises(ValidationError):
-            SearchHistoryInput(keywords=["a"])
+            SearchHistoryInput(keywords=["a"], source="turn_summary")
 
     def test_keyword_exactly_2_chars(self):
         """关键词刚好 2 字符应通过。"""
-        s = SearchHistoryInput(keywords=["ab"])
+        s = SearchHistoryInput(keywords=["ab"], source="turn_summary")
         assert "ab" in s.keywords
 
     def test_empty_keywords_list(self):
         """关键词空列表应报错。"""
         with pytest.raises(ValidationError):
-            SearchHistoryInput(keywords=[])
+            SearchHistoryInput(keywords=[], source="turn_summary")
 
     def test_keywords_max_8(self):
         """关键词最多 8 个。"""
         keywords = ["a1", "b2", "c3", "d4", "e5", "f6", "g7", "h8"]
-        s = SearchHistoryInput(keywords=keywords)
+        s = SearchHistoryInput(keywords=keywords, source="turn_summary")
         assert len(s.keywords) == 8
 
     def test_keywords_exceed_8(self):
         """关键词超过 8 个应报错。"""
         with pytest.raises(ValidationError):
-            SearchHistoryInput(keywords=[f"k{i}" for i in range(9)])
+            SearchHistoryInput(keywords=[f"k{i}" for i in range(9)], source="turn_summary")
 
     def test_limit_bounds(self):
         """limit 超出 1-50 范围应报错。"""
         with pytest.raises(ValidationError):
-            SearchHistoryInput(keywords=["test"], limit=0)
+            SearchHistoryInput(keywords=["test"], source="turn_summary", limit=0)
         with pytest.raises(ValidationError):
-            SearchHistoryInput(keywords=["test"], limit=51)
+            SearchHistoryInput(keywords=["test"], source="turn_summary", limit=51)
 
     def test_context_chars_bounds(self):
-        """context_chars 超出 0-300 范围应报错。"""
+        """context_chars 超出 0-400 范围应报错。"""
         with pytest.raises(ValidationError):
-            SearchHistoryInput(keywords=["test"], context_chars=-1)
+            SearchHistoryInput(keywords=["test"], source="turn_summary", context_chars=-1)
         with pytest.raises(ValidationError):
-            SearchHistoryInput(keywords=["test"], context_chars=301)
+            SearchHistoryInput(keywords=["test"], source="turn_summary", context_chars=401)
 
     def test_context_chars_zero(self):
         """context_chars=0 应通过。"""
-        s = SearchHistoryInput(keywords=["test"], context_chars=0)
+        s = SearchHistoryInput(keywords=["test"], source="turn_summary", context_chars=0)
         assert s.context_chars == 0
-
-    def test_invalid_source(self):
-        """sources 传入非有效枚举值应报错（Pydantic 无自定义 enum，但 list[str] 不做校验）。"""
-        # SearchHistoryInput.sources 是 list[str]，不限制内容。
-        # 校验在 _search_history 内通过 EXPERT_SEARCH_SOURCES 做来源白名单。
-        s = SearchHistoryInput(keywords=["test"], sources=["invalid"])
-        assert "invalid" in s.sources
 
 
 class TestFetchByRefInput:
