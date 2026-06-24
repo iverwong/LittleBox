@@ -263,7 +263,7 @@ async def _get_recent_reports(db, child_user_id, exclude_date, limit=5):
 - 删"全部通过 `from sqlalchemy import text` 执行原始 SQL"
 - 改为"全部走 ORM(`select` + `.where()`),仅在 PG 专有语法必需时(本文件当前无)用 `text()`"
 
-**`search_daily_reports` 关键改动:** `ILIKE ANY` 跨 6 列搜,**WHERE 命中后 snippet 直接用 `today_overview`**——不重复 Python 找"首个命中列",LLM 要看全文用 `fetch_by_ref`。
+**`search_daily_reports` 关键改动:** `ILIKE ANY` 跨 6 列搜,WHERE 命中后**每行展开为 1..6 条 result,每条对应一个命中的列**——不是首个命中,所有命中列都各出一份,避免"后面的段永远召不回"。
 
 ```python
 from sqlalchemy import or_, any_
@@ -284,11 +284,16 @@ async def search_daily_reports(db, child_user_id, keywords, start_date, end_date
     kw_patterns = [f"%{_escape_like(kw)}%" for kw in keywords]
     sect_attrs = [getattr(DailyReport, c) for c in SIX_SECTIONS]
     stmt = (
-        select(
+        select(  # 6 列都 select,供 Python 展开所有命中
             DailyReport.id,
             DailyReport.report_date,
             DailyReport.created_at,
-            DailyReport.today_overview,    # snippet 用
+            DailyReport.today_overview,
+            DailyReport.what_was_discussed,
+            DailyReport.emotion_changes,
+            DailyReport.noteworthy,
+            DailyReport.suggestions,
+            DailyReport.anomaly_periods,
         )
         .where(
             DailyReport.child_user_id == child_user_id,
@@ -298,23 +303,34 @@ async def search_daily_reports(db, child_user_id, keywords, start_date, end_date
             or_(*[attr.ilike(any_(kw_patterns), escape="\\") for attr in sect_attrs]),
         )
         .order_by(DailyReport.report_date.desc())
-        .limit(limit)
+        .limit(limit)   # 行级 limit,每行最多 6 条 result
     )
     rows = (await db.execute(stmt)).all()
     results = []
     for row in rows:
         rid = str(row.id)
-        snippet = _extract_snippet(row.today_overview, keywords, context_chars)
-        results.append(_make_result(
-            ref=f"report:{rid}",
-            source="daily_report",
-            snippet=snippet,
-            occurred_at=str(row.created_at) if row.created_at else None,
-            matched=_match_matched(row.today_overview, keywords),
-            locating=f"日报 {row.report_date} (id: {rid})",
-        ))
+        # 6 列全部检查,所有命中列各出一份
+        for c in SIX_SECTIONS:
+            val = getattr(row, c) or ""
+            if any(kw.lower() in val.lower() for kw in keywords):
+                snippet = _extract_snippet(val, keywords, context_chars)
+                results.append(_make_result(
+                    ref=f"report:{rid}",
+                    source="daily_report",
+                    snippet=snippet,
+                    occurred_at=str(row.created_at) if row.created_at else None,
+                    matched=_match_matched(val, keywords),
+                    locating=f"日报 {row.report_date} {c} 段",   # 标出哪一段,LLM 看得见
+                ))
     return results
 ```
+
+**关键设计点:**
+
+- `limit` 是**行级**上限(SQL `LIMIT N` 拉 N 行日报),每行最多展开 6 条 result,实际返回总数可能 > `limit`(1 条日报 6 列全命中 → 6 条 result)。这是有意的:原则"所有命中都召回"比"严格 limit"更重要,LLM 用 ref 去重后再判断。
+- 同 ref 出现多次(同一日报多段命中)是**强相关信号**,LLM 看到同一 ref 多次 + 不同 `locating` 段名,知道这日报在多个维度命中。
+- `locating` 字段把"哪一段"标出来(`f"日报 {date} {col} 段"`),让 LLM 看见结构。
+- **其他 3 个 search**(`turn_summary` / `session_notes` / `crisis_topic`)没有多段结构,每行只有一段文本,本来就"每行一条 result",本原则已满足,**无需改动**。
 
 **`fetch_report` 关键改动:** 返回结构化 dict(替代 markdown `content`)。**保持 generic,不加 child_user_id 过滤——ownership check 放在 handler 层(§4.1),跟 `fetch_turn` / `fetch_notes` 既有模式一致。**
 
