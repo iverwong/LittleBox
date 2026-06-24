@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
 
-from app.core.time import SHANGHAI
+from app.core.time import SHANGHAI, now_shanghai
 from app.core.time import logical_day as _core_logical_day
 
 SESSION_HARD_BOUNDARY_HOUR = 4
@@ -70,6 +70,6 @@ def today_session_title(now: datetime | None = None) -> str:
     Returns:
         中文格式标题字符串。
     """
-    now = now or datetime.now(SHANGHAI)
+    now = now or now_shanghai()
     d = logical_day(now)
     return f"{_WEEKDAY_CN[d.weekday()]} · {d.month}月{d.day}日"

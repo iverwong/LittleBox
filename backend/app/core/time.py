@@ -7,11 +7,28 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 """项目统一使用的时区(Asia/Shanghai),所有逻辑日计算都基于此。"""
+
+UTC_TZ = UTC
+"""重新导出 stdlib UTC，供全项目统一 import 来源，避免各文件分别 from datetime import UTC。"""
+
+
+def now_utc() -> datetime:
+    """返回当前 UTC 时间（tz-aware）。
+
+    全项目「此刻」取值的唯一来源。替代分散在各处的
+    ``datetime.now(UTC)`` / ``datetime.now(timezone.utc)``。
+    """
+    return datetime.now(UTC)
+
+
+def now_shanghai() -> datetime:
+    """返回当前 Asia/Shanghai 时间（tz-aware）。"""
+    return datetime.now(SHANGHAI)
 
 
 def logical_day(ts: datetime, boundary_hour: int = 0) -> date:

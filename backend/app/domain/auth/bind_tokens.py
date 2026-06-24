@@ -16,13 +16,13 @@ from __future__ import annotations
 import json
 import secrets
 import uuid
-from datetime import datetime, timezone
 from typing import Optional
 
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.redis import RedisOp, stage_redis_op
+from app.core.time import now_utc
 
 BIND_KEY_PREFIX = "bind:"
 BIND_TTL_SECONDS = 300
@@ -114,7 +114,7 @@ def stage_record_bind_result(
             value=json.dumps(
                 {
                     "child_user_id": str(child_user_id),
-                    "bound_at": datetime.now(timezone.utc).isoformat(),
+                    "bound_at": now_utc().isoformat(),
                 }
             ),
         ),

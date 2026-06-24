@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -29,7 +28,7 @@ from app.core.locks import (
 )
 from app.core.redis import get_redis
 from app.core.runtime import RuntimeResources
-from app.core.time import SHANGHAI
+from app.core.time import now_shanghai
 from app.domain.accounts.models import ChildProfile, User
 from app.domain.accounts.schemas import (
     AccountOut,
@@ -172,7 +171,7 @@ async def list_sessions(
     if cursor is not None and cursor == "":
         cursor = None
 
-    now = datetime.now(SHANGHAI)
+    now = now_shanghai()
     latest = (
         await db.execute(
             select(SessionModel)
@@ -478,7 +477,7 @@ async def chat_stream(
     try:
         async with rr.db_session_factory() as db:
             # ---- session policy resolution(确定生效 sid) ----
-            now = datetime.now(SHANGHAI)
+            now = now_shanghai()
             latest = (
                 await db.execute(
                     select(SessionModel)

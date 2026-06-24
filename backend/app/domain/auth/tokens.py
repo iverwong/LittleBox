@@ -21,9 +21,8 @@
 import hashlib
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Optional
-from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 from redis.asyncio import Redis
@@ -32,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import UserRole
 from app.core.redis import RedisOp, stage_redis_op
+from app.core.time import SHANGHAI, now_shanghai, now_utc
 from app.domain.accounts.models import AuthToken, User
 
 
@@ -66,13 +66,13 @@ REDIS_KEY_PREFIX = "auth:"
 REDIS_TTL_SECONDS = 600
 
 # 续期按日用北京时间:业务侧"今天是否续过"按家庭所在地自然日算,
-# 避免子端跨时区往返出现同日两次续期 / 漏续
-_CST = ZoneInfo("Asia/Shanghai")
+# 避免子端跨时区往返出现同日两次续期 / 漏续。
+# SHANGHAI 时区与 now_shanghai() 取自 app.core.time(单一来源)。
 
 
-def _today_cst() -> str:
+def _today_shanghai() -> str:
     """返回今天(北京时间)的 ISO date 字符串。续期判断的唯一时间源。"""
-    return datetime.now(_CST).date().isoformat()
+    return now_shanghai().date().isoformat()
 
 
 def _redis_key(th: str) -> str:
@@ -129,9 +129,7 @@ async def issue_token(
     """
     token = secrets.token_urlsafe(32)
     th = token_hash(token)
-    expires_at = (
-        datetime.now(timezone.utc) + timedelta(days=ttl_days) if ttl_days is not None else None
-    )
+    expires_at = now_utc() + timedelta(days=ttl_days) if ttl_days is not None else None
     db.add(
         AuthToken(
             user_id=user_id,
@@ -148,7 +146,7 @@ async def issue_token(
         family_id=family_id,
         device_id=device_id,
         expires_at=expires_at,
-        last_rolled_date=_today_cst() if expires_at is not None else None,
+        last_rolled_date=_today_shanghai() if expires_at is not None else None,
     )
     stage_redis_op(
         db,
@@ -190,7 +188,7 @@ async def resolve_token(
     cached = await redis.get(_redis_key(th))
     if cached is not None:
         payload = TokenPayload.model_validate_json(cached)
-        if payload.expires_at is not None and payload.expires_at < datetime.now(timezone.utc):
+        if payload.expires_at is not None and payload.expires_at < now_utc():
             return None
         # 读路径 cache 维护:刷 TTL;失败下次 miss 自愈,不属业务状态
         await redis.expire(_redis_key(th), REDIS_TTL_SECONDS)
@@ -206,13 +204,13 @@ async def resolve_token(
     if row is None:
         return None
     tok, user = row
-    if tok.expires_at is not None and tok.expires_at < datetime.now(timezone.utc):
+    if tok.expires_at is not None and tok.expires_at < now_utc():
         return None
 
     # last_rolled_date 初始化为 (expires_at - 7d).date(),让外层 needs_roll
     # 能触发今天的首次续期(若今天尚未续)
     seed_date = (
-        (tok.expires_at - timedelta(days=7)).astimezone(_CST).date().isoformat()
+        (tok.expires_at - timedelta(days=7)).astimezone(SHANGHAI).date().isoformat()
         if tok.expires_at is not None
         else None
     )
@@ -243,7 +241,7 @@ def needs_roll(payload: TokenPayload) -> bool:
     Returns:
         bool: 是否需要滚动续期。
     """
-    return payload.expires_at is not None and payload.last_rolled_date != _today_cst()
+    return payload.expires_at is not None and payload.last_rolled_date != _today_shanghai()
 
 
 async def roll_token_expiry(
@@ -269,7 +267,7 @@ async def roll_token_expiry(
     Returns:
         TokenPayload: 已更新 `expires_at` 与 `last_rolled_date` 的新 payload。
     """
-    new_expires = datetime.now(timezone.utc) + timedelta(days=7)
+    new_expires = now_utc() + timedelta(days=7)
     await db.execute(
         update(AuthToken)
         .where(
@@ -281,7 +279,7 @@ async def roll_token_expiry(
     new_payload = payload.model_copy(
         update={
             "expires_at": new_expires,
-            "last_rolled_date": _today_cst(),
+            "last_rolled_date": _today_shanghai(),
         }
     )
     stage_redis_op(
@@ -313,7 +311,7 @@ async def revoke_token(db: AsyncSession, token: str) -> None:
             AuthToken.token_hash == th,
             AuthToken.revoked_at.is_(None),
         )
-        .values(revoked_at=datetime.now(timezone.utc))
+        .values(revoked_at=now_utc())
     )
     stage_redis_op(db, RedisOp(kind="delete", key=_redis_key(th)))
 
@@ -356,7 +354,7 @@ async def revoke_all_active_tokens(db: AsyncSession, user_id: uuid.UUID) -> int:
             AuthToken.user_id == user_id,
             AuthToken.revoked_at.is_(None),
         )
-        .values(revoked_at=datetime.now(timezone.utc))
+        .values(revoked_at=now_utc())
     )
     for th in hashes:
         stage_redis_op(db, RedisOp(kind="delete", key=_redis_key(th)))

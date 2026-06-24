@@ -19,11 +19,11 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
 
 from sqlalchemy import select
 
 from app.core.enums import NotificationType
+from app.core.time import now_utc
 from app.domain.audit.models import AuditRecord, RollingSummary
 from app.domain.audit.schemas import AuditOutputSchema, TurnSummaryEntry
 
@@ -92,7 +92,7 @@ async def write_audit_results(
     entry = TurnSummaryEntry(
         turn_number=turn_number,
         summary=turn_summary,
-        created_at=datetime.now(timezone.utc).isoformat(),
+        created_at=now_utc().isoformat(),
     )
     entry_dict = entry.model_dump()
 

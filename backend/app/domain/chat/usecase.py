@@ -18,7 +18,6 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import asdict
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import update
@@ -26,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.enums import InterventionType, MessageRole, MessageStatus
+from app.core.time import now_utc
 from app.domain.accounts.schemas import ChildProfileSnapshot
 from app.domain.audit.signals import AuditSignalsManager
 from app.domain.chat.models import Message, Session
@@ -131,7 +131,7 @@ async def enqueue_audit(
         child_profile: child 投影快照,跨 chat / audit 共用。
     """
     manager = AuditSignalsManager(audit_redis, ttl=settings.audit_redis_ttl_seconds)
-    await manager.set_pending(str(sid), turn_number, started_at=datetime.now(UTC).isoformat())
+    await manager.set_pending(str(sid), turn_number, started_at=now_utc().isoformat())
 
     await arq_pool.enqueue_job(
         AUDIT_JOB_NAME,

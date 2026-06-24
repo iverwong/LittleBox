@@ -8,12 +8,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
 
-from app.core.time import SHANGHAI, logical_day
+from app.core.time import SHANGHAI, logical_day, now_utc
 
 logger = logging.getLogger("expert.worker")
 
@@ -208,7 +208,7 @@ async def run_daily_reports(ctx: dict[str, Any]) -> None:
     rr: RuntimeResources = ctx["resources"]
     settings = rr.settings
 
-    report_date = logical_day(datetime.now(UTC), boundary_hour=4) - timedelta(days=1)
+    report_date = logical_day(now_utc(), boundary_hour=4) - timedelta(days=1)
     logger.info("expert.run_daily_reports start report_date=%s", report_date)
 
     # 逻辑日窗口：report_date 4:00 Shanghai -> report_date+1 4:00 Shanghai

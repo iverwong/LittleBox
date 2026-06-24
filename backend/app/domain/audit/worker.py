@@ -6,8 +6,9 @@ Worker 配置已迁至 app/worker.py；本模块只做 job function。
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from typing import Any
+
+from app.core.time import now_utc
 
 logger = logging.getLogger("audit.worker")
 
@@ -94,7 +95,7 @@ async def run_audit(
                 sid,
                 turn_number,
                 output,
-                completed_at=datetime.now(UTC).isoformat(),
+                completed_at=now_utc().isoformat(),
             )
         else:
             raise RuntimeError(f"audit output is None sid={sid} turn={turn_number}")
@@ -105,6 +106,6 @@ async def run_audit(
                 sid,
                 turn_number,
                 str(e),
-                completed_at=datetime.now(UTC).isoformat(),
+                completed_at=now_utc().isoformat(),
             )
         raise

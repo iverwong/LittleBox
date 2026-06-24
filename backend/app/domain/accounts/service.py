@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date
 
 from fastapi import HTTPException, status
 from redis.asyncio import Redis
@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.enums import UserRole
 from app.core.redis import commit_with_redis
-from app.core.time import age_at
+from app.core.time import age_at, now_utc
 from app.domain.accounts.models import (
     AuthToken,
     ChildProfile,
@@ -171,7 +171,7 @@ async def create_child(
             family_id=parent.family_id,
             user_id=child.id,
             role=UserRole.child,
-            joined_at=datetime.now(timezone.utc),
+            joined_at=now_utc(),
         )
     )
 
