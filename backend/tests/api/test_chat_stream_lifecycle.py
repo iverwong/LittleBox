@@ -447,6 +447,7 @@ def _make_real_rr_for_shutdown(engine=None, redis_client=None) -> RuntimeResourc
         shared_http_client=MagicMock(),
         main_graph=MagicMock(),
         audit_graph=MagicMock(),
+        expert_graph=MagicMock(),
     )
     return RuntimeResources(**kwargs)
 

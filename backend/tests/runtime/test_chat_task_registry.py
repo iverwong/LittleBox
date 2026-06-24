@@ -31,6 +31,7 @@ def runtime_resources() -> RuntimeResources:
         shared_http_client=MagicMock(),
         main_graph=MagicMock(),
         audit_graph=MagicMock(),
+        expert_graph=MagicMock(),
     )
 
 
@@ -104,6 +105,7 @@ async def test_chat_tasks_default_factory_isolated() -> None:
         shared_http_client=MagicMock(),
         main_graph=MagicMock(),
         audit_graph=MagicMock(),
+        expert_graph=MagicMock(),
     )
     rr2 = RuntimeResources(
         settings=MagicMock(),
@@ -114,6 +116,7 @@ async def test_chat_tasks_default_factory_isolated() -> None:
         shared_http_client=MagicMock(),
         main_graph=MagicMock(),
         audit_graph=MagicMock(),
+        expert_graph=MagicMock(),
     )
 
     assert rr1._chat_tasks is not rr2._chat_tasks  # 不同实例

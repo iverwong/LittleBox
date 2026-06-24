@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 # 跨域常量化:worker.py 属 audit 域,遵 D-1 不 import chat usecase,因此两侧
 # 字面量在各自模块独立维护。`tests/integration/chat/test_contract_audit_job_name`
 # 实质断言两侧相等(从 usecase.py 与 worker.py 各取一次字面量)。
-AUDIT_JOB_NAME = "app.domain.audit.worker.run_audit"
+AUDIT_JOB_NAME = "app.worker.run_audit"
 
 
 # ---------------------------------------------------------------------------

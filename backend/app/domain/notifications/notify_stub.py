@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import date
 
 from app.core.enums import NotificationType
 
@@ -46,4 +47,26 @@ def send(
         session_id,
         turn_number,
         target_message_id,
+    )
+
+
+def send_daily_summary(
+    child_user_id: uuid.UUID,
+    report_date: date,
+    overall_status: str,
+) -> None:
+    """写入日终专家日报通知桩日志。
+
+    由 expert 域在图内 write_results 完成后调用。
+
+    Args:
+        child_user_id: 子用户 UUID。
+        report_date: 报告日期。
+        overall_status: 当日整体状态（stable / attention / alert）。
+    """
+    logger.info(
+        "notify.stub.daily_summary child=%s date=%s status=%s",
+        child_user_id,
+        report_date,
+        overall_status,
     )

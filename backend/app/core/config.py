@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     chat_queue_maxsize: int = 128
     # chat 流式生成每帧降速钩子（秒）。0.0 表示不触发；>0 时每帧额外 sleep。
     chat_stream_interval_s: float = 0.0
+    # expert cron 触发时间（Asia/Shanghai 时区的本地小时与分钟）
+    expert_cron_hour: int = 4
+    expert_cron_minute: int = 5
+    # expert per-child 并发上限（asyncio.Semaphore）
+    expert_max_concurrent_children: int = 10
+    # expert 单 child LLM 输出 token 预算（超限触发强制交卷）
+    expert_token_budget: int = 100_000
 
     model_config = {"env_prefix": "LB_", "env_file": ".env"}
 

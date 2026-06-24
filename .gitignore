@@ -30,3 +30,6 @@ pgdata/
 
 # === Docker ===
 .dockerignore
+
+# ===superpowers===
+.superpowers

@@ -101,7 +101,7 @@ class TestInfrastructureSmoke:
         from app.core.llm_topology import Role
         from app.domain.accounts.models import Family, User
         from app.domain.audit.signals import AuditSignalsManager
-        from app.domain.audit.worker import WORKER_SETTINGS
+        from app.worker import WORKER_SETTINGS
         from app.domain.chat.models import Session as SessionModel
         from app.domain.chat.usecase import enqueue_audit
         from arq import Worker
@@ -140,7 +140,7 @@ class TestInfrastructureSmoke:
             )
 
         worker = Worker(
-            functions=["app.domain.audit.worker.run_audit"],
+            functions=["app.worker.run_audit"],
             redis_pool=rr.arq_pool,
             burst=True,
             on_startup=_on_startup,

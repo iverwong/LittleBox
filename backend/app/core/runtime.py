@@ -64,6 +64,7 @@ class RuntimeResources:
     shared_http_client: httpx.AsyncClient
     main_graph: CompiledStateGraph
     audit_graph: CompiledStateGraph
+    expert_graph: CompiledStateGraph
     _chat_tasks: dict[str, asyncio.Task] = field(default_factory=dict)
 
     def register_chat_task(self, sid: str, task: asyncio.Task) -> None:
@@ -107,7 +108,7 @@ async def build_runtime(settings: Settings) -> RuntimeResources:
     """构建进程级资源容器。
 
     装配顺序：DB engine → session 工厂 → 审查 Redis → ARQ 池 →
-    共享 httpx 客户端 → 主对话图 → 审查图。后两者用惰性 import，避免模块
+    共享 httpx 客户端 → 主对话图 → 审查图 → 专家图。后三者用惰性 import，避免模块
     加载时即触发图编译。
 
     Args:
@@ -163,6 +164,11 @@ async def build_runtime(settings: Settings) -> RuntimeResources:
 
     audit_graph = build_audit_graph()
 
+    # 8. expert_graph：惰性导入
+    from app.domain.expert.graph import build_expert_graph
+
+    expert_graph = build_expert_graph()
+
     return RuntimeResources(
         settings=settings,
         db_engine=engine,
@@ -172,6 +178,7 @@ async def build_runtime(settings: Settings) -> RuntimeResources:
         shared_http_client=shared_http_client,
         main_graph=main_graph,
         audit_graph=audit_graph,
+        expert_graph=expert_graph,
     )
 
 

@@ -15,7 +15,7 @@ from app.core.time import logical_day as _core_logical_day
 SESSION_HARD_BOUNDARY_HOUR = 4
 SESSION_IDLE_WINDOW = (1, 4)
 SESSION_IDLE_THRESHOLD_MINUTES = 30
-DAILY_SUMMARY_TRIGGER_HOUR = 5  # 日终专家域使用
+DAILY_SUMMARY_TRIGGER_HOUR = 4  # 日终专家域使用，对齐 M11 §二 4 点逻辑日
 DEFAULT_DAILY_NOTIFY_TIME = time(8, 0)  # UI 落点
 
 _WEEKDAY_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]

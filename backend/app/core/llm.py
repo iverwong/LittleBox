@@ -417,6 +417,27 @@ def build_compression_llm(
     return _build_role_llm(Role.COMPRESSION, settings, http_async_client=http_async_client)
 
 
+def build_expert_llm(
+    settings: Settings,
+    *,
+    http_async_client: httpx.AsyncClient | None = None,
+) -> Runnable:
+    """日终专家 LLM（`role=EXPERT`）：retry=3 + bailian 兜底。
+
+    调用方 expert/llm.py 在此基础上 bind_tools + wrap_resilience，
+    与 audit 的 build_audit_llm 模式一致。
+
+    Args:
+        settings: 全局配置。
+        http_async_client: 进程级共享 httpx 异步客户端,None 时 adapter
+            走 SDK 默认池。
+
+    Returns:
+        Runnable 实例。
+    """
+    return _build_role_llm(Role.EXPERT, settings, http_async_client=http_async_client)
+
+
 # ============================================================================
 # 测试注入缝(API)
 # ============================================================================
