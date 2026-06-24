@@ -175,11 +175,38 @@ stmt = stmt.on_conflict_do_update(
 
 `run_daily_reports` 路径上,worker 为每个 child 构建 `ExpertContextSchema` 时填 `session_id`。
 
-**取法:** worker 已为每个 child 算出 `owned_session_ids`(从 `chat.Session` 按 child + 当日 day_start/day_end 范围查得)。分两路处理:
+**`owned_session_ids` 语义澄清:** `ctx.owned_session_ids` 是该 child 拥有的**全部 session(跨历史)**,不是当日。worker 已有 `day_start` / `day_end` 逻辑日边界,需要用它**过滤** `owned_session_ids` 得当日唯一那条。
 
-- `len(owned_session_ids) == 0`:当日无 chat session,**跳过该 child,本轮不生成 report**(产品逻辑"有聊才有报")。`run_daily_reports` 在 children 迭代层处理,本 spec 不展开。
-- `len(owned_session_ids) == 1`:**正常路径**,取 `next(iter(owned_session_ids))` 作 `ctx.session_id`。
-- `len(owned_session_ids) >= 2`:**产品不变量被破坏,fail loud**——`raise RuntimeError(f"child {child_id} has {n} sessions on {date}, 1:1 invariant violated")`,被 worker 现有的 `return_exceptions=True` 接住,记 error log,跳过该 child。
+**取法:** worker 在为该 child 构建 context 时,跨域 inline import `chat.Session`(已有先例,见 `worker.py:46` / `repository.py:122`),按 `id IN owned_session_ids AND created_at IN [day_start, day_end)` 查当日 session,分三路:
+
+- `rows == 0`:当日无 chat session,**跳过该 child,本轮不生成 report**(产品逻辑"有聊才有报")。`run_daily_reports` 在 children 迭代层处理,本 spec 不展开。
+- `len(rows) == 1`:**正常路径**,取该 `session.id` 作 `ctx.session_id`。
+- `len(rows) >= 2`:**产品不变量被破坏,fail loud**——`raise RuntimeError(f"child {child_id} has {n} sessions on {date}, 1:1 invariant violated")`,被 worker 现有的 `return_exceptions=True` 接住,记 error log,跳过该 child。
+
+代码形态(放进 worker 的 child 迭代循环):
+
+```python
+from app.domain.chat.models import Session  # 跨域 inline import,先例见 worker.py:46
+
+async with ctx.db_session_factory() as db:
+    today_sessions = (await db.execute(
+        select(Session).where(
+            Session.id.in_(ctx.owned_session_ids),
+            Session.created_at >= ctx.day_start,
+            Session.created_at < ctx.day_end,
+        )
+    )).scalars().all()
+
+if len(today_sessions) == 0:
+    continue   # 跳过该 child
+if len(today_sessions) >= 2:
+    raise RuntimeError(...)
+
+expert_ctx = ExpertContextSchema(
+    ...,
+    session_id=today_sessions[0].id,
+)
+```
 
 与 §1.2 两个 unique 约束的 defense-in-depth 思路一致:DB 层用 unique 约束挡,worker 层用 fail loud 挡,产品逻辑用 1:1 假设挡,三层不互依赖。
 
@@ -299,14 +326,13 @@ async def search_daily_reports(db, child_user_id, keywords, start_date, end_date
     return results
 ```
 
-**`fetch_report` 关键改动:** 返回结构化 dict(替代 markdown `content`):
+**`fetch_report` 关键改动:** 返回结构化 dict(替代 markdown `content`)。**保持 generic,不加 child_user_id 过滤——ownership check 放在 handler 层(§4.1),跟 `fetch_turn` / `fetch_notes` 既有模式一致。**
 
 ```python
-async def fetch_report(db, report_id, child_user_id=None):
-    stmt = select(DailyReport).where(DailyReport.id == report_id)
-    if child_user_id is not None:
-        stmt = stmt.where(DailyReport.child_user_id == child_user_id)   # A1 修法 1:repository 层过滤
-    row = (await db.execute(stmt)).scalar_one_or_none()
+async def fetch_report(db, report_id):
+    row = (await db.execute(
+        select(DailyReport).where(DailyReport.id == report_id)
+    )).scalar_one_or_none()
     if row is None:
         return None
     return {
@@ -354,31 +380,36 @@ def _escape_like(s: str) -> str:
 elif match.group("kind_report") is not None:
     rid = match.group("rid")
     try:
-        bundle = await fetch_report(db, rid)    # ← 无 child 过滤
+        bundle = await fetch_report(db, rid)    # ← 无 owner check
     except ValueError as exc:
         return ToolMessage(content=json.dumps({"error": str(exc)}), ...)
 ```
 
-**改后:**
+**改后(模式跟 `turn:` / `notes:` 路径一致——owner check 在 handler 层):**
 
 ```python
 elif match.group("kind_report") is not None:
     rid = match.group("rid")
     try:
-        # 加 child_user_id 过滤,owner 不符返 None,统一走 not-found 分支
-        bundle = await fetch_report(db, rid, child_user_id=ctx.child_user_id)
+        bundle = await fetch_report(db, rid)
     except ValueError as exc:
         return ToolMessage(content=json.dumps({"error": str(exc)}), ...)
     if bundle is None:
         return ToolMessage(
-            content=json.dumps({"error": f"report {rid} not found or not owned by child"}, ...),
+            content=json.dumps({"error": f"report {rid} not found"}, ...),
+            tool_call_id=tid,
+        )
+    # Owner check:report 必须属于 ctx.child_user_id
+    if bundle["child_user_id"] != str(ctx.child_user_id):
+        return ToolMessage(
+            content=json.dumps(
+                {"error": f"report {rid} not owned by child"}, ...,
+            ),
             tool_call_id=tid,
         )
 ```
 
-`fetch_report` 接受可选 `child_user_id` 参数,内部 WHERE 加 `child_user_id = :child_user_id`(详见 3.2)。
-
-`turn:` / `notes:` 路径不动(已经有 `owned_session_ids` 校验,模式一致)。
+**设计取舍:** 把 owner check 放在 handler 层而不是 repository 层,跟既有 `turn:` / `notes:` 路径(`tools.py:247-254` / 281-288 用 `sid_uuid not in ctx.owned_session_ids` 校验)保持一致。`fetch_report` 维持 generic,不引入新签名。`turn:` / `notes:` 路径不动。
 
 ### 4.2 A2:`SearchHistoryInput` 改单源
 
@@ -554,8 +585,8 @@ EXPERT_TOOL_HANDLERS: dict[str, Any] = {
 | `app/domain/expert/context_schema.py` | 加 `session_id` 字段 |
 | `app/domain/expert/usecase.py` | `write_expert_results` 加 `session_id` 参数,ON CONFLICT SET 加 `session_id`,6 段直写 |
 | `app/domain/expert/graph.py` | `write_results` 透传 `ctx.session_id` 给 `write_expert_results` |
-| `app/domain/expert/worker.py` | 删 `_parse_today_overview_from_content`,`_get_recent_reports` 改读列;context 构建加 `session_id` |
-| `app/domain/expert/repository.py` | 7 个只读函数全部 ORM 化;`search_daily_reports` 跨 6 列搜;`fetch_report` 返结构化 dict + 支持 `child_user_id` 过滤;加 `_escape_like` |
+| `app/domain/expert/worker.py` | 删 `_parse_today_overview_from_content`,`_get_recent_reports` 改读列;context 构建按 day_start/day_end 过滤 `owned_session_ids` 得 `session_id`(跨域 inline import `chat.Session`) |
+| `app/domain/expert/repository.py` | 7 个只读函数全部 ORM 化;`search_daily_reports` 跨 6 列搜;`fetch_report` 返结构化 dict(generic,不加 owner 过滤);加 `_escape_like` |
 | `app/domain/expert/tools.py` | 新增 `_with_db_error_handling` 装饰器 + `EXPERT_TOOL_HANDLERS` 套装饰器;`_search_history` 改单源;`_fetch_by_ref` `report:` 分支加 ownership check |
 | `app/domain/expert/schemas.py` | `SearchHistoryInput` 改 `source: str` Literal;`EXPERT_SEARCH_SOURCES` → `EXPERT_SEARCH_SOURCE_VALUES` |
 | `CLAUDE.md` | 删 `ILIKE ANY` 裸 SQL 例外 |
@@ -563,7 +594,8 @@ EXPERT_TOOL_HANDLERS: dict[str, Any] = {
 | `backend/scripts/probe_sa_asyncpg_exceptions.py` | 新增一次性 probe |
 | `tests/expert/test_repository.py` | fixture markdown 改 6 列 |
 | `tests/expert/test_schemas.py` | `SearchHistoryInput` 测试更新 |
-| `tests/expert/test_tools.py` | 单源调用测试 |
+| `tests/expert/test_tools.py` | 单源调用测试;`_fetch_by_ref` `report:` 分支加 owner check 测试(用 child A 的 report_id 但 ctx 是 child B) |
+| `tests/expert/test_worker.py` | 加 `session_id` 推导的 day-filter 测试:0 session skip / 1 session 正常 / ≥2 session fail loud |
 | `tests/expert/test_tool_error_handling.py` | 新增 4 个真实 DB 故障 case(3 catch + 1 ProgrammingError propagation) |
 | `tests/integration/test_smoke.py` | worker fixture 路径同步 |
 | `tests/integration/conftest.py` | 不变(`db_session_factory` 已存在) |
