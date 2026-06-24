@@ -94,10 +94,3 @@ WORKER_SETTINGS: dict[str, Any] = {
     ],
     "ctx": {"settings": settings},
 }
-
-
-# ---------------------------------------------------------------------------
-# run_audit — 重新导出（保持与 audit/worker.py 的兼容）
-# ---------------------------------------------------------------------------
-
-from app.domain.audit.worker import run_audit  # noqa: E402, F401
