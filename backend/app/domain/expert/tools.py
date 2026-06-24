@@ -12,10 +12,12 @@ import logging
 import re
 import uuid
 from datetime import date, timedelta
+from functools import wraps
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import ToolMessage
 from pydantic import ValidationError
+from sqlalchemy.exc import DBAPIError, ProgrammingError, ResourceClosedError
 
 from app.domain.expert.repository import (
     fetch_notes,
@@ -39,13 +41,64 @@ logger = logging.getLogger(__name__)
 # 常量
 # ---------------------------------------------------------------------------
 
-EXPERT_SEARCH_SOURCES: list[str] = [
+EXPERT_SEARCH_SOURCE_VALUES: tuple[str, ...] = (
     "turn_summary",
     "session_notes",
     "crisis_topic",
     "daily_report",
-]
-"""Expert 工具支持的 4 类检索数据源。"""
+)
+"""Expert 工具支持的 4 类检索数据源(仅作 Literal 候选)。
+
+LLM 工具入参 ``SearchHistoryInput.source`` 仅接受单值,多源需求由 LLM 多次调用覆盖。
+"""
+
+# ---------------------------------------------------------------------------
+# DB 异常装饰器
+# ---------------------------------------------------------------------------
+
+
+def _with_db_error_handling(handler):
+    """包装 tool handler:DB 错误转 error ToolMessage,代码 bug(ProgrammingError) 照旧上抛。
+
+    Catch 列表依据见 ``backend/scripts/probe_sa_asyncpg_exceptions.py``
+    (2026-06-24 跑出的真实故障 → 异常类型映射)。
+
+    设计:
+    - ProgrammingError 显式 re-raise(代码 bug,走 stack trace 暴露路径,不通过错误处理守)
+    - DBAPIError 基类兜底:覆盖 statement_timeout(抛基类)、InterfaceError(子类)等真实故障
+    - ResourceClosedError 单点 catch:use_closed_connection 在 SQLAlchemyError 另一支
+
+    显式 except ProgrammingError: raise 必须放在 DBAPIError 之前,Python except 子句
+    按顺序匹配,ProgrammingError 继承自 DBAPIError,放后面会被宽 catch 兜住。
+    """
+
+    @wraps(handler)
+    async def wrapper(args, runtime, tool_call_id):
+        try:
+            return await handler(args, runtime, tool_call_id)
+        except ProgrammingError:
+            # 代码 bug(语法错/表不存在/列错等),走 stack trace 暴露路径
+            raise
+        except (DBAPIError, ResourceClosedError) as exc:
+            logger.exception(
+                "expert.tool_handler.db_error tool=%s child=%s type=%s",
+                handler.__name__,
+                runtime.context.child_user_id,
+                type(exc).__name__,
+            )
+            return ToolMessage(
+                content=json.dumps(
+                    {
+                        "error": "数据库暂时不可用,本次检索失败。"
+                        "你可以重试当前 source,或基于已收集的信息生成报告。"
+                    },
+                    ensure_ascii=False,
+                ),
+                tool_call_id=tool_call_id,
+            )
+
+    return wrapper
+
 
 # ---------------------------------------------------------------------------
 # ref 正则
@@ -67,13 +120,12 @@ async def _search_history(
     runtime: Runtime[ExpertContextSchema],
     tool_call_id: str,
 ) -> ToolMessage:
-    """检索历史数据。
+    """检索历史数据(单源)。
 
     1. 校验 SearchHistoryInput 入参
     2. 确定日期窗口并校验合法性
-    3. 扇出调 repository 各数据源
-    4. occurred_at DESC 排序 + limit 截断
-    5. 返回 ToolMessage(JSON)
+    3. 按单 source 调对应 repository 函数
+    4. 返回 ToolMessage(JSON)
     """
     # ---- 1. Pydantic 校验 ----
     try:
@@ -118,66 +170,73 @@ async def _search_history(
             tool_call_id=tool_call_id,
         )
 
-    # ---- 3. 确定 sources ----
-    sources: list[str] = validated.sources or EXPERT_SEARCH_SOURCES
+    # ---- 3. 单源 ----
+    source: str = validated.source
     keywords = validated.keywords
     limit = validated.limit
     context_chars = validated.context_chars
 
-    # ---- 4. 扇出调 repository ----
     results: list[dict[str, Any]] = []
-
     async with ctx.db_session_factory() as db:
-        if "turn_summary" in sources:
-            turn_results = await search_turn_summaries(
-                db,
-                child_user_id_str,
-                keywords,
-                start_date,
-                end_date,
-                limit,
-                context_chars,
+        if source == "turn_summary":
+            results.extend(
+                await search_turn_summaries(
+                    db,
+                    child_user_id_str,
+                    keywords,
+                    start_date,
+                    end_date,
+                    limit,
+                    context_chars,
+                ),
             )
-            results.extend(turn_results)
-
-        if "session_notes" in sources:
-            notes_results = await search_session_notes(
-                db,
-                child_user_id_str,
-                keywords,
-                start_date,
-                end_date,
-                limit,
-                context_chars,
+        elif source == "session_notes":
+            results.extend(
+                await search_session_notes(
+                    db,
+                    child_user_id_str,
+                    keywords,
+                    start_date,
+                    end_date,
+                    limit,
+                    context_chars,
+                ),
             )
-            results.extend(notes_results)
-
-        if "crisis_topic" in sources:
-            crisis_results = await search_crisis_topics(
-                db,
-                child_user_id_str,
-                keywords,
-                start_date,
-                end_date,
-                limit,
+        elif source == "crisis_topic":
+            results.extend(
+                await search_crisis_topics(
+                    db,
+                    child_user_id_str,
+                    keywords,
+                    start_date,
+                    end_date,
+                    limit,
+                ),
             )
-            results.extend(crisis_results)
-
-        if "daily_report" in sources:
-            daily_results = await search_daily_reports(
-                db,
-                child_user_id_str,
-                keywords,
-                start_date,
-                end_date,
-                limit,
-                context_chars,
-                exclude_report_date=report_date,
+        elif source == "daily_report":
+            results.extend(
+                await search_daily_reports(
+                    db,
+                    child_user_id_str,
+                    keywords,
+                    start_date,
+                    end_date,
+                    limit,
+                    context_chars,
+                    exclude_report_date=report_date,
+                ),
             )
-            results.extend(daily_results)
+        else:
+            # schema Literal 已收口,此处仅为防御
+            return ToolMessage(
+                content=json.dumps(
+                    {"error": f"unknown source: {source}"},
+                    ensure_ascii=False,
+                ),
+                tool_call_id=tool_call_id,
+            )
 
-    # ---- 5. 排序 + 截断 ----
-    results.sort(key=lambda r: r.get("occurred_at") or "", reverse=True)
+    # ---- 4. 截断 ----
     results = results[:limit]
 
     return ToolMessage(
@@ -310,6 +369,23 @@ async def _fetch_by_ref(
                     ),
                     tool_call_id=tool_call_id,
                 )
+            if bundle is None:
+                return ToolMessage(
+                    content=json.dumps(
+                        {"error": f"report {rid} not found"},
+                        ensure_ascii=False,
+                    ),
+                    tool_call_id=tool_call_id,
+                )
+            # Owner check:report 必须属于 ctx.child_user_id
+            if bundle["child_user_id"] != str(ctx.child_user_id):
+                return ToolMessage(
+                    content=json.dumps(
+                        {"error": f"report {rid} not owned by child"},
+                        ensure_ascii=False,
+                    ),
+                    tool_call_id=tool_call_id,
+                )
 
         else:
             # 理论上不会走到这里（正则已校验）
@@ -329,10 +405,10 @@ async def _fetch_by_ref(
 
 
 # ---------------------------------------------------------------------------
-# Handler 字典
+# Handler 字典(套 DB 异常装饰器)
 # ---------------------------------------------------------------------------
 
 EXPERT_TOOL_HANDLERS: dict[str, Any] = {
-    "SearchHistoryInput": _search_history,
-    "FetchByRefInput": _fetch_by_ref,
+    "SearchHistoryInput": _with_db_error_handling(_search_history),
+    "FetchByRefInput": _with_db_error_handling(_fetch_by_ref),
 }

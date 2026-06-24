@@ -8,31 +8,50 @@ LLM 工具入口用 `SearchHistoryInput` / `FetchByRefInput` 由 LangChain `bind
 from __future__ import annotations
 
 from datetime import date
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.enums import DailyStatus
 
+EXPERT_SEARCH_SOURCE_VALUES: tuple[str, ...] = (
+    "turn_summary",
+    "session_notes",
+    "crisis_topic",
+    "daily_report",
+)
+"""Expert 工具支持的 4 类检索数据源(单源,见 SearchHistoryInput.source)。
+
+LLM 想要多源时调多次 SearchHistoryInput,每次一个 source。"""
+
 
 class SearchHistoryInput(BaseModel):
-    """检索历史数据（turn_summary / crisis_topic / session_notes / daily_report）。
+    """检索历史数据(单源)。
 
     Attributes:
         keywords: 检索关键词列表,1-8 个,每词至少 2 字符(OR 匹配)。
+        source: 单源检索;多源请多次调用。4 类候选见 EXPERT_SEARCH_SOURCE_VALUES。
         start_date: 检索范围起始日期(可选),默认 = end_date - 30 日。
         end_date: 检索范围结束日期(可选),默认 = report_date - 1 日。
         limit: 返回结果上限,1-50 条,默认 15。
-        context_chars: 长源开窗字符数,0-300,默认 100。仅对 session_notes /
+        context_chars: 长源开窗字符数,0-400,默认 80。仅对 session_notes /
             daily_report 生效(以匹配位置为中心取前后 N 字符);短源
             (turn_summary / crisis_topic)整段返回。
-        sources: 限定检索数据源子集,可选 4 类枚举值。若不传则检索全部 4 类。
     """
 
     keywords: list[str] = Field(
         min_length=1,
         max_length=8,
         description="检索关键词列表,1-8 个,每词至少 2 字符(OR 匹配)",
+    )
+    source: Literal[
+        "turn_summary",
+        "session_notes",
+        "crisis_topic",
+        "daily_report",
+    ] = Field(
+        ...,
+        description="单源检索;多源请多次调用",
     )
     start_date: Optional[date] = Field(
         default=None,
@@ -43,24 +62,16 @@ class SearchHistoryInput(BaseModel):
         description="检索范围结束日期(可选),默认 = report_date - 1 日",
     )
     limit: int = Field(
-        default=15,
+        default=10,
         ge=1,
         le=50,
-        description="返回结果上限,1-50 条,默认 15",
+        description="返回结果上限,1-50 条,默认 10",
     )
     context_chars: int = Field(
-        default=100,
+        default=80,
         ge=0,
-        le=300,
-        description="长源开窗字符数,0-300,默认 100",
-    )
-    sources: Optional[list[str]] = Field(
-        default=None,
-        description="""限定检索数据源子集,可选值:
-- turn_summary: 对话轮次摘要
-- crisis_topic: 危机主题
-- session_notes: 会话笔记
-- daily_report: 历史日终报告""",
+        le=400,
+        description="长源开窗字符数,0-400,默认 80",
     )
 
     @field_validator("keywords")
@@ -79,7 +90,7 @@ class FetchByRefInput(BaseModel):
     ref 格式:
     - `turn:{session_id}#{turn}`: 返回 turn_summary + human/ai 原文 + crisis 标记
     - `notes:{session_id}`: 返回 session_notes 全文 + 元信息
-    - `report:{report_id}`: 返回完整 daily_report content
+    - `report:{report_id}`: 返回结构化 daily_report dict
 
     Attributes:
         ref: 引用键字符串,格式如 `turn:uuid#3` / `notes:uuid` / `report:uuid`。
@@ -91,7 +102,7 @@ class FetchByRefInput(BaseModel):
         description="""引用键字符串,格式:
 - turn:{session_id}#{turn}: 返回 turn_summary + human/ai 原文 + crisis 标记
 - notes:{session_id}: 返回 session_notes 全文 + 元信息
-- report:{report_id}: 返回完整 daily_report content""",
+- report:{report_id}: 返回结构化 daily_report dict""",
     )
     context_turns: int = Field(
         default=0,
