@@ -95,9 +95,9 @@ class RollingSummary(BaseMixin, Base):
     crisis_locked_message_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         nullable=True,
-        comment="crisis 粘性接管锚点消息 ID。非空=粘性锁定中,"
+        comment="crisis 粘性接管锚点消息 ID.非空=粘性锁定中,"
         "指向触发 crisis 的首条 ai_msg id;"
-        "空=未锁定。session 内不可逆,仅开启新 session 可重置。",
+        "空=未锁定. session 内不可逆,仅开启新 session 可重置.",
     )
     session_notes: Mapped[Optional[str]] = mapped_column(
         Text,

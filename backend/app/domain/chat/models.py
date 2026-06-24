@@ -58,13 +58,13 @@ class Session(BaseMixin, Base):
         default=False,
         server_default="false",
         nullable=False,
-        comment="阈值命中 → True，下一轮 user 到达时阻塞压缩",
+        comment="阈值命中 → True,下一轮 user 到达时阻塞压缩",
     )
     ai_turn_counter: Mapped[int] = mapped_column(
         default=0,
         server_default="0",
         nullable=False,
-        comment="LLM AI 回复累积轮次；persist_ai_turn 同事务 +1",
+        comment="LLM AI 回复累积轮次;persist_ai_turn 同事务 +1",
     )
 
     # relationships
@@ -115,7 +115,7 @@ class Message(BaseMixin, Base):
         default=0,
         server_default="0",
         nullable=False,
-        comment="对话轮次编号。human/ai 同轮共享同号；summary 行与共同发送的 human 匹配。",
+        comment="对话轮次编号.human/ai 同轮共享同号;summary 行与共同发送的 human 匹配.",
     )
 
     # relationships
