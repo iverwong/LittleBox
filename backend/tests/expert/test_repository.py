@@ -24,20 +24,12 @@ from app.domain.expert.repository import (
     search_turn_summaries,
 )
 from sqlalchemy import text
+from tests._tables import _GUARD_TABLES as _TABLES
 
 # 注意：pytest.mark.asyncio 只在需要 async 的类上单独标注
 
 REPORT_DATE = date(2026, 6, 23)
 NOW = datetime.now(UTC)
-
-_TABLES = [
-    "users",
-    "sessions",
-    "messages",
-    "rolling_summaries",
-    "audit_records",
-    "daily_reports",
-]
 
 
 def _make_ids() -> dict:

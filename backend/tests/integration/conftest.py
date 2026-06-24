@@ -34,6 +34,8 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests._tables import _GUARD_TABLES
+
 INTEGRATION_DB_NAME = "littlebox_integration"
 INTEGRATION_REDIS_DB = 15
 
@@ -42,14 +44,22 @@ INTEGRATION_REDIS_DB = 15
 
 def _admin_url() -> str:
     """连 postgres 维护库（无数据库名），用于 DROP/CREATE。"""
-    return make_url(Settings().database_url).set(database="postgres").render_as_string(
-        hide_password=False,
+    return (
+        make_url(Settings().database_url)
+        .set(database="postgres")
+        .render_as_string(
+            hide_password=False,
+        )
     )
 
 
 def _integration_db_url() -> str:
-    return make_url(Settings().database_url).set(database=INTEGRATION_DB_NAME).render_as_string(
-        hide_password=False,
+    return (
+        make_url(Settings().database_url)
+        .set(database=INTEGRATION_DB_NAME)
+        .render_as_string(
+            hide_password=False,
+        )
     )
 
 
@@ -148,9 +158,7 @@ def _integration_row_count_guard():
             async with engine.connect() as conn:
                 for t in _GUARD_TABLES:
                     cnt = (await conn.execute(_text(f"SELECT COUNT(*) FROM {t}"))).scalar_one()
-                    assert cnt == 0, (
-                        f"集成库表 {t} 残留 {cnt} 行——truncate_tables 未覆盖或未生效"
-                    )
+                    assert cnt == 0, f"集成库表 {t} 残留 {cnt} 行——truncate_tables 未覆盖或未生效"
         finally:
             await engine.dispose()
 
@@ -172,23 +180,6 @@ async def _integration_engine(
         await eng.dispose()
 
 
-_GUARD_TABLES = [
-    "families",
-    "users",
-    "child_profiles",
-    "auth_tokens",
-    "device_tokens",
-    "family_members",
-    "sessions",
-    "messages",
-    "audit_records",
-    "rolling_summaries",
-    "daily_reports",
-    "notifications",
-    "data_deletion_requests",
-]
-
-
 @pytest_asyncio.fixture(autouse=True)
 async def truncate_tables(
     _integration_engine: AsyncEngine,
@@ -208,18 +199,14 @@ async def truncate_tables(
 
     # setup：crash 残留兜底
     async with _integration_engine.connect() as conn:
-        await conn.execute(
-            text(f"TRUNCATE TABLE {tables_sql} RESTART IDENTITY CASCADE")
-        )
+        await conn.execute(text(f"TRUNCATE TABLE {tables_sql} RESTART IDENTITY CASCADE"))
         await conn.commit()
 
     yield
 
     # teardown：清理本测试写入，满足 session 末 guard
     async with _integration_engine.connect() as conn:
-        await conn.execute(
-            text(f"TRUNCATE TABLE {tables_sql} RESTART IDENTITY CASCADE")
-        )
+        await conn.execute(text(f"TRUNCATE TABLE {tables_sql} RESTART IDENTITY CASCADE"))
         await conn.commit()
 
 

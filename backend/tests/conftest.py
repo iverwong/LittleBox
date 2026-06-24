@@ -100,6 +100,8 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests._tables import _GUARD_TABLES
+
 TEST_DB_NAME = "littlebox_test"
 
 
@@ -377,7 +379,6 @@ def _inject_mock_resources_with_session(
     savepoint-wrapped session；db_session_factory 是可多次调用的 callable，
     不使用 side_effect 交替列表。
     """
-    from app.core.runtime import RuntimeResources
 
     mock_rr = _make_mock_resources(redis_client)
     mock_rr.db_session_factory = lambda: _UncloseableSessionContext(db_session)
@@ -634,22 +635,6 @@ def llm_override():
 
 
 # ---------- session scope：真库行数兜底（M6-patch T4 防御） ----------
-
-_GUARD_TABLES = [
-    "families",
-    "users",
-    "child_profiles",
-    "auth_tokens",
-    "device_tokens",
-    "family_members",
-    "sessions",
-    "messages",
-    "audit_records",
-    "rolling_summaries",
-    "daily_reports",
-    "notifications",
-    "data_deletion_requests",
-]
 
 
 async def _async_count_rows(url: str, tables: list[str]) -> dict[str, int]:
