@@ -374,7 +374,7 @@ class TestRollTokenExpiry:
         # 手动把 payload.last_rolled_date 拨到昨天（强制 needs_roll=True）
         import app.domain.auth.tokens as tokens_mod
         yesterday = (
-            datetime.fromisoformat(tokens_mod._today_cst()).date()
+            datetime.fromisoformat(tokens_mod._today_shanghai()).date()
             - timedelta(days=1)
         ).isoformat()
         payload = payload.model_copy(update={"last_rolled_date": yesterday})
@@ -428,7 +428,7 @@ class TestRollTokenExpiry:
 
         # 手动把 last_rolled_date 拨到昨天，强制 roll 发生
         yesterday = (
-            datetime.fromisoformat(tokens_mod._today_cst()).date()
+            datetime.fromisoformat(tokens_mod._today_shanghai()).date()
             - timedelta(days=1)
         ).isoformat()
         payload = old_payload.model_copy(update={"last_rolled_date": yesterday})
@@ -447,7 +447,7 @@ class TestRollTokenExpiry:
             f"old={old_payload.expires_at}, new={new_payload.expires_at}"
         )
         # 断言：new.last_rolled_date == today_cst（真今日，CST 对齐）
-        assert new_payload.last_rolled_date == tokens_mod._today_cst()
+        assert new_payload.last_rolled_date == tokens_mod._today_shanghai()
         # 断言：value 字符串本身发生变化
         assert new_raw != old_raw
 
@@ -475,18 +475,18 @@ class TestRollTokenExpiry:
         await commit_with_redis(db_session, redis_client)
         th = token_hash(token)
 
-        # monkeypatch _today_cst 到昨天，让 needs_roll 进入 True 分支
+        # monkeypatch _today_shanghai 到昨天，让 needs_roll 进入 True 分支
         yesterday = (
-            datetime.fromisoformat(tokens_mod._today_cst()).date()
+            datetime.fromisoformat(tokens_mod._today_shanghai()).date()
             - timedelta(days=1)
         ).isoformat()
 
-        original_today_cst = tokens_mod._today_cst
+        original_today_shanghai = tokens_mod._today_shanghai
 
         def _fake_yesterday() -> str:
             return yesterday
 
-        monkeypatch.setattr("app.domain.auth.tokens._today_cst", _fake_yesterday)
+        monkeypatch.setattr("app.domain.auth.tokens._today_shanghai", _fake_yesterday)
 
         try:
             # fresh resolve（cache hit 不修改 last_rolled_date；
@@ -497,8 +497,8 @@ class TestRollTokenExpiry:
                 update={"last_rolled_date": yesterday}
             )
         finally:
-            # 恢复 _today_cst（roll 写回时 last_rolled_date 用 _today_cst() 写入）
-            monkeypatch.setattr("app.domain.auth.tokens._today_cst", original_today_cst)
+            # 恢复 _today_shanghai（roll 写回时 last_rolled_date 用 _today_shanghai() 写入）
+            monkeypatch.setattr("app.domain.auth.tokens._today_shanghai", original_today_shanghai)
 
         # 调 roll + commit
         await roll_token_expiry(db_session, token_hash_hex=th, payload=payload)
@@ -509,8 +509,8 @@ class TestRollTokenExpiry:
         new_payload = TokenPayload.model_validate_json(new_raw)
 
         # 断言：last_rolled_date == today_cst（真今日，CST）
-        assert new_payload.last_rolled_date == tokens_mod._today_cst(), (
-            f"last_rolled_date should be {tokens_mod._today_cst()}, "
+        assert new_payload.last_rolled_date == tokens_mod._today_shanghai(), (
+            f"last_rolled_date should be {tokens_mod._today_shanghai()}, "
             f"got {new_payload.last_rolled_date}"
         )
         # 断言：needs_roll(new_payload) is False

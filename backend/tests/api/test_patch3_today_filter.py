@@ -129,22 +129,6 @@ async def test_list_sessions_no_today(api_client, auth_headers_child, db_session
 # ---- Group 7 扩展:凌晨空闲软切边界 ----
 
 
-class _FakeDatetime:
-    """固定 now() 的 datetime 替身,注入 me.py 让 list_sessions 用 fake_now 判定。
-
-    仅暴露 list_sessions 路径所需的最小接口(.now(classmethod));
-    其他 datetime 用法不在这条路径上。
-    """
-
-    def __init__(self, fake_now: datetime) -> None:
-        self._fake_now = fake_now
-
-    def now(self, tz=None):
-        if tz is not None:
-            return self._fake_now.astimezone(tz)
-        return self._fake_now.replace(tzinfo=None)
-
-
 @pytest.mark.asyncio
 async def test_list_sessions_idle_window_soft_cut_triggers(
     api_client, auth_headers_child, db_session, monkeypatch
@@ -154,13 +138,16 @@ async def test_list_sessions_idle_window_soft_cut_triggers(
     场景:last_active = 01:00,now = 02:00(同 logical_day,gap=1h > 30min) → 切 → today_sid=None。
     旧实现(仅 logical_day 相等)会把 today_sid 暴露为旧 session,与 chat/stream 实际新建的
     session 互相打架(client 跳到旧 sid → 服务端又建新 sid)。
+
+    时间注入:list_sessions 通过 me.now_shanghai() 取"现在",monkeypatch 该函数
+    即可固化 fake_now,无需再伪装 datetime 模块。
     """
     from app.api import me as me_module
     from app.core.time import SHANGHAI
 
     headers, child = auth_headers_child
     fake_now = datetime(2026, 6, 8, 2, 0, 0, tzinfo=SHANGHAI)
-    monkeypatch.setattr(me_module, "datetime", _FakeDatetime(fake_now))
+    monkeypatch.setattr(me_module, "now_shanghai", lambda: fake_now)
 
     sid = uuid.uuid4()
     db_session.add(SessionModel(
@@ -192,7 +179,7 @@ async def test_list_sessions_idle_window_under_threshold_keeps(
 
     headers, child = auth_headers_child
     fake_now = datetime(2026, 6, 8, 2, 0, 0, tzinfo=SHANGHAI)
-    monkeypatch.setattr(me_module, "datetime", _FakeDatetime(fake_now))
+    monkeypatch.setattr(me_module, "now_shanghai", lambda: fake_now)
 
     sid = uuid.uuid4()
     db_session.add(SessionModel(

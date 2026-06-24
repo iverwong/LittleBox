@@ -308,14 +308,14 @@ class TestDailyRenewal:
         # mock yesterday for needs_roll to return True
         yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
 
-        # patch _today_cst so needs_roll thinks today is yesterday (different from last_rolled_date)
+        # patch _today_shanghai so needs_roll thinks today is yesterday (different from last_rolled_date)
         import app.domain.auth.tokens as tokens_module
-        original_today = tokens_module._today_cst
+        original_today = tokens_module._today_shanghai
 
         def fake_today_yesterday():
             return yesterday
 
-        tokens_module._today_cst = fake_today_yesterday
+        tokens_module._today_shanghai = fake_today_yesterday
 
         try:
             resp = await api_client.get(
@@ -335,7 +335,7 @@ class TestDailyRenewal:
             assert payload["last_rolled_date"] == yesterday  # 写入时是 yesterday
 
         finally:
-            tokens_module._today_cst = original_today
+            tokens_module._today_shanghai = original_today
 
         # DB expires_at 已续（commit_with_redis 后在外层 transaction 可见）
         after = (await db_session.execute(
@@ -374,7 +374,7 @@ class TestDailyRenewal:
         th = token_hash(token)
 
         # 将 Redis 中的 last_rolled_date 拨到昨天（CST 对齐），确保 needs_roll=True
-        today_cst = tokens_mod._today_cst()
+        today_cst = tokens_mod._today_shanghai()
         yesterday_date = (
             datetime.fromisoformat(today_cst).date() - timedelta(days=1)
         ).isoformat()
@@ -443,19 +443,19 @@ class TestDailyRenewal:
         # mock yesterday
         yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
         import app.domain.auth.tokens as tokens_module
-        original_today = tokens_module._today_cst
+        original_today = tokens_module._today_shanghai
 
         def fake_today_yesterday():
             return yesterday
 
-        tokens_module._today_cst = fake_today_yesterday
+        tokens_module._today_shanghai = fake_today_yesterday
         try:
             resp = await api_client.get(
                 "/api/v1/me",
                 headers={"Authorization": f"Bearer {token}", "X-Device-Id": "childG"},
             )
         finally:
-            tokens_module._today_cst = original_today
+            tokens_module._today_shanghai = original_today
 
         assert resp.status_code == 200
 
