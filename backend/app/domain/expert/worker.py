@@ -124,48 +124,19 @@ async def _aggregate_dimensions(
     return summary
 
 
-def _parse_today_overview_from_content(content: str) -> str:
-    """从 markdown content 提取 today_overview 首段。
-
-    content 格式：
-        ## 今日概览
-
-        {today_overview}
-
-        ## 聊了什么
-
-    Args:
-        content: 完整 markdown 报告 content 字段。
-
-    Returns:
-        today_overview 文本；若解析失败则返回 content 前 200 字符。
-    """
-    try:
-        _header = "## 今日概览\n\n"
-        if content.startswith(_header):
-            remaining = content[len(_header) :]
-            next_section = remaining.find("\n\n## ")
-            if next_section > 0:
-                return remaining[:next_section].strip()
-            return remaining.strip()
-    except Exception:
-        pass
-    return content[:200]
-
-
 async def _get_recent_reports(
     db: AsyncSession,
     child_user_id: uuid.UUID,
-    report_date: date,
-    days: int = 7,
+    exclude_date: date,
+    limit: int = 5,
 ) -> list[dict]:
-    """查询近 days 天的历史每日报告概要。
+    """查询近 limit 条历史每日报告概要（直接读 today_overview 列,无 parse）。
 
     Args:
         db: DB session。
         child_user_id: 孩子用户 ID。
-        report_date: 当前报告日期（不包含当天）。
-        days: 往前查的天数，默认 7。
+        exclude_date: 当前报告日期（不包含）。
+        limit: 返回上限,默认 5。
 
     Returns:
         list[dict]，每项含 report_date / overall_status / today_overview。
@@ -173,25 +144,27 @@ async def _get_recent_reports(
     from app.domain.expert.models import DailyReport
 
     stmt = (
-        select(DailyReport)
+        select(
+            DailyReport.report_date,
+            DailyReport.overall_status,
+            DailyReport.today_overview,
+        )
         .where(
             DailyReport.child_user_id == child_user_id,
-            DailyReport.report_date < report_date,
-            DailyReport.report_date >= report_date - timedelta(days=days),
+            DailyReport.report_date < exclude_date,
         )
         .order_by(DailyReport.report_date.desc())
+        .limit(limit)
     )
-    rows = (await db.execute(stmt)).scalars().all()
-    result: list[dict] = []
-    for row in rows:
-        result.append(
-            {
-                "report_date": str(row.report_date),
-                "overall_status": str(row.overall_status),
-                "today_overview": _parse_today_overview_from_content(row.content),
-            }
-        )
-    return result
+    rows = (await db.execute(stmt)).all()
+    return [
+        {
+            "report_date": str(r.report_date),
+            "overall_status": r.overall_status.value,
+            "today_overview": r.today_overview,
+        }
+        for r in rows
+    ]
 
 
 async def run_daily_reports(ctx: dict[str, Any]) -> None:
@@ -247,12 +220,44 @@ async def run_daily_reports(ctx: dict[str, Any]) -> None:
         """为一个孩子生成日终报告（内部闭包，被 asyncio.gather 并发调用）。"""
         async with sem:
             async with rr.db_session_factory() as child_db:
-                # a. owned_session_ids
+                # a. owned_session_ids + 当日 session_id
+                # 跨域 inline import chat.Session,先例见 _check_crisis_today。
+                # 三路处理:
+                #   0 session → 当日无 chat,跳过该 child(产品逻辑"有聊才有报")
+                #   1 session → 正常路径,取 session.id
+                #   ≥2 session → fail loud,被 return_exceptions=True 兜住,记 error log
                 from app.domain.chat.models import Session
 
                 sid_stmt = select(Session.id).where(Session.child_user_id == child_user_id_val)
                 sid_rows = (await child_db.execute(sid_stmt)).scalars().all()
                 owned_sids = frozenset(sid_rows)
+
+                today_sessions = (
+                    (
+                        await child_db.execute(
+                            select(Session).where(
+                                Session.child_user_id == child_user_id_val,
+                                Session.created_at >= day_start,
+                                Session.created_at < day_end,
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                if not today_sessions:
+                    logger.info(
+                        "expert.skip_no_today_session child=%s date=%s",
+                        child_user_id_val,
+                        report_date,
+                    )
+                    return
+                if len(today_sessions) >= 2:
+                    raise RuntimeError(
+                        f"child {child_user_id_val} has {len(today_sessions)} sessions "
+                        f"on {report_date}, 1:1 invariant violated",
+                    )
+                today_session_id: uuid.UUID = today_sessions[0].id
 
                 # b. ChildProfile -> ChildProfileSnapshot
                 from app.domain.accounts.models import ChildProfile
@@ -309,13 +314,13 @@ async def run_daily_reports(ctx: dict[str, Any]) -> None:
                     child_db,
                     child_user_id_val,
                     report_date,
-                    days=7,
                 )
 
                 # 构造 ExpertContextSchema
                 expert_ctx = ExpertContextSchema(
                     child_user_id=child_user_id_val,
                     owned_session_ids=owned_sids,
+                    session_id=today_session_id,
                     report_date=report_date,
                     day_start=day_start,
                     day_end=day_end,
