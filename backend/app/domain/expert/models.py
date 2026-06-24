@@ -31,9 +31,7 @@ class DailyReport(BaseMixin, Base):
     """
 
     __tablename__ = "daily_reports"
-    __table_args__ = (
-        Index("idx_reports_child", "child_user_id", "report_date", unique=True),
-    )
+    __table_args__ = (Index("idx_reports_child", "child_user_id", "report_date", unique=True),)
 
     child_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -43,7 +41,7 @@ class DailyReport(BaseMixin, Base):
     report_date: Mapped[date] = mapped_column(
         Date,
         nullable=False,
-        comment="对齐 4 点逻辑日（boundary_hour=4）",
+        comment="对齐 4 点逻辑日(boundary_hour=4)",
     )
     overall_status: Mapped[DailyStatus] = mapped_column(
         nullable=False,
@@ -67,7 +65,7 @@ class DailyReport(BaseMixin, Base):
         nullable=False,
         default=False,
         server_default=text("false"),
-        comment="True 表示降级产物（交卷耗尽 / token 超限），前端展示降级提示",
+        comment="True 表示降级产物(交卷耗尽 / token 超限),前端展示降级提示",
     )
     delivered_at: Mapped[Optional[datetime]] = mapped_column(
         TIMESTAMP(timezone=True),

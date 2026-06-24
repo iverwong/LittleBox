@@ -1,8 +1,8 @@
-"""m4.8 baseline
+"""m11 baseline
 
-Revision ID: 1d8a14cc596f
+Revision ID: 15f014ed2898
 Revises: 
-Create Date: 2026-04-27 11:25:13.590856
+Create Date: 2026-06-24 03:27:05.189241
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '1d8a14cc596f'
+revision: str = '15f014ed2898'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -31,10 +31,10 @@ def upgrade() -> None:
     sa.Column('role', sa.Enum('parent', 'child', name='userrole'), nullable=False),
     sa.Column('phone', sa.String(length=20), nullable=True, comment='仅父账号'),
     sa.Column('is_active', sa.Boolean(), server_default=sa.text('true'), nullable=False),
-    sa.Column('consent_at', postgresql.TIMESTAMP(timezone=True), nullable=True, comment='监护人同意时间（仅 parent）'),
+    sa.Column('consent_at', postgresql.TIMESTAMP(timezone=True), nullable=True, comment='监护人同意时间(仅 parent)'),
     sa.Column('consent_version', sa.String(length=50), nullable=True, comment='同意的隐私政策版本'),
-    sa.Column('password_hash', sa.String(length=255), nullable=True, comment='argon2id 哈希，CLI / 登录时写入'),
-    sa.Column('admin_note', sa.Text(), nullable=True, comment='运维备注，CLI --note 写入'),
+    sa.Column('password_hash', sa.String(length=255), nullable=True, comment='argon2id 哈希,登录与 CLI 创建父账号时写入'),
+    sa.Column('admin_note', sa.Text(), nullable=True, comment='运维备注,CLI --note 写入'),
     sa.Column('id', sa.UUID(), server_default=sa.text('gen_random_uuid()'), nullable=False),
     sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['family_id'], ['families.id'], name=op.f('fk_users_family_id_families')),
@@ -44,24 +44,26 @@ def upgrade() -> None:
     op.create_table('auth_tokens',
     sa.Column('user_id', sa.UUID(), nullable=False),
     sa.Column('token_hash', sa.Text(), nullable=False),
-    sa.Column('expires_at', postgresql.TIMESTAMP(timezone=True), nullable=True, comment='NULL = 永不过期（子账号）'),
+    sa.Column('expires_at', postgresql.TIMESTAMP(timezone=True), nullable=True, comment='NULL = 永不过期(子账号)'),
     sa.Column('revoked_at', postgresql.TIMESTAMP(timezone=True), nullable=True, comment='父账号解绑时写入'),
     sa.Column('device_id', sa.String(length=255), nullable=False),
-    sa.Column('device_info', postgresql.JSONB(astext_type=sa.Text()), nullable=True, comment='审计用：{ua, ip, platform}'),
+    sa.Column('device_info', postgresql.JSONB(astext_type=sa.Text()), nullable=True, comment='审计用:{ua, ip, platform}'),
     sa.Column('id', sa.UUID(), server_default=sa.text('gen_random_uuid()'), nullable=False),
     sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_auth_tokens_user_id_users'), ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id', name=op.f('pk_auth_tokens'))
     )
+    op.create_index('ix_auth_tokens_token_hash', 'auth_tokens', ['token_hash'], unique=True)
+    op.create_index('ix_auth_tokens_user_id_active', 'auth_tokens', ['user_id'], unique=False, postgresql_where=sa.text('revoked_at IS NULL'))
     op.create_table('child_profiles',
     sa.Column('child_user_id', sa.UUID(), nullable=False),
-    sa.Column('created_by', sa.UUID(), nullable=False, comment='创建者（审计用途；权限通过 family_id 控制）'),
-    sa.Column('birth_date', sa.Date(), nullable=False, comment='家长输入 age，存 today - age years'),
+    sa.Column('created_by', sa.UUID(), nullable=False, comment='创建者(审计用途;权限通过 family_id 控制)'),
+    sa.Column('birth_date', sa.Date(), nullable=False, comment='家长输入 age,存 today - age years'),
     sa.Column('gender', sa.Enum('male', 'female', 'unknown', name='gender'), nullable=False),
-    sa.Column('nickname', sa.String(length=32), nullable=False, comment='家长设置的子女昵称，B1 占位，B3 替换为 payload.nickname'),
-    sa.Column('concerns', sa.Text(), nullable=True, comment='家长自然语言描述的关注点，注入审查提示词和日终专家提示词'),
-    sa.Column('sensitivity', postgresql.JSONB(astext_type=sa.Text()), nullable=True, comment='SensitivityConfig JSON，7 维度 0-9（默认 5）'),
-    sa.Column('custom_redlines', sa.Text(), nullable=True, comment='家长自然语言描述的红线话题，审查 Agent 作为 0/1 判定条件，命中触发三级接管（温和转移）+ 通知家长'),
+    sa.Column('nickname', sa.String(length=12), nullable=False, comment='家长设置的子女昵称,长度 1-12'),
+    sa.Column('concerns', sa.Text(), nullable=True, comment='家长自然语言描述的关注点,注入审查提示词与日终专家提示词'),
+    sa.Column('sensitivity', postgresql.JSONB(astext_type=sa.Text()), nullable=True, comment='SensitivityConfig JSON,6 维度 0-9(默认 5)'),
+    sa.Column('custom_redlines', sa.Text(), nullable=True, comment='家长自然语言描述的红线话题,审查 Agent 作为 0/1 判定条件,命中触发温和转移并通知家长'),
     sa.Column('id', sa.UUID(), server_default=sa.text('gen_random_uuid()'), nullable=False),
     sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['child_user_id'], ['users.id'], name=op.f('fk_child_profiles_child_user_id_users'), ondelete='CASCADE'),
@@ -71,22 +73,23 @@ def upgrade() -> None:
     )
     op.create_table('daily_reports',
     sa.Column('child_user_id', sa.UUID(), nullable=False),
-    sa.Column('report_date', sa.Date(), nullable=False),
-    sa.Column('overall_status', sa.Enum('stable', 'attention', 'alert', name='dailystatus'), nullable=False, comment='LLM 综合判断的当日整体状态（stable/attention/alert），UI 列表页色彩标识依据'),
-    sa.Column('dimension_summary', postgresql.JSONB(astext_type=sa.Text()), nullable=True, comment='DailyDimensionSummary JSON：6 维度当日 peak / mean / high_turns；代码层从 audit_records.dimension_scores 聚合，供 LLM 量化锚点 + UI 雷达图 + 跨日对比'),
+    sa.Column('report_date', sa.Date(), nullable=False, comment='对齐 4 点逻辑日（boundary_hour=4）'),
+    sa.Column('overall_status', sa.Enum('stable', 'attention', 'alert', name='dailystatus'), nullable=False, comment='LLM 判断 + 危机态代码地板的当日整体状态(stable/attention/alert),UI 列表页色彩标识依据'),
+    sa.Column('dimension_summary', postgresql.JSONB(astext_type=sa.Text()), nullable=True, comment='DailyDimensionSummary JSON:6 维度当日 peak / mean / high_ratio;代码层从 audit_records.dimension_scores 聚合,供 UI 雷达图 + 跨日对比使用'),
     sa.Column('content', sa.Text(), nullable=False, comment='markdown 格式报告'),
+    sa.Column('degraded', sa.Boolean(), server_default=sa.text('false'), nullable=False, comment='True 表示降级产物（交卷耗尽 / token 超限），前端展示降级提示'),
     sa.Column('delivered_at', postgresql.TIMESTAMP(timezone=True), nullable=True),
     sa.Column('id', sa.UUID(), server_default=sa.text('gen_random_uuid()'), nullable=False),
     sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['child_user_id'], ['users.id'], name=op.f('fk_daily_reports_child_user_id_users'), ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id', name=op.f('pk_daily_reports'))
     )
-    op.create_index('idx_reports_child', 'daily_reports', ['child_user_id', 'report_date'], unique=False)
+    op.create_index('idx_reports_child', 'daily_reports', ['child_user_id', 'report_date'], unique=True)
     op.create_table('data_deletion_requests',
     sa.Column('requested_by', sa.UUID(), nullable=False, comment='发起删除的家长'),
-    sa.Column('child_id_snapshot', sa.UUID(), nullable=False, comment='被删 child 的 user.id（快照）'),
+    sa.Column('child_id_snapshot', sa.UUID(), nullable=False, comment='被删 child 的 user.id(快照)'),
     sa.Column('deleted_tables', postgresql.JSONB(astext_type=sa.Text()), nullable=False, comment='{table: count} 各表删除行数'),
-    sa.Column('reason', sa.String(length=50), nullable=False, comment="触发原因，MVP 固定 'parent_request'"),
+    sa.Column('reason', sa.String(length=50), nullable=False, comment='触发原因,固定 parent_request'),
     sa.Column('id', sa.UUID(), server_default=sa.text('gen_random_uuid()'), nullable=False),
     sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['requested_by'], ['users.id'], name=op.f('fk_data_deletion_requests_requested_by_users')),
@@ -115,9 +118,9 @@ def upgrade() -> None:
     )
     op.create_table('notifications',
     sa.Column('parent_user_id', sa.UUID(), nullable=False),
-    sa.Column('child_user_id', sa.UUID(), nullable=True, comment='关联的 child（可选）；child 删除时 CASCADE 清空，系统通知为 NULL'),
-    sa.Column('type', sa.Enum('crisis', 'redline', 'daily_summary', name='notificationtype'), nullable=False),
-    sa.Column('payload', postgresql.JSONB(astext_type=sa.Text()), nullable=True, comment='MVP 不约束 schema，消费方按 type 解构'),
+    sa.Column('child_user_id', sa.UUID(), nullable=True, comment='关联的 child(可选);child 删除时 CASCADE 清空,系统通知为 NULL'),
+    sa.Column('type', sa.Enum('crisis', 'daily_summary', name='notificationtype'), nullable=False),
+    sa.Column('payload', postgresql.JSONB(astext_type=sa.Text()), nullable=True, comment='代码层不约束 schema,消费方按 type 解构'),
     sa.Column('sent_at', postgresql.TIMESTAMP(timezone=True), nullable=True),
     sa.Column('read_at', postgresql.TIMESTAMP(timezone=True), nullable=True),
     sa.Column('id', sa.UUID(), server_default=sa.text('gen_random_uuid()'), nullable=False),
@@ -131,21 +134,23 @@ def upgrade() -> None:
     sa.Column('title', sa.String(length=200), nullable=True),
     sa.Column('status', sa.Enum('active', 'deleted', name='sessionstatus'), server_default='active', nullable=False),
     sa.Column('last_active_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('context_size_tokens', sa.Integer(), nullable=True, comment='末轮 LLM usage input_tokens + output_tokens 快照'),
+    sa.Column('needs_compression', sa.Boolean(), server_default='false', nullable=False, comment='阈值命中 → True，下一轮 user 到达时阻塞压缩'),
+    sa.Column('ai_turn_counter', sa.Integer(), server_default='0', nullable=False, comment='LLM AI 回复累积轮次；persist_ai_turn 同事务 +1'),
     sa.Column('id', sa.UUID(), server_default=sa.text('gen_random_uuid()'), nullable=False),
     sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['child_user_id'], ['users.id'], name=op.f('fk_sessions_child_user_id_users'), ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id', name=op.f('pk_sessions'))
     )
-    op.create_index('idx_sessions_child', 'sessions', ['child_user_id', 'status'], unique=False)
+    op.create_index('idx_sessions_child_active_lastactive', 'sessions', ['child_user_id', sa.literal_column('last_active_at DESC'), sa.literal_column('id DESC')], unique=False, postgresql_where=sa.text("status = 'active'"))
     op.create_table('audit_records',
     sa.Column('session_id', sa.UUID(), nullable=False),
     sa.Column('turn_number', sa.Integer(), nullable=False),
-    sa.Column('dimension_scores', postgresql.JSONB(astext_type=sa.Text()), nullable=True, comment='AuditDimensionScores JSON：7 维度 score(0-9) + detail；供日终专家按维度诊断与跨日聚合；需要综合分时由代码派生 max(score)，不单独存储'),
+    sa.Column('target_message_id', sa.UUID(), nullable=True, comment='被审查的 ai_msg id(本轮审查锚点),由 enqueue_audit 从 me.py generator 传入'),
+    sa.Column('dimension_scores', postgresql.JSONB(astext_type=sa.Text()), nullable=True, comment='AuditDimensionScores JSON:6 维度 score(0-9) + detail;供日终专家按维度诊断与跨日聚合;需要综合分时由代码派生 max(score),不单独存储'),
     sa.Column('crisis_detected', sa.Boolean(), server_default=sa.text('false'), nullable=False),
     sa.Column('crisis_topic', sa.Text(), nullable=True),
     sa.Column('guidance_injection', sa.Text(), nullable=True, comment='注入的指引内容'),
-    sa.Column('redline_triggered', sa.Boolean(), server_default=sa.text('false'), nullable=False, comment='家长红线命中 0/1'),
-    sa.Column('redline_detail', sa.Text(), nullable=True, comment='命中的红线内容'),
     sa.Column('notify_sent', sa.Boolean(), server_default=sa.text('false'), nullable=False),
     sa.Column('id', sa.UUID(), server_default=sa.text('gen_random_uuid()'), nullable=False),
     sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
@@ -155,21 +160,24 @@ def upgrade() -> None:
     op.create_index('idx_audit_session', 'audit_records', ['session_id', 'turn_number'], unique=False)
     op.create_table('messages',
     sa.Column('session_id', sa.UUID(), nullable=False),
-    sa.Column('role', sa.Enum('human', 'ai', name='messagerole'), nullable=False),
+    sa.Column('role', sa.Enum('human', 'ai', 'summary', name='messagerole'), nullable=False),
     sa.Column('content', sa.Text(), nullable=False),
-    sa.Column('intervention_type', sa.Enum('crisis', 'redline', 'guided', name='interventiontype'), nullable=True, comment='null=正常回复, crisis=危机接管, redline=红线接管, guided=二级注入后回复'),
+    sa.Column('intervention_type', sa.Enum('crisis', 'guided', name='interventiontype'), nullable=True, comment='null=正常回复, crisis=危机接管, guided=二级注入后回复'),
+    sa.Column('status', sa.Enum('active', 'discarded', 'compressed', name='messagestatus'), server_default='active', nullable=False),
+    sa.Column('finish_reason', sa.String(length=50), nullable=True, comment='LLM finish_reason: stop/length/content_filter/user_stopped 等'),
+    sa.Column('turn_number', sa.Integer(), server_default='0', nullable=False, comment='对话轮次编号。human/ai 同轮共享同号；summary 行与共同发送的 human 匹配。'),
     sa.Column('id', sa.UUID(), server_default=sa.text('gen_random_uuid()'), nullable=False),
     sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['session_id'], ['sessions.id'], name=op.f('fk_messages_session_id_sessions'), ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id', name=op.f('pk_messages'))
     )
-    op.create_index('idx_messages_session', 'messages', ['session_id', 'created_at'], unique=False)
+    op.create_index('idx_messages_session_active_created', 'messages', ['session_id', sa.literal_column('created_at DESC'), sa.literal_column('id DESC')], unique=False, postgresql_where=sa.text("status = 'active'"))
     op.create_table('rolling_summaries',
     sa.Column('session_id', sa.UUID(), nullable=False),
     sa.Column('last_turn', sa.Integer(), nullable=False),
-    sa.Column('crisis_locked', sa.Boolean(), server_default=sa.text('false'), nullable=False, comment='crisis 粘性接管标志。一旦命中 crisis 置 true，该 session 剩余轮次全部由危机 LLM 接管；session 内不可逆，仅开启新 session 可重置。redline 不粘性，每轮重评估。'),
-    sa.Column('session_notes', sa.Text(), nullable=True, comment='风控视角的跨轮叙事笔记（TEXT），审查 Agent 按固定骨架整段重写维护：话题脉络 / 风险观察 / 情绪走向 / 家长关注点回应。供审查自身跨轮复用 + 日终专家生成家长报告；不注入主 LLM，避免风控判断泄漏'),
-    sa.Column('turn_summaries', postgresql.JSONB(astext_type=sa.Text()), nullable=True, comment='list[TurnSummaryEntry] JSON：每轮客观中立短摘要（turn + summary）；供主对话图超窗压缩时注入主 LLM；日终专家时序分析直接读 audit_records.dimension_scores 原始数据，更精细'),
+    sa.Column('crisis_locked_message_id', sa.UUID(), nullable=True, comment='crisis 粘性接管锚点消息 ID。非空=粘性锁定中,指向触发 crisis 的首条 ai_msg id;空=未锁定。session 内不可逆,仅开启新 session 可重置。'),
+    sa.Column('session_notes', sa.Text(), nullable=True, comment='风控视角的跨轮叙事笔记(TEXT),审查 Agent 按固定骨架整段重写维护:话题脉络 / 风险观察 / 情绪走向 / 家长关注点回应。供审查自身跨轮复用 + 日终专家生成家长报告;不注入主 LLM,避免风控判断泄漏'),
+    sa.Column('turn_summaries', postgresql.JSONB(astext_type=sa.Text()), nullable=True, comment='list[TurnSummaryEntry] JSON:每轮客观中立短摘要(turn + summary);供主对话图超窗压缩时注入主 LLM;日终专家时序分析直接读 audit_records.dimension_scores 原始数据,更精细'),
     sa.Column('updated_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('id', sa.UUID(), server_default=sa.text('gen_random_uuid()'), nullable=False),
     sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
@@ -183,11 +191,11 @@ def upgrade() -> None:
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
     op.drop_table('rolling_summaries')
-    op.drop_index('idx_messages_session', table_name='messages')
+    op.drop_index('idx_messages_session_active_created', table_name='messages', postgresql_where=sa.text("status = 'active'"))
     op.drop_table('messages')
     op.drop_index('idx_audit_session', table_name='audit_records')
     op.drop_table('audit_records')
-    op.drop_index('idx_sessions_child', table_name='sessions')
+    op.drop_index('idx_sessions_child_active_lastactive', table_name='sessions', postgresql_where=sa.text("status = 'active'"))
     op.drop_table('sessions')
     op.drop_table('notifications')
     op.drop_table('family_members')
@@ -196,6 +204,8 @@ def downgrade() -> None:
     op.drop_index('idx_reports_child', table_name='daily_reports')
     op.drop_table('daily_reports')
     op.drop_table('child_profiles')
+    op.drop_index('ix_auth_tokens_user_id_active', table_name='auth_tokens', postgresql_where=sa.text('revoked_at IS NULL'))
+    op.drop_index('ix_auth_tokens_token_hash', table_name='auth_tokens')
     op.drop_table('auth_tokens')
     op.drop_index('idx_users_phone_parent_active', table_name='users', postgresql_where=sa.text("role = 'parent' AND is_active = true"))
     op.drop_table('users')
