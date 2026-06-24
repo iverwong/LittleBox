@@ -548,6 +548,7 @@ async def write_results(
             await write_expert_results(
                 db=db,
                 child_user_id=ctx.child_user_id,
+                session_id=ctx.session_id,
                 report_date=ctx.report_date,
                 output=output,
                 dimension_summary=ctx.dimension_summary,

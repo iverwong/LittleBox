@@ -31,6 +31,8 @@ class ExpertContextSchema:
         child_user_id: 被分析的青少年用户 ID。
         owned_session_ids: 该孩子所有 session ID 白名单(建图前一次性查出),
             用于工具 handler 内存校验。
+        session_id: 当日 chat session,expert 锚定目标,worker 层按 day_start/day_end
+            过滤 owned_session_ids 唯一取一条。
         report_date: 刚结束的逻辑日(logical_day(now, boundary_hour=4) - 1day)。
         day_start: 逻辑日窗口起始时间(tz-aware,带时区)。
             worker 层一次性算好,load_context 直接取用,避免与 worker 重复计算。
@@ -55,6 +57,7 @@ class ExpertContextSchema:
     # 身份字段
     child_user_id: uuid.UUID  # 被分析的青少年用户 ID
     owned_session_ids: frozenset[uuid.UUID]  # 该孩子所有 session ID 白名单
+    session_id: uuid.UUID  # 当日 chat session,expert 锚定目标
     # 业务字段
     report_date: date  # 刚结束的逻辑日
     day_start: datetime  # 逻辑日窗口起始(tz-aware)
