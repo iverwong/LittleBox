@@ -161,7 +161,7 @@ DB engine 是全进程唯一实例,由 `RuntimeResources` 托管;lifespan 是唯
 - **Python 3.14 PEP 758**: `except` / `except*` 支持不带括号的多个异常类型
 - **`messages.role`**: DB 存 `human` / `ai`(不是 `user` / `assistant`),对齐 LangChain `HumanMessage` / `AIMessage`
 - **中文注释**: 工程代码(domain/core/api)注释与 docstring 统一用中文 Google 风格，半角标点。测试代码可放松。
-- **ORM 优先**: 简单查询走 SQLAlchemy ORM(`select()` + `.where()` + `.join()`)，禁止裸 SQL(`text()`)。允许裸 SQL 的唯一例外：PostgreSQL 专有语法（`jsonb_array_elements`、`ILIKE ANY`、`ON CONFLICT DO UPDATE` 等），此时必须在语句上方注释说明原因。
+- **ORM 优先**: 简单查询走 SQLAlchemy ORM(`select()` + `.where()` + `.join()`)，禁止裸 SQL(`text()`)。本项目所有只读查询走 ORM，唯一允许 `text()` 的例外是 PG JSONB 元素展开（如 `jsonb_array_elements`，必须加注释说明）；`ON CONFLICT DO UPDATE` 已统一通过 `sqlalchemy.dialects.postgresql.insert` 表达，不需要 `text()`。
 
 ### DB 迁移纪律
 
