@@ -177,13 +177,7 @@ stmt = stmt.on_conflict_do_update(
 
 **`owned_session_ids` 语义澄清:** `ctx.owned_session_ids` 是该 child 拥有的**全部 session(跨历史)**,不是当日。worker 已有 `day_start` / `day_end` 逻辑日边界,需要用它**过滤** `owned_session_ids` 得当日唯一那条。
 
-**取法:** worker 在为该 child 构建 context 时,跨域 inline import `chat.Session`(已有先例,见 `worker.py:46` / `repository.py:122`),按 `id IN owned_session_ids AND created_at IN [day_start, day_end)` 查当日 session,分三路:
-
-- `rows == 0`:当日无 chat session,**跳过该 child,本轮不生成 report**(产品逻辑"有聊才有报")。`run_daily_reports` 在 children 迭代层处理,本 spec 不展开。
-- `len(rows) == 1`:**正常路径**,取该 `session.id` 作 `ctx.session_id`。
-- `len(rows) >= 2`:**产品不变量被破坏,fail loud**——`raise RuntimeError(f"child {child_id} has {n} sessions on {date}, 1:1 invariant violated")`,被 worker 现有的 `return_exceptions=True` 接住,记 error log,跳过该 child。
-
-代码形态(放进 worker 的 child 迭代循环):
+**取法:** worker 在为该 child 构建 context 时,跨域 inline import `chat.Session`(已有先例,见 `worker.py:46` / `repository.py:122`),**直接用 `child_user_id` 过滤**——不走 `owned_session_ids` 间接路径,避免冗余判断:
 
 ```python
 from app.domain.chat.models import Session  # 跨域 inline import,先例见 worker.py:46
@@ -191,22 +185,27 @@ from app.domain.chat.models import Session  # 跨域 inline import,先例见 wor
 async with ctx.db_session_factory() as db:
     today_sessions = (await db.execute(
         select(Session).where(
-            Session.id.in_(ctx.owned_session_ids),
+            Session.child_user_id == ctx.child_user_id,
             Session.created_at >= ctx.day_start,
             Session.created_at < ctx.day_end,
         )
     )).scalars().all()
 
 if len(today_sessions) == 0:
-    continue   # 跳过该 child
+    continue   # 跳过该 child,产品逻辑"有聊才有报"
 if len(today_sessions) >= 2:
-    raise RuntimeError(...)
+    raise RuntimeError(f"child {ctx.child_user_id} has {n} sessions on {date}, 1:1 invariant violated")
 
 expert_ctx = ExpertContextSchema(
     ...,
     session_id=today_sessions[0].id,
 )
 ```
+
+三路处理:
+- `len(rows) == 0`:当日无 chat session,**跳过该 child,本轮不生成 report**(产品逻辑"有聊才有报")
+- `len(rows) == 1`:**正常路径**,取该 `session.id` 作 `ctx.session_id`
+- `len(rows) >= 2`:**产品不变量被破坏,fail loud**——`raise RuntimeError(...)`,被 worker 现有的 `return_exceptions=True` 接住,记 error log,跳过该 child
 
 与 §1.2 两个 unique 约束的 defense-in-depth 思路一致:DB 层用 unique 约束挡,worker 层用 fail loud 挡,产品逻辑用 1:1 假设挡,三层不互依赖。
 
@@ -264,7 +263,7 @@ async def _get_recent_reports(db, child_user_id, exclude_date, limit=5):
 - 删"全部通过 `from sqlalchemy import text` 执行原始 SQL"
 - 改为"全部走 ORM(`select` + `.where()`),仅在 PG 专有语法必需时(本文件当前无)用 `text()`"
 
-**`search_daily_reports` 关键改动:** `ILIKE ANY` 跨 6 列搜,跨 6 列 OR 拼接:
+**`search_daily_reports` 关键改动:** `ILIKE ANY` 跨 6 列搜,**WHERE 命中后 snippet 直接用 `today_overview`**——不重复 Python 找"首个命中列",LLM 要看全文用 `fetch_by_ref`。
 
 ```python
 from sqlalchemy import or_, any_
@@ -289,7 +288,7 @@ async def search_daily_reports(db, child_user_id, keywords, start_date, end_date
             DailyReport.id,
             DailyReport.report_date,
             DailyReport.created_at,
-            *[DailyReport.__table__.c[c] for c in SIX_SECTIONS],  # 6 列都 select 供 snippet 阶段挑
+            DailyReport.today_overview,    # snippet 用
         )
         .where(
             DailyReport.child_user_id == child_user_id,
@@ -305,22 +304,13 @@ async def search_daily_reports(db, child_user_id, keywords, start_date, end_date
     results = []
     for row in rows:
         rid = str(row.id)
-        # 挑首个命中列做 snippet
-        matched_text = None
-        for c in SIX_SECTIONS:
-            val = getattr(row, c)
-            if val and any(kw.lower() in val.lower() for kw in keywords):
-                matched_text = val
-                break
-        if matched_text is None:
-            matched_text = row.today_overview   # WHERE 已过滤,理论上不进
-        snippet = _extract_snippet(matched_text, keywords, context_chars)
+        snippet = _extract_snippet(row.today_overview, keywords, context_chars)
         results.append(_make_result(
             ref=f"report:{rid}",
             source="daily_report",
             snippet=snippet,
             occurred_at=str(row.created_at) if row.created_at else None,
-            matched=_match_matched(matched_text, keywords),
+            matched=_match_matched(row.today_overview, keywords),
             locating=f"日报 {row.report_date} (id: {rid})",
         ))
     return results
