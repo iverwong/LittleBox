@@ -39,9 +39,6 @@ class ExpertContextSchema:
         day_end: 逻辑日窗口结束时间(tz-aware,带时区)。
         dimension_summary: 代码预聚合的 6 维 peak/mean/high_ratio,
             不喂 LLM,write_results 节点直接写入 DB。
-        recent_reports_overview: 近 N 天历史报告摘要列表,每项含
-            {report_date, overall_status, today_overview},建图前查询,
-            load_context 嵌入 prompt。
         crisis_detected_today: 当日逻辑窗口内是否有任一 crisis_detected=True,
             用于 overall_status 地板判定。
         max_output_attempts: ExpertReportSchema 调用上限,默认 3。
@@ -63,7 +60,6 @@ class ExpertContextSchema:
     day_start: datetime  # 逻辑日窗口起始(tz-aware)
     day_end: datetime  # 逻辑日窗口结束(tz-aware)
     dimension_summary: dict  # 代码预聚合的 6 维聚合(不喂 LLM)
-    recent_reports_overview: list[dict]  # 近 N 天历史报告摘要
     crisis_detected_today: bool  # 当日是否有 crisis 标记
     max_output_attempts: int  # ExpertReportSchema 调用上限
     token_budget: int  # 资料收集 token 预算
