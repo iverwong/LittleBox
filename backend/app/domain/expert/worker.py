@@ -28,32 +28,27 @@ _HIGH_SCORE_THRESHOLD = 7
 
 async def _check_crisis_today(
     db: AsyncSession,
-    child_user_id: uuid.UUID,
-    day_start: datetime,
-    day_end: datetime,
+    session_id: uuid.UUID,
 ) -> bool:
-    """查询当日逻辑窗口内是否有任一 crisis 标记。
+    """查询指定 session 内是否有任一 crisis 标记。
+
+    调用方在 worker 层已强制 1:1 invariant(每个逻辑日唯一一条 today_session),
+    因此 session 范围即"当日"范围,无需再叠加 child_user_id / created_at 窗口过滤。
 
     Args:
         db: DB session。
-        child_user_id: 孩子用户 ID。
-        day_start: 窗口起始时间（带时区）。
-        day_end: 窗口结束时间（带时区）。
+        session_id: 被查询的 session ID(由 caller 传入 today_session_id)。
 
     Returns:
-        True 表示当日有 crisis 标记。
+        True 表示该 session 有 crisis 标记。
     """
     from app.domain.audit.models import AuditRecord
-    from app.domain.chat.models import Session
 
     stmt = select(
         select(AuditRecord.id)
-        .join(Session, Session.id == AuditRecord.session_id)
         .where(
-            Session.child_user_id == child_user_id,
+            AuditRecord.session_id == session_id,
             AuditRecord.crisis_detected,
-            AuditRecord.created_at >= day_start,
-            AuditRecord.created_at < day_end,
         )
         .exists()
     )
@@ -63,11 +58,9 @@ async def _check_crisis_today(
 
 async def _aggregate_dimensions(
     db: AsyncSession,
-    owned_session_ids: frozenset[uuid.UUID],
-    day_start: datetime,
-    day_end: datetime,
+    session_id: uuid.UUID,
 ) -> dict:
-    """从 audit_records 聚合维度的 peak / mean / high_ratio。
+    """从指定 session 的 audit_records 聚合维度的 peak / mean / high_ratio。
 
     仅查询 dimension_scores IS NOT NULL 的记录。
     对每个维度计算：
@@ -75,26 +68,21 @@ async def _aggregate_dimensions(
       - mean：该维度平均分数
       - high_ratio：分数 >= 7 的记录数 / 总记录数
 
+    调用方在 worker 层已强制 1:1 invariant(每个逻辑日唯一一条 today_session),
+    因此 session 范围即"当日"范围,无需再叠加 owned_session_ids / created_at 窗口过滤。
+
     Args:
         db: DB session。
-        owned_session_ids: 该孩子所有 session ID 白名单。
-        day_start: 窗口起始时间（带时区）。
-        day_end: 窗口结束时间（带时区）。
+        session_id: 被查询的 session ID(由 caller 传入 today_session_id)。
 
     Returns:
         {dim: {"peak": int, "mean": float, "high_ratio": float}} 格式的 dict。
         无数据时各值为 0。
     """
-    sids = list(owned_session_ids)
-    if not sids:
-        return {d: {"peak": 0, "mean": 0.0, "high_ratio": 0.0} for d in DIMENSIONS}
-
     from app.domain.audit.models import AuditRecord
 
     stmt = select(AuditRecord.dimension_scores).where(
-        AuditRecord.session_id.in_(sids),
-        AuditRecord.created_at >= day_start,
-        AuditRecord.created_at < day_end,
+        AuditRecord.session_id == session_id,
         AuditRecord.dimension_scores.isnot(None),
     )
     rows = (await db.execute(stmt)).scalars().all()
@@ -222,7 +210,7 @@ async def run_daily_reports(ctx: dict[str, Any]) -> None:
         async with sem:
             async with rr.db_session_factory() as child_db:
                 # a. owned_session_ids + 当日 session_id
-                # 跨域 inline import chat.Session,先例见 _check_crisis_today。
+                # 跨域 inline import chat.Session,Worker → Chat 边界允许。
                 # 三路处理:
                 #   0 session → 当日无 chat,跳过该 child(产品逻辑"有聊才有报")
                 #   1 session → 正常路径,取 session.id
@@ -286,17 +274,13 @@ async def run_daily_reports(ctx: dict[str, Any]) -> None:
                 # c. crisis_detected_today
                 crisis_detected = await _check_crisis_today(
                     child_db,
-                    child_user_id_val,
-                    day_start,
-                    day_end,
+                    today_session_id,
                 )
 
                 # d. dimension_summary（不喂 LLM，仅写 DB）
                 dimension_summary = await _aggregate_dimensions(
                     child_db,
-                    owned_sids,
-                    day_start,
-                    day_end,
+                    today_session_id,
                 )
 
                 # e. recent_reports_overview
