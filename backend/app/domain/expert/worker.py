@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -111,49 +111,6 @@ async def _aggregate_dimensions(
             summary[d] = {"peak": 0, "mean": 0.0, "high_ratio": 0.0}
 
     return summary
-
-
-async def _get_recent_reports(
-    db: AsyncSession,
-    child_user_id: uuid.UUID,
-    exclude_date: date,
-    limit: int = 5,
-) -> list[dict]:
-    """查询近 limit 条历史每日报告概要（直接读 today_overview 列,无 parse）。
-
-    Args:
-        db: DB session。
-        child_user_id: 孩子用户 ID。
-        exclude_date: 当前报告日期（不包含）。
-        limit: 返回上限,默认 5。
-
-    Returns:
-        list[dict]，每项含 report_date / overall_status / today_overview。
-    """
-    from app.domain.expert.models import DailyReport
-
-    stmt = (
-        select(
-            DailyReport.report_date,
-            DailyReport.overall_status,
-            DailyReport.today_overview,
-        )
-        .where(
-            DailyReport.child_user_id == child_user_id,
-            DailyReport.report_date < exclude_date,
-        )
-        .order_by(DailyReport.report_date.desc())
-        .limit(limit)
-    )
-    rows = (await db.execute(stmt)).all()
-    return [
-        {
-            "report_date": str(r.report_date),
-            "overall_status": r.overall_status.value,
-            "today_overview": r.today_overview,
-        }
-        for r in rows
-    ]
 
 
 async def run_daily_reports(ctx: dict[str, Any]) -> None:
@@ -283,13 +240,6 @@ async def run_daily_reports(ctx: dict[str, Any]) -> None:
                     today_session_id,
                 )
 
-                # e. recent_reports_overview
-                recent_reports = await _get_recent_reports(
-                    child_db,
-                    child_user_id_val,
-                    report_date,
-                )
-
                 # 构造 ExpertContextSchema
                 expert_ctx = ExpertContextSchema(
                     child_user_id=child_user_id_val,
@@ -299,7 +249,6 @@ async def run_daily_reports(ctx: dict[str, Any]) -> None:
                     day_start=day_start,
                     day_end=day_end,
                     dimension_summary=dimension_summary,
-                    recent_reports_overview=recent_reports,
                     crisis_detected_today=crisis_detected,
                     max_output_attempts=3,
                     token_budget=settings.expert_token_budget,
