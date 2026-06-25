@@ -324,6 +324,55 @@ async def api_client(app: Any) -> AsyncGenerator[Any, None]:
         yield client
 
 
+# ---------- Tool error handling fixtures (test_tool_error_handling.py) ----------
+
+
+@pytest_asyncio.fixture
+async def db_session_factory(
+    integration_runtime: Any,
+) -> AsyncGenerator[Callable[[], Any], None]:
+    """从 integration_runtime 暴露 db_session_factory。
+
+    spec §5.4:test_tool_error_handling 用其真实 session 触发 DB 故障,
+    不绕过 conftest。集成 RuntimeResources 已指向隔离实例(littlebox_integration),
+    与生产库物理隔离,可放心触发 statement_timeout / kill backend 等真故障。
+    """
+    yield integration_runtime.db_session_factory
+
+
+@pytest_asyncio.fixture
+async def db_session_factory_killer(
+    integration_runtime: Any,
+) -> AsyncGenerator[tuple, None]:
+    """返回 ``(killer_factory, victim_factory)``:两个独立 AsyncEngine 各开 session。
+
+    用于测试 "杀 backend" 场景:``victim_factory`` 拿 session 拿 pid,
+    ``killer_factory`` 用另一连接发 ``pg_terminate_backend(pid)`` 杀 victim 连接。
+    两个独立 engine 确保 killer 与 victim 物理隔离,杀 victim 不影响 killer 自身。
+
+    Args:
+        integration_runtime: 集成 RuntimeResources,提供数据库 URL。
+
+    Yields:
+        (killer_factory, victim_factory):两个 ``async_sessionmaker``,分别产生独立 session。
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    db_url = _integration_db_url()
+
+    killer_engine = create_async_engine(db_url, poolclass=NullPool)
+    victim_engine = create_async_engine(db_url, poolclass=NullPool)
+    killer_factory = async_sessionmaker(killer_engine, expire_on_commit=False)
+    victim_factory = async_sessionmaker(victim_engine, expire_on_commit=False)
+
+    try:
+        yield (killer_factory, victim_factory)
+    finally:
+        await killer_engine.dispose()
+        await victim_engine.dispose()
+
+
 # ---------- Step 4: In-process arq worker fixture ----------
 
 
