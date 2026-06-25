@@ -17,13 +17,13 @@ import pytest
 from app.core.enums import Gender, UserRole
 from app.domain.accounts.models import ChildProfile, Family, FamilyMember, User
 from app.domain.accounts.schemas import (
+    ChildProfileSnapshot,
     CurrentAccount,
     PutChildProfileRequest,
     SensitivityConfig,
 )
 from app.domain.accounts.service import (
     age_to_birth_date,
-    build_child_profile_snapshot,
     load_child_profile_in_family,
     update_child_profile,
 )
@@ -289,8 +289,8 @@ class TestUpdateChildProfileCrossFamilyForbidden:
         assert exc_info.value.status_code == 404
 
 
-class TestBuildChildProfileSnapshot:
-    """snapshot builder 正确填所有字段。"""
+class TestChildProfileSnapshotFromProfile:
+    """`ChildProfileSnapshot.from_profile` 正确填所有字段(含 concerns)。"""
 
     @pytest.mark.asyncio
     async def test_snapshot_includes_concerns(
@@ -300,13 +300,13 @@ class TestBuildChildProfileSnapshot:
         child_with_profile,
     ) -> None:
         """Given 已加载的 ChildProfile(含 concerns)
-        When build_child_profile_snapshot
+        When ChildProfileSnapshot.from_profile
         Then snapshot.concerns 等于 ORM 的值。
         """
         _, _, ctx = parent_in_family
         _, profile = child_with_profile
 
-        snap = build_child_profile_snapshot(profile)
+        snap = ChildProfileSnapshot.from_profile(profile)
         assert snap.concerns == "orig concerns"
         assert snap.sensitivity == profile.sensitivity
         assert snap.custom_redlines == "orig redline"

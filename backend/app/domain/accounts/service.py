@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.enums import UserRole
 from app.core.redis import commit_with_redis
-from app.core.time import age_at, now_utc
+from app.core.time import now_utc
 from app.domain.accounts.models import (
     AuthToken,
     ChildProfile,
@@ -33,7 +33,6 @@ from app.domain.accounts.models import (
     User,
 )
 from app.domain.accounts.schemas import (
-    ChildProfileSnapshot,
     ChildSummary,
     CreateChildRequest,
     CurrentAccount,
@@ -378,27 +377,6 @@ async def load_child_profile_in_family(
             )
         )
     ).scalar_one_or_none()
-
-
-def build_child_profile_snapshot(profile: ChildProfile) -> ChildProfileSnapshot:
-    """构造 snapshot,收口 age_at 换算与字段映射(含 concerns)。
-
-    Args:
-        profile: 已加载的 `ChildProfile` ORM 对象。
-
-    Returns:
-        填好全部字段的 `ChildProfileSnapshot`(frozen)。
-    """
-    return ChildProfileSnapshot(
-        child_user_id=profile.child_user_id,
-        nickname=profile.nickname,
-        gender=profile.gender.value,
-        birth_date=profile.birth_date,
-        age=age_at(profile.birth_date, tz="Asia/Shanghai"),
-        sensitivity=profile.sensitivity,
-        custom_redlines=profile.custom_redlines,
-        concerns=profile.concerns,
-    )
 
 
 async def update_child_profile(

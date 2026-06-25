@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.time import SHANGHAI, logical_day, now_utc
+from app.domain.accounts.models import ChildProfile
 from app.domain.expert.graph import ExpertGraphState
 
 logger = logging.getLogger("expert.worker")
@@ -262,7 +263,7 @@ async def run_daily_reports(ctx: dict[str, Any]) -> None:
                 # b. ChildProfile -> ChildProfileSnapshot
                 from app.domain.accounts.models import ChildProfile
 
-                child_profile = (
+                child_profile: ChildProfile | None = (
                     (
                         await child_db.execute(
                             select(ChildProfile).where(
@@ -274,24 +275,13 @@ async def run_daily_reports(ctx: dict[str, Any]) -> None:
                     .first()
                 )
                 if child_profile is None:
-                    logger.warning(
+                    logger.error(
                         "expert.child_no_profile child=%s",
                         child_user_id_val,
                     )
                     return
 
-                from app.core.time import age_at
-
-                snapshot = ChildProfileSnapshot(
-                    child_user_id=child_user_id_val,
-                    nickname=child_profile.nickname,
-                    gender=child_profile.gender.value,
-                    birth_date=child_profile.birth_date,
-                    age=age_at(child_profile.birth_date),
-                    sensitivity=child_profile.sensitivity,
-                    custom_redlines=child_profile.custom_redlines,
-                    concerns=child_profile.concerns,
-                )
+                snapshot = ChildProfileSnapshot.from_profile(child_profile)
 
                 # c. crisis_detected_today
                 crisis_detected = await _check_crisis_today(

@@ -10,12 +10,15 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Literal, Optional
+from typing import TYPE_CHECKING, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.enums import Gender, UserRole
 from app.core.time import age_at
+
+if TYPE_CHECKING:
+    from app.domain.accounts.models import ChildProfile
 
 
 class AccountOut(BaseModel):
@@ -241,3 +244,28 @@ class ChildProfileSnapshot:
     sensitivity: Optional[dict]
     custom_redlines: Optional[str]
     concerns: Optional[str]
+
+    @classmethod
+    def from_profile(cls, profile: ChildProfile) -> ChildProfileSnapshot:
+        """从 `ChildProfile` ORM 派生 snapshot,收口 age_at 换算与字段映射。
+
+        与 `me.py` / `expert/worker.py` 共享唯一构造入口,避免字段映射散落;
+        跨进程序列化(`usecase.enqueue_audit` 走 `asdict`)仍按字段名解包,
+        字段增减需保持向后兼容(默认值兜底)。
+
+        Args:
+            profile: 已加载的 `ChildProfile` ORM 对象。
+
+        Returns:
+            填好全部字段的 `ChildProfileSnapshot`(frozen)。
+        """
+        return cls(
+            child_user_id=profile.child_user_id,
+            nickname=profile.nickname,
+            gender=profile.gender.value,
+            birth_date=profile.birth_date,
+            age=age_at(profile.birth_date, tz="Asia/Shanghai"),
+            sensitivity=profile.sensitivity,
+            custom_redlines=profile.custom_redlines,
+            concerns=profile.concerns,
+        )

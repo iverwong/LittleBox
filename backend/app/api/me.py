@@ -33,10 +33,10 @@ from app.domain.accounts.models import ChildProfile, User
 from app.domain.accounts.schemas import (
     AccountOut,
     ChildProfileOut,
+    ChildProfileSnapshot,
     CurrentAccount,
 )
 from app.domain.accounts.service import (
-    build_child_profile_snapshot,
     load_child_profile,
 )
 from app.domain.auth.deps import get_current_account, require_child
@@ -524,7 +524,7 @@ async def chat_stream(
             if child_profile is None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "ChildProfileNotFound")
 
-            profile_snapshot = build_child_profile_snapshot(child_profile)
+            profile_snapshot = ChildProfileSnapshot.from_profile(child_profile)
 
             # ---- 决策矩阵 + 首轮 / 续轮事务 ----
             result = await intake_human_message(db, sid, session, req)
