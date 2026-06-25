@@ -122,7 +122,6 @@ def _make_mock_ctx(**overrides) -> ExpertContextSchema:
         day_start=day_start,
         day_end=day_end,
         dimension_summary={},
-        recent_reports_overview=[],
         crisis_detected_today=False,
         max_output_attempts=3,
         token_budget=100_000,
@@ -213,19 +212,6 @@ class TestLoadContextNode:
         human = result["messages"][1]
         assert isinstance(human, HumanMessage)
         assert str(REPORT_DATE) in human.content
-
-    async def test_includes_recent_reports_in_human_message(self):
-        recent = [
-            {"report_date": "2026-06-22", "overall_status": "stable", "today_overview": "正常"},
-        ]
-        result = await load_context(
-            _initial_state(),
-            _make_fake_runtime(recent_reports_overview=recent),
-        )
-        human = result["messages"][1]
-        assert isinstance(human, HumanMessage)
-        assert "2026-06-22" in human.content
-        assert "近期历史报告概览" in human.content
 
     async def test_no_owned_sids_skips_db(self):
         """无 owned_sids 时跳过 DB 查询，HumanMessage 不含对话材料头。"""

@@ -35,7 +35,6 @@ def _make_mock_ctx(**overrides: dict) -> ExpertContextSchema:
         day_start=day_start,
         day_end=day_end,
         dimension_summary={},
-        recent_reports_overview=[],
         crisis_detected_today=False,
         max_output_attempts=3,
         token_budget=100_000,
