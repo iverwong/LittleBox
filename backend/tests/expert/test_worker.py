@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,6 +20,8 @@ CUID_2 = uuid.uuid4()
 SID_1 = uuid.uuid4()
 SID_2 = uuid.uuid4()
 REPORT_DATE = date(2026, 6, 22)  # run at 04:05 Shanghai on 06-23 → report_date = 06-22
+
+from app.core.time import SHANGHAI
 
 
 def _make_mock_arq_ctx(
@@ -121,6 +123,40 @@ def _make_mock_arq_ctx(
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+class TestComputeWindow:
+    """_compute_window 纯函数测试。"""
+
+    def test_yesterday_at_4am(self):
+        from app.domain.expert.worker import _compute_window
+        now = datetime(2026, 6, 23, 4, 5, tzinfo=SHANGHAI)
+        report_date, day_start, day_end = _compute_window(now)
+        # 04:05 属自然日 T0=6/23,报告日期 = 6/22
+        assert report_date == date(2026, 6, 22)
+        assert day_start == datetime(2026, 6, 22, 0, 0, tzinfo=SHANGHAI)
+        assert day_end == datetime(2026, 6, 23, 0, 0, tzinfo=SHANGHAI)
+
+    def test_morning_before_4am(self):
+        from app.domain.expert.worker import _compute_window
+        now = datetime(2026, 6, 23, 2, 0, tzinfo=SHANGHAI)
+        report_date, day_start, day_end = _compute_window(now)
+        # 02:00 属自然日 T0=6/23,报告日期 = 6/22(与昨日 04:05 一致)
+        assert report_date == date(2026, 6, 22)
+        assert day_start == datetime(2026, 6, 22, 0, 0, tzinfo=SHANGHAI)
+
+    def test_late_evening(self):
+        from app.domain.expert.worker import _compute_window
+        now = datetime(2026, 6, 23, 23, 59, tzinfo=SHANGHAI)
+        report_date, day_start, day_end = _compute_window(now)
+        # 23:59 仍属 T0=6/23,报告日期 = 6/22
+        assert report_date == date(2026, 6, 22)
+
+    def test_window_is_24h(self):
+        from app.domain.expert.worker import _compute_window
+        now = datetime(2026, 6, 23, 4, 5, tzinfo=SHANGHAI)
+        _, day_start, day_end = _compute_window(now)
+        assert (day_end - day_start) == timedelta(days=1)
 
 
 class TestRunDailyReports:

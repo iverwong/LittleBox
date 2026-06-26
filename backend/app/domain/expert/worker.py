@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.runtime import RuntimeResources
-from app.core.time import SHANGHAI, logical_day, now_utc
+from app.core.time import SHANGHAI, now_shanghai
 from app.domain.accounts.models import ChildProfile
 from app.domain.accounts.schemas import ChildProfileSnapshot
 from app.domain.expert.context_schema import ExpertContextSchema
@@ -28,6 +28,30 @@ logger = logging.getLogger("expert.worker")
 DIMENSIONS = ["emotional", "social", "values", "boundaries", "academic", "lifestyle"]
 # 高维分数阈值（>= 此值计为 high_turn）
 _HIGH_SCORE_THRESHOLD = 7
+
+
+def _compute_window(
+    now: datetime | None = None,
+) -> tuple[date, datetime, datetime]:
+    """Compute the report window for the previous natural day in Shanghai.
+
+    以"自然日"为单位:无论 cron 在 04:05 触发还是其它时间,
+    报告始终锚定到 `now` 之前那个自然日 `[T-1 00:00, T0 00:00) Shanghai`。
+
+    Args:
+        now: 用于计算的当前时间(带时区),None 取 `now_shanghai()`。
+
+    Returns:
+        (report_date, day_start, day_end):
+          - report_date: 上一自然日(Shanghai 日期)
+          - day_start: report_date 00:00:00 Shanghai
+          - day_end:   (report_date + 1day) 00:00:00 Shanghai
+    """
+    now = now or now_shanghai()
+    report_date = (now - timedelta(days=1)).date()
+    day_start = datetime.combine(report_date, datetime.min.time(), tzinfo=SHANGHAI)
+    day_end = day_start + timedelta(days=1)
+    return report_date, day_start, day_end
 
 
 async def _check_crisis_today(
@@ -249,14 +273,8 @@ async def run_daily_reports(ctx: dict[str, Any]) -> None:
     rr: RuntimeResources = ctx["resources"]
     settings = rr.settings
 
-    report_date = logical_day(now_utc(), boundary_hour=4) - timedelta(days=1)
+    report_date, day_start, day_end = _compute_window()
     logger.info("expert.run_daily_reports start report_date=%s", report_date)
-
-    # 逻辑日窗口：report_date 4:00 Shanghai -> report_date+1 4:00 Shanghai
-    day_start = datetime.combine(report_date, datetime.min.time()).replace(
-        tzinfo=SHANGHAI,
-    ) + timedelta(hours=4)
-    day_end = day_start + timedelta(days=1)
 
     # 查所有活跃孩子（JOIN ChildProfile 确保存在画像）
     async with rr.db_session_factory() as db:
