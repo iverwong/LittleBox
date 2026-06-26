@@ -236,15 +236,25 @@ async def _fetch_today_materials(
         for rsid in rs_rows
     ]
 
-    crisis_markers: list[_CrisisMarkerItem] = [
-        {
-            "session_id": str(ar.session_id),
-            "turn_number": ar.turn_number,
-            "crisis_topic": ar.crisis_topic or "",
-        }
-        for ar in ar_rows
-        if ar.crisis_detected
-    ]
+    crisis_markers: list[_CrisisMarkerItem] = []
+    for ar in ar_rows:
+        if not ar.crisis_detected:
+            continue
+        # 数据契约:crisis_detected=True 时 crisis_topic 必填(audit schemas validator 守)。
+        # 兜底:若 DB 出现历史脏数据 / 绕过 validator 的直写,记 warning 不静默丢失。
+        if not ar.crisis_topic:
+            logger.warning(
+                "expert.crisis_marker_missing_topic session=%s turn=%s",
+                ar.session_id,
+                ar.turn_number,
+            )
+        crisis_markers.append(
+            {
+                "session_id": str(ar.session_id),
+                "turn_number": ar.turn_number,
+                "crisis_topic": ar.crisis_topic or "",
+            }
+        )
     return today_summaries, crisis_markers
 
 
