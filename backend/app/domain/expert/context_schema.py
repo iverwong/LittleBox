@@ -33,10 +33,10 @@ class ExpertContextSchema:
             用于工具 handler 内存校验。
         session_id: 当日 chat session,expert 锚定目标,worker 层按 day_start/day_end
             过滤 owned_session_ids 唯一取一条。
-        report_date: 刚结束的逻辑日(logical_day(now, boundary_hour=4) - 1day)。
-        day_start: 逻辑日窗口起始时间(tz-aware,带时区)。
+        report_date: 刚结束的自然日((now_shanghai() - 1day).date())。
+        day_start: 自然日窗口起始时间(tz-aware,带时区)。
             worker 层一次性算好,load_context 直接取用,避免与 worker 重复计算。
-        day_end: 逻辑日窗口结束时间(tz-aware,带时区)。
+        day_end: 自然日窗口结束时间(tz-aware,带时区)。
         dimension_summary: 代码预聚合的 6 维 peak/mean/high_ratio,
             不喂 LLM,write_results 节点直接写入 DB。
         crisis_detected_today: 当日逻辑窗口内是否有任一 crisis_detected=True,
