@@ -177,8 +177,12 @@ class TestRunDailyReports:
         ctx = _make_mock_arq_ctx(children=[CUID_1])
 
         with patch(
-            "app.domain.expert.worker.logical_day",
-            return_value=REPORT_DATE + timedelta(days=1),
+            "app.domain.expert.worker._compute_window",
+            return_value=(
+                REPORT_DATE,
+                datetime(2026, 6, 22, 0, 0, tzinfo=SHANGHAI),
+                datetime(2026, 6, 23, 0, 0, tzinfo=SHANGHAI),
+            ),
         ):
             await run_daily_reports(ctx)
 
@@ -195,8 +199,12 @@ class TestRunDailyReports:
         )
 
         with patch(
-            "app.domain.expert.worker.logical_day",
-            return_value=REPORT_DATE + timedelta(days=1),
+            "app.domain.expert.worker._compute_window",
+            return_value=(
+                REPORT_DATE,
+                datetime(2026, 6, 22, 0, 0, tzinfo=SHANGHAI),
+                datetime(2026, 6, 23, 0, 0, tzinfo=SHANGHAI),
+            ),
         ):
             # 不应抛出异常（return_exceptions=True）
             await run_daily_reports(ctx)
@@ -219,8 +227,12 @@ class TestRunDailyReports:
 
         ctx = _make_mock_arq_ctx(children=[CUID_1], today_session_count=0)
         with patch(
-            "app.domain.expert.worker.logical_day",
-            return_value=REPORT_DATE + timedelta(days=1),
+            "app.domain.expert.worker._compute_window",
+            return_value=(
+                REPORT_DATE,
+                datetime(2026, 6, 22, 0, 0, tzinfo=SHANGHAI),
+                datetime(2026, 6, 23, 0, 0, tzinfo=SHANGHAI),
+            ),
         ):
             await run_daily_reports(ctx)
 
@@ -232,8 +244,12 @@ class TestRunDailyReports:
 
         ctx = _make_mock_arq_ctx(children=[CUID_1], today_session_count=2)
         with patch(
-            "app.domain.expert.worker.logical_day",
-            return_value=REPORT_DATE + timedelta(days=1),
+            "app.domain.expert.worker._compute_window",
+            return_value=(
+                REPORT_DATE,
+                datetime(2026, 6, 22, 0, 0, tzinfo=SHANGHAI),
+                datetime(2026, 6, 23, 0, 0, tzinfo=SHANGHAI),
+            ),
         ):
             # return_exceptions=True 兜住 RuntimeError,不应上抛
             await run_daily_reports(ctx)
