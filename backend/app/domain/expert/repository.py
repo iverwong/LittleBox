@@ -228,7 +228,7 @@ async def search_turn_summaries(
                 continue
             if not _match_matched(summary, keywords):
                 continue
-            turn_num = entry.get("turn", entry.get("turn_number", ""))
+            turn_num = entry["turn_number"]
             ref = f"turn:{sid}#{turn_num}"
             results.append(
                 _make_result(
@@ -532,7 +532,7 @@ async def fetch_turn(
     summaries = ts_row.turn_summaries
     if summaries:
         for entry in summaries:
-            if isinstance(entry, dict) and entry.get("turn") == turn_number:
+            if isinstance(entry, dict) and entry["turn_number"] == turn_number:
                 turn_summary = entry.get("summary")
                 break
 
