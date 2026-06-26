@@ -14,7 +14,7 @@ from app.core.redis import commit_with_redis
 from app.core.time import SHANGHAI
 from app.domain.auth.tokens import issue_token
 from app.domain.chat.models import Session as SessionModel
-from app.domain.chat.session_policy import logical_day
+from app.core.time import same_natural_day
 from httpx import ASGITransport, AsyncClient
 
 # ---- fixtures ----
@@ -66,7 +66,8 @@ async def test_list_sessions_today_filter(api_client, auth_headers_child, db_ses
     headers, child = auth_headers_child
 
     now = datetime.now(SHANGHAI)
-    today = logical_day(now)
+    # 新策略:自然日为单位(last_create_at vs now)。now 与 sid_today 同日 → 不切。
+    # sid_old 的 created_at 在昨日(同 last_active_at)→ 跨日 → 切。
 
     # 创建 2 条 session：sid_old（昨日）+ sid_today（今日）
     yesterday_ts = now - timedelta(days=1)
@@ -112,6 +113,7 @@ async def test_list_sessions_no_today(api_client, auth_headers_child, db_session
     db_session.add(SessionModel(
         id=sid_old, child_user_id=child.id, title="昨日会话",
         status="active", last_active_at=yesterday_ts,
+        created_at=yesterday_ts,
     ))
     await db_session.commit()
 
@@ -126,33 +128,30 @@ async def test_list_sessions_no_today(api_client, auth_headers_child, db_session
     assert str(sid_old) in session_ids
 
 
-# ---- Group 7 扩展:凌晨空闲软切边界 ----
+# ---- Group 7 扩展:跨自然日 / R1 同日不切 / R3' 短宽限 ----
 
 
 @pytest.mark.asyncio
-async def test_list_sessions_idle_window_soft_cut_triggers(
+async def test_list_sessions_cross_natural_day_boundary(
     api_client, auth_headers_child, db_session, monkeypatch
 ):
-    """凌晨空闲 30min 软切:list_sessions 的 today_session_id 与 chat/stream 一致。
+    """跨自然日 + 大 gap:list_sessions 的 today_session_id 与 chat/stream 一致 → 切 → None。
 
-    场景:last_active = 01:00,now = 02:00(同 logical_day,gap=1h > 30min) → 切 → today_sid=None。
-    旧实现(仅 logical_day 相等)会把 today_sid 暴露为旧 session,与 chat/stream 实际新建的
-    session 互相打架(client 跳到旧 sid → 服务端又建新 sid)。
-
-    时间注入:list_sessions 通过 me.now_shanghai() 取"现在",monkeypatch 该函数
-    即可固化 fake_now,无需再伪装 datetime 模块。
+    新策略 R2: 跨日 + gap > 30min → 切。
+    场景:session create_at=T-1 23:30, last_active=T-1 23:30, now=T0 02:00(gap 2.5h) → 切。
     """
     from app.api import me as me_module
-    from app.core.time import SHANGHAI
 
     headers, child = auth_headers_child
     fake_now = datetime(2026, 6, 8, 2, 0, 0, tzinfo=SHANGHAI)
     monkeypatch.setattr(me_module, "now_shanghai", lambda: fake_now)
 
+    yesterday_create = fake_now.replace(day=7, hour=23, minute=30)
     sid = uuid.uuid4()
     db_session.add(SessionModel(
-        id=sid, child_user_id=child.id, title="凌晨会话",
-        status="active", last_active_at=fake_now - timedelta(hours=1),
+        id=sid, child_user_id=child.id, title="昨日会话",
+        status="active", last_active_at=yesterday_create,
+        created_at=yesterday_create,
     ))
     await db_session.commit()
 
@@ -160,31 +159,32 @@ async def test_list_sessions_idle_window_soft_cut_triggers(
     assert resp.status_code == 200
     data = resp.json()
 
-    # 凌晨空闲 1h > 30min → 切 → today_sid 应为 None(与 chat/stream 判定一致)
     assert data["today_session_id"] is None, (
-        f"凌晨空闲软切后 today_session_id 应为 None,got {data['today_session_id']}"
+        f"跨自然日 + gap 2.5h → today_session_id 应为 None, got {data['today_session_id']}"
     )
 
 
 @pytest.mark.asyncio
-async def test_list_sessions_idle_window_under_threshold_keeps(
+async def test_list_sessions_cross_day_short_grace_keeps(
     api_client, auth_headers_child, db_session, monkeypatch
 ):
-    """凌晨空闲但 < 30min:不切,保持 today_sid。
+    """跨日 + gap ≤ 30min + now < 04:00:不切,保持 today_sid(R3' 宽限)。
 
-    场景:last_active = 01:45,now = 02:00(同 logical_day,gap=15min < 30min) → 不切 → today_sid=sid。
+    场景:create=T-1 23:55, last_active=T0 00:05(gap 10min), now=T0 00:05 → R3' 不切。
     """
     from app.api import me as me_module
-    from app.core.time import SHANGHAI
 
     headers, child = auth_headers_child
-    fake_now = datetime(2026, 6, 8, 2, 0, 0, tzinfo=SHANGHAI)
+    fake_now = datetime(2026, 6, 8, 0, 5, 0, tzinfo=SHANGHAI)
     monkeypatch.setattr(me_module, "now_shanghai", lambda: fake_now)
 
+    yesterday_create = fake_now.replace(hour=23, minute=55) - timedelta(days=1)
+    active = fake_now  # 00:05 (gap 10 min)
     sid = uuid.uuid4()
     db_session.add(SessionModel(
-        id=sid, child_user_id=child.id, title="刚聊过",
-        status="active", last_active_at=fake_now - timedelta(minutes=15),
+        id=sid, child_user_id=child.id, title="刚跨过来",
+        status="active", last_active_at=active,
+        created_at=yesterday_create,
     ))
     await db_session.commit()
 
@@ -192,7 +192,38 @@ async def test_list_sessions_idle_window_under_threshold_keeps(
     assert resp.status_code == 200
     data = resp.json()
 
-    # 凌晨空闲 15min < 30min → 不切 → today_sid = sid
     assert data["today_session_id"] == str(sid), (
-        f"凌晨空闲未达 30min 阈值 today_session_id 应保持,got {data['today_session_id']}"
+        f"跨日 30min 宽限内 + now < 04:00 → today_session_id 应保持 {sid}, got {data['today_session_id']}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_within_day_never_switches(
+    api_client, auth_headers_child, db_session, monkeypatch
+):
+    """同自然日任意 gap → 不切(R1)。
+
+    场景:create=today 13:00, last_active=today 13:00, now=today 22:00(gap 9h) → 不切。
+    """
+    from app.api import me as me_module
+
+    headers, child = auth_headers_child
+    fake_now = datetime(2026, 6, 8, 22, 0, 0, tzinfo=SHANGHAI)
+    monkeypatch.setattr(me_module, "now_shanghai", lambda: fake_now)
+
+    morning = fake_now.replace(hour=13, minute=0)
+    sid = uuid.uuid4()
+    db_session.add(SessionModel(
+        id=sid, child_user_id=child.id, title="白天会话",
+        status="active", last_active_at=morning,
+        created_at=morning,
+    ))
+    await db_session.commit()
+
+    resp = await api_client.get("/api/v1/me/sessions", headers=headers)
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert data["today_session_id"] == str(sid), (
+        f"同日 9h gap → today_session_id 应保持 {sid}, got {data['today_session_id']}"
     )
