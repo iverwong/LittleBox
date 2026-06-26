@@ -10,9 +10,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
 
-from app.core.time import SHANGHAI, now_shanghai
+from app.core.time import SHANGHAI, now_shanghai, same_natural_day
 from app.core.time import logical_day as _core_logical_day
-from app.core.time import same_natural_day
 
 # Session 域的可调常量。
 # 旧策略(硬切 04:00 + 软切窗口 [1, 4))已下线,改为自然日 + 跨日宽限 + 04:00 硬切:
