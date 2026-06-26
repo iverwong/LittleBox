@@ -8,14 +8,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import Settings
+from app.core.runtime import RuntimeResources
 from app.core.time import SHANGHAI, logical_day, now_utc
 from app.domain.accounts.models import ChildProfile
+from app.domain.accounts.schemas import ChildProfileSnapshot
+from app.domain.expert.context_schema import ExpertContextSchema
 from app.domain.expert.graph import ExpertGraphState
 
 logger = logging.getLogger("expert.worker")
@@ -113,6 +117,126 @@ async def _aggregate_dimensions(
     return summary
 
 
+async def _assemble_expert_context(
+    rr: RuntimeResources,
+    settings: Settings,
+    child_user_id_val: uuid.UUID,
+    report_date: date,
+    day_start: datetime,
+    day_end: datetime,
+) -> ExpertContextSchema | None:
+    """读阶段：为单个 child 装配 ExpertContextSchema。
+
+    child_db 短作用域：仅在本函数内持有,出函数即归还连接池。
+    graph ainvoke 阶段使用 expert_ctx 内置的 db_session_factory 自取短块,
+    保持图节点可移植（CLAUDE.md"图节点应从 ctx.db_session_factory() 自取短块"）。
+
+    Args:
+        rr: RuntimeResources（含 db_session_factory / shared_http_client）。
+        settings: 应用配置（expert_token_budget）。
+        child_user_id_val: 孩子用户 ID。
+        report_date: 报告日期。
+        day_start: 逻辑日起（Shanghai 04:00）。
+        day_end: 逻辑日止（Shanghai 04:00 +1）。
+
+    Returns:
+        ExpertContextSchema: 装配好的上下文,可喂给 ainvoke。
+        None: 跳过(当日 0 session 或 child 无 profile)。
+
+    Raises:
+        RuntimeError: 1:1 invariant 被破坏(当日 ≥2 session),
+            由 caller 的 return_exceptions=True 兜住,记 error log。
+    """
+    from app.domain.chat.models import Session
+
+    async with rr.db_session_factory() as child_db:
+        # a. owned_session_ids + 当日 session_id
+        # 跨域 inline import chat.Session,Worker → Chat 边界允许。
+        # 三路处理：
+        #   0 session → 当日无 chat,跳过该 child(产品逻辑"有聊才有报")
+        #   1 session → 正常路径,取 session.id
+        #   ≥2 session → fail loud,被 return_exceptions=True 兜住,记 error log
+        sid_stmt = select(Session.id).where(Session.child_user_id == child_user_id_val)
+        sid_rows = (await child_db.execute(sid_stmt)).scalars().all()
+        owned_sids = frozenset(sid_rows)
+
+        today_sessions = (
+            (
+                await child_db.execute(
+                    select(Session).where(
+                        Session.child_user_id == child_user_id_val,
+                        Session.created_at >= day_start,
+                        Session.created_at < day_end,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not today_sessions:
+            logger.info(
+                "expert.skip_no_today_session child=%s date=%s",
+                child_user_id_val,
+                report_date,
+            )
+            return None
+        if len(today_sessions) >= 2:
+            raise RuntimeError(
+                f"child {child_user_id_val} has {len(today_sessions)} sessions "
+                f"on {report_date}, 1:1 invariant violated",
+            )
+        today_session_id: uuid.UUID = today_sessions[0].id
+
+        # b. ChildProfile -> ChildProfileSnapshot
+        child_profile: ChildProfile | None = (
+            (
+                await child_db.execute(
+                    select(ChildProfile).where(ChildProfile.child_user_id == child_user_id_val)
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if child_profile is None:
+            logger.error(
+                "expert.child_no_profile child=%s",
+                child_user_id_val,
+            )
+            return None
+
+        snapshot = ChildProfileSnapshot.from_profile(child_profile)
+
+        # c. crisis_detected_today
+        crisis_detected = await _check_crisis_today(
+            child_db,
+            today_session_id,
+        )
+
+        # d. dimension_summary（不喂 LLM，仅写 DB）
+        dimension_summary = await _aggregate_dimensions(
+            child_db,
+            today_session_id,
+        )
+
+        # 构造 ExpertContextSchema
+        return ExpertContextSchema(
+            child_user_id=child_user_id_val,
+            owned_session_ids=owned_sids,
+            session_id=today_session_id,
+            report_date=report_date,
+            day_start=day_start,
+            day_end=day_end,
+            dimension_summary=dimension_summary,
+            crisis_detected_today=crisis_detected,
+            max_output_attempts=3,
+            token_budget=settings.expert_token_budget,
+            child_profile=snapshot,
+            settings=settings,
+            db_session_factory=rr.db_session_factory,
+            shared_http_client=rr.shared_http_client,
+        )
+
+
 async def run_daily_reports(ctx: dict[str, Any]) -> None:
     """ARQ cron job：遍历所有活跃孩子生成日终报告。
 
@@ -122,10 +246,6 @@ async def run_daily_reports(ctx: dict[str, Any]) -> None:
     Args:
         ctx: ARQ worker ctx dict（含 resources / settings）。
     """
-    from app.core.runtime import RuntimeResources
-    from app.domain.accounts.schemas import ChildProfileSnapshot
-    from app.domain.expert.context_schema import ExpertContextSchema
-
     rr: RuntimeResources = ctx["resources"]
     settings = rr.settings
 
@@ -163,123 +283,45 @@ async def run_daily_reports(ctx: dict[str, Any]) -> None:
     sem = asyncio.Semaphore(settings.expert_max_concurrent_children)
 
     async def _report_for_child(child_user_id_val: uuid.UUID) -> None:
-        """为一个孩子生成日终报告（内部闭包，被 asyncio.gather 并发调用）。"""
+        """为一个孩子生成日终报告（内部闭包，被 asyncio.gather 并发调用）。
+
+        装配阶段（读 DB）与 ainvoke 阶段（LLM 调用）分属不同函数,
+        child_db 仅装配阶段持有,ainvoke 阶段已归还连接池。
+        """
         async with sem:
-            async with rr.db_session_factory() as child_db:
-                # a. owned_session_ids + 当日 session_id
-                # 跨域 inline import chat.Session,Worker → Chat 边界允许。
-                # 三路处理:
-                #   0 session → 当日无 chat,跳过该 child(产品逻辑"有聊才有报")
-                #   1 session → 正常路径,取 session.id
-                #   ≥2 session → fail loud,被 return_exceptions=True 兜住,记 error log
-                from app.domain.chat.models import Session
+            expert_ctx = await _assemble_expert_context(
+                rr,
+                settings,
+                child_user_id_val,
+                report_date,
+                day_start,
+                day_end,
+            )
+            if expert_ctx is None:
+                return  # 装配阶段决定跳过(无 today session 或无 profile)
 
-                sid_stmt = select(Session.id).where(Session.child_user_id == child_user_id_val)
-                sid_rows = (await child_db.execute(sid_stmt)).scalars().all()
-                owned_sids = frozenset(sid_rows)
+            # 构造 ExpertGraphState
+            state: ExpertGraphState = {
+                "messages": [],
+                "output_attempts": 0,
+                "total_output_tokens": 0,
+                "structured_output": None,
+                "_budget_forced": False,
+            }
 
-                today_sessions = (
-                    (
-                        await child_db.execute(
-                            select(Session).where(
-                                Session.child_user_id == child_user_id_val,
-                                Session.created_at >= day_start,
-                                Session.created_at < day_end,
-                            )
-                        )
-                    )
-                    .scalars()
-                    .all()
-                )
-                if not today_sessions:
-                    logger.info(
-                        "expert.skip_no_today_session child=%s date=%s",
-                        child_user_id_val,
-                        report_date,
-                    )
-                    return
-                if len(today_sessions) >= 2:
-                    raise RuntimeError(
-                        f"child {child_user_id_val} has {len(today_sessions)} sessions "
-                        f"on {report_date}, 1:1 invariant violated",
-                    )
-                today_session_id: uuid.UUID = today_sessions[0].id
-
-                # b. ChildProfile -> ChildProfileSnapshot
-                from app.domain.accounts.models import ChildProfile
-
-                child_profile: ChildProfile | None = (
-                    (
-                        await child_db.execute(
-                            select(ChildProfile).where(
-                                ChildProfile.child_user_id == child_user_id_val
-                            )
-                        )
-                    )
-                    .scalars()
-                    .first()
-                )
-                if child_profile is None:
-                    logger.error(
-                        "expert.child_no_profile child=%s",
-                        child_user_id_val,
-                    )
-                    return
-
-                snapshot = ChildProfileSnapshot.from_profile(child_profile)
-
-                # c. crisis_detected_today
-                crisis_detected = await _check_crisis_today(
-                    child_db,
-                    today_session_id,
-                )
-
-                # d. dimension_summary（不喂 LLM，仅写 DB）
-                dimension_summary = await _aggregate_dimensions(
-                    child_db,
-                    today_session_id,
-                )
-
-                # 构造 ExpertContextSchema
-                expert_ctx = ExpertContextSchema(
-                    child_user_id=child_user_id_val,
-                    owned_session_ids=owned_sids,
-                    session_id=today_session_id,
-                    report_date=report_date,
-                    day_start=day_start,
-                    day_end=day_end,
-                    dimension_summary=dimension_summary,
-                    crisis_detected_today=crisis_detected,
-                    max_output_attempts=3,
-                    token_budget=settings.expert_token_budget,
-                    child_profile=snapshot,
-                    settings=settings,
-                    db_session_factory=rr.db_session_factory,
-                    shared_http_client=rr.shared_http_client,
-                )
-
-                # 构造 ExpertGraphState
-                state: ExpertGraphState = {
-                    "messages": [],
-                    "output_attempts": 0,
-                    "total_output_tokens": 0,
-                    "structured_output": None,
-                    "_budget_forced": False,
-                }
-
-                # ainvoke 专家图
-                await rr.expert_graph.ainvoke(
-                    state,
-                    context=expert_ctx,  # type: ignore[reportArgumentType]
-                    config={
-                        "run_name": "daily_report",
-                        "metadata": {
-                            "child_id": str(child_user_id_val),
-                            "report_date": str(report_date),
-                        },
-                        "tags": ["expert", "daily_report"],
+            # ainvoke 专家图
+            await rr.expert_graph.ainvoke(
+                state,
+                context=expert_ctx,  # type: ignore[reportArgumentType]
+                config={
+                    "run_name": "daily_report",
+                    "metadata": {
+                        "child_id": str(child_user_id_val),
+                        "report_date": str(report_date),
                     },
-                )
+                    "tags": ["expert", "daily_report"],
+                },
+            )
 
     results = await asyncio.gather(
         *[_report_for_child(cid) for cid in child_ids],
