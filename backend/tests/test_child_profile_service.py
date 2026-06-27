@@ -71,14 +71,7 @@ async def child_with_profile(db_session: AsyncSession, parent_in_family):
         gender=Gender.male,
         nickname="orig_nick",
         concerns="orig concerns",
-        sensitivity={
-            "emotional": 5,
-            "social": 5,
-            "values": 5,
-            "boundaries": 5,
-            "academic": 5,
-            "lifestyle": 5,
-        },
+        sensitivity=SensitivityConfig(),
         custom_redlines="orig redline",
     )
     db_session.add(profile)
@@ -153,14 +146,9 @@ class TestPutChildProfile:
         assert refreshed.nickname == "new_nick"
         assert refreshed.birth_date == date(2014, 6, 15)
         assert refreshed.gender == Gender.female
-        assert refreshed.sensitivity == {
-            "emotional": 9,
-            "social": 2,
-            "values": 7,
-            "boundaries": 8,
-            "academic": 1,
-            "lifestyle": 4,
-        }
+        assert refreshed.sensitivity == SensitivityConfig(
+            emotional=9, social=2, values=7, boundaries=8, academic=1, lifestyle=4
+        )
         assert refreshed.concerns == "new concerns"
         assert refreshed.custom_redlines == "new redline"
 

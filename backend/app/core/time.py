@@ -31,6 +31,27 @@ def now_shanghai() -> datetime:
     return datetime.now(SHANGHAI)
 
 
+def same_natural_day(a: datetime, b: datetime) -> bool:
+    """两个带时区的时间戳是否落在同一自然日(Asia/Shanghai)。
+
+    与 `logical_day(ts, boundary_hour=0)` 等价,但更便于 R1 判定
+    ("now 与 last_create_at 是否同日")。两侧任一为 naive → raise。
+
+    Args:
+        a: 带时区的时间戳。
+        b: 带时区的时间戳。
+
+    Returns:
+        True 表示两个时间戳的 Shanghai 自然日相同。
+
+    Raises:
+        ValueError: 任一参数不带时区信息。
+    """
+    if a.tzinfo is None or b.tzinfo is None:
+        raise ValueError("a and b must be timezone-aware")
+    return a.astimezone(SHANGHAI).date() == b.astimezone(SHANGHAI).date()
+
+
 def logical_day(ts: datetime, boundary_hour: int = 0) -> date:
     """将带时区时间戳映射到逻辑日。
 

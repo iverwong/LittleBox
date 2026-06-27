@@ -19,6 +19,8 @@ from typing import Any
 from sqlalchemy import any_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.audit.schemas import TurnSummaryEntry
+
 # ---------------------------------------------------------------------------
 # 返回格式
 # ---------------------------------------------------------------------------
@@ -219,16 +221,14 @@ async def search_turn_summaries(
     results: list[dict[str, Any]] = []
     for row in rows:
         sid = str(row.session_id)
-        summaries = row.turn_summaries or []
+        summaries: list[TurnSummaryEntry] = row.turn_summaries or []
         for entry in summaries:
-            if not isinstance(entry, dict):
-                continue
-            summary: str = entry.get("summary") or ""
+            summary = entry.summary
             if not summary:
                 continue
             if not _match_matched(summary, keywords):
                 continue
-            turn_num = entry.get("turn", entry.get("turn_number", ""))
+            turn_num = entry.turn_number
             ref = f"turn:{sid}#{turn_num}"
             results.append(
                 _make_result(
@@ -532,8 +532,8 @@ async def fetch_turn(
     summaries = ts_row.turn_summaries
     if summaries:
         for entry in summaries:
-            if isinstance(entry, dict) and entry.get("turn") == turn_number:
-                turn_summary = entry.get("summary")
+            if entry.turn_number == turn_number:
+                turn_summary = entry.summary
                 break
 
     # 2. 获取 crisis 标记

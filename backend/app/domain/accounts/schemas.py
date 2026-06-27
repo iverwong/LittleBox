@@ -12,9 +12,9 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.core.enums import Gender, UserRole
+from app.core.enums import DevicePlatform, Gender, UserRole
 from app.core.time import age_at
 
 if TYPE_CHECKING:
@@ -136,12 +136,14 @@ class SensitivityConfig(BaseModel):
         lifestyle: 生活方式。
     """
 
-    emotional: int = Field(5, ge=1, le=9, description="情绪与心理")
-    social: int = Field(5, ge=1, le=9, description="人际与社交")
-    values: int = Field(5, ge=1, le=9, description="价值观与世界观")
-    boundaries: int = Field(5, ge=1, le=9, description="AI 应用边界")
-    academic: int = Field(5, ge=1, le=9, description="学习独立性")
-    lifestyle: int = Field(5, ge=1, le=9, description="生活方式")
+    model_config = ConfigDict(frozen=True)
+
+    emotional: int = Field(default=5, ge=1, le=9, description="情绪与心理")
+    social: int = Field(default=5, ge=1, le=9, description="人际与社交")
+    values: int = Field(default=5, ge=1, le=9, description="价值观与世界观")
+    boundaries: int = Field(default=5, ge=1, le=9, description="AI 应用边界")
+    academic: int = Field(default=5, ge=1, le=9, description="学习独立性")
+    lifestyle: int = Field(default=5, ge=1, le=9, description="生活方式")
 
 
 class PutChildProfileRequest(BaseModel):
@@ -241,7 +243,7 @@ class ChildProfileSnapshot:
     gender: str
     birth_date: date
     age: int
-    sensitivity: Optional[dict]
+    sensitivity: Optional[SensitivityConfig]
     custom_redlines: Optional[str]
     concerns: Optional[str]
 
@@ -269,3 +271,21 @@ class ChildProfileSnapshot:
             custom_redlines=profile.custom_redlines,
             concerns=profile.concerns,
         )
+
+
+class DeviceInfo(BaseModel):
+    """设备审计信息 `{ua, ip, platform}`,登录时写入 `auth_tokens.device_info`。
+
+    `frozen=True` 防止原地修改绕过 SQLAlchemy 脏检测。
+
+    Attributes:
+        ua: User-Agent 字符串。
+        ip: 来源 IP 字符串。
+        platform: 设备平台,见 `app.core.enums.DevicePlatform`。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    ua: str
+    ip: str
+    platform: DevicePlatform

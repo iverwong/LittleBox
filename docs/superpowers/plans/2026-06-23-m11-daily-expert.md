@@ -194,7 +194,7 @@ ON CONFLICT (child_user_id, report_date) DO UPDATE SET
 - 修改：`backend/app/core/runtime.py` — `RuntimeResources` 增 `expert_graph`，`build_runtime` 惰性编译
 
 **`worker.py` — `run_daily_reports(ctx)`**：
-1. `report_date = logical_day(now, boundary_hour=4) - 1day`
+1. `report_date, day_start, day_end = _compute_window()`(锚定自然日,与 chat 域 R1 对齐)
 2. 查活跃孩子（JOIN ChildProfile）
 3. 每个孩子：查 `owned_session_ids` + ChildProfileSnapshot + `_check_crisis_today` + `_aggregate_dimensions` + `_get_recent_reports`
 4. 构造 `ExpertContextSchema` + `ExpertGraphState`

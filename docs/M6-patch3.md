@@ -69,7 +69,7 @@
 | A | 列表空 session 字段 | **撤回 messageCount**。改为 `list_sessions` 响应顶层 `today_session_id: UUID | null`  • `sessions` 数组过滤今日。前端 WelcomeShell 触发 = `today_session_id == null` |
 | B | `dev_chat` / `stream_chat` 残留 | **收回 patch3**。Step 1 一次清理（不再移交 M7） |
 | C | `sse.py` `except A, B, C:` 语法 | 忽略（Python 3.14 PEP 758 支持） |
-| D | session 日切策略 | 规则 1（硬切）：`logical_day(last) != logical_day(now)` → 切，`logical_day(ts) = (ts - 4h).date()`，时区 Asia/Shanghai。规则 2（凌晨空闲）：`now.hour ∈ [1,4)` 且 `now - last > 30min` → 切。常量：`SESSION_HARD_BOUNDARY_HOUR=4` / `SESSION_IDLE_WINDOW=(1,4)` / `SESSION_IDLE_THRESHOLD_MINUTES=30` |
+| D | session 日切策略 | **自然日为单位 + 跨日 30min 宽限 + 04:00 硬切**。规则 R1：同自然日(`last_create_at` vs `now`)→ 不切。规则 R2：跨自然日 + `now - last_active_at > 30min` → 切。规则 R3'：跨自然日 + gap ≤ 30min + `now.hour < 04:00` → 不切。常量：`SESSION_DAY_BOUNDARY_HOUR=0` / `SESSION_CROSS_DAY_GRACE_MINUTES=30` / `SESSION_CROSS_DAY_HARD_CUT_HOUR=4` **product-visible 变更**:02:00 标题由"昨日"变为"当日"(与新 session 归属一致) |
 | E | 单 session 写入约束 | 仅当日 session 可写。`ChatStreamRequest.session_id` 仅作 hint，后端按 D 强制重判；SSE `session_meta.session_id` 始终为生效 sid，前端不一致时切换 `activeSessionId`。取消跨 session 上下文继承 |
 | F | `last_active_at` 写入 | 必须 `= user_msg.created_at`（不是 `now()`），commit① 同事务内同步 |
 | G | 新 session 标题格式 | `周一 · 5月11日`（中文星期 + 中文月日）；用 `["周一",...,"周日"]` 数组取星期文本，不依赖 Python `locale`（生产环境 locale 不可靠） |

@@ -148,8 +148,8 @@ async def list_sessions(
 
     支持 keyset 分页(``cursor`` + ``limit``),响应顶层附
     ``today_session_id``。``today_session_id`` 计算与 ``/me/chat/stream``
-    入口保持一致:用 ``should_switch_session`` 同时覆盖逻辑日切换与凌晨
-    空闲切换两种切日规则,确保 list 暴露的 ``today_session_id`` 与
+    入口保持一致:用 ``should_switch_session`` 同时覆盖自然日 R1 与跨日
+    R2/R3 三种切日规则,确保 list 暴露的 ``today_session_id`` 与
     chat/stream 实际新建的 session 不会冲突(否则客户端跳到旧 session
     反而触发新建)。
 
@@ -183,11 +183,13 @@ async def list_sessions(
             .limit(1)
         )
     ).scalar_one_or_none()
-    # 与 chat/stream 入口保持一致:hard cut + 凌晨空闲 30min 软切(should_switch_session)。
-    # 仅靠逻辑日相等判定会漏掉凌晨空闲场景,导致 list 暴露的 today_session_id
-    # 与 chat/stream 实际新建的 session 不一致(客户端跳到旧 session 反而触发新建)。
+    # 与 chat/stream 入口保持一致:自然日 R1 不切 + 跨日 R2/R3 切(should_switch_session)。
+    # R1 按 create_at 锚定自然日,R2/R3 按 last_active_at 判 gap 与 04:00 硬切,
+    # 详情见 app.domain.chat.session_policy 模块 docstring。
     today_sid = (
-        latest.id if latest and not should_switch_session(latest.last_active_at, now) else None
+        latest.id
+        if latest and not should_switch_session(latest.last_active_at, latest.created_at, now)
+        else None
     )
 
     stmt = (
@@ -427,7 +429,7 @@ async def chat_stream(
 
     1. ``acquire_throttle_lock``:1.5s 节流,失败 ``429``
     2. 进入短作用域 DB 块:
-       - 取最新 active session,按 ``should_switch_session`` 决定复用 / 新建
+       - 取最新 active session,按 ``should_switch_session``(自然日 R1 + 跨日 R2/R3)决定复用 / 新建
        - ``acquire_session_lock``:失败 ``409 SessionBusy``
        - 复用场景校验 session 归属
        - 读 ``ChildProfile`` 并构造 ``ChildProfileSnapshot``
@@ -493,7 +495,11 @@ async def chat_stream(
             session: SessionModel
             is_new_session: bool
 
-            if should_switch_session(latest.last_active_at if latest else None, now):
+            if should_switch_session(
+                latest.last_active_at if latest else None,
+                latest.created_at if latest else None,
+                now,
+            ):
                 sid = uuid4()
                 session = SessionModel(
                     id=sid,

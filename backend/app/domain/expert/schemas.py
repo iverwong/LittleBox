@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.enums import DailyStatus
 
@@ -153,3 +153,24 @@ class ExpertReportSchema(BaseModel):
         min_length=1,
         description="6. 异常时段标注:异常时段与具体表现",
     )
+
+
+class DailyDimensionSummary(BaseModel):
+    """6 维度当日聚合 peak / mean / high_ratio。
+
+    代码层从 `audit_records.dimension_scores` 聚合,供 UI 雷达图与跨日对比使用。
+    写入路径见 `app.domain.expert.worker._aggregate_dimensions`。
+
+    `frozen=True` 防止原地修改绕过 SQLAlchemy 脏检测。
+
+    Attributes:
+        peak: 6 维度当日最高分(0-9)。
+        mean: 6 维度当日平均分(0-9)。
+        high_ratio: 6 维度中进入高分(≥4)轮次占比(0-1)。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    peak: float = Field(ge=0, le=9)
+    mean: float = Field(ge=0, le=9)
+    high_ratio: float = Field(ge=0, le=1)

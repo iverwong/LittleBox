@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.domain.accounts.schemas import ChildProfileSnapshot
 
 if TYPE_CHECKING:
-    from datetime import date, datetime
+    from datetime import date
 
     import httpx
 
@@ -31,18 +31,12 @@ class ExpertContextSchema:
         child_user_id: 被分析的青少年用户 ID。
         owned_session_ids: 该孩子所有 session ID 白名单(建图前一次性查出),
             用于工具 handler 内存校验。
-        session_id: 当日 chat session,expert 锚定目标,worker 层按 day_start/day_end
-            过滤 owned_session_ids 唯一取一条。
-        report_date: 刚结束的逻辑日(logical_day(now, boundary_hour=4) - 1day)。
-        day_start: 逻辑日窗口起始时间(tz-aware,带时区)。
-            worker 层一次性算好,load_context 直接取用,避免与 worker 重复计算。
-        day_end: 逻辑日窗口结束时间(tz-aware,带时区)。
+        session_id: 当日 chat session,expert 锚定目标;worker 层按自然日窗口
+            过滤 `Session.created_at` 唯一取一条,确保 1:1 invariant。
+        report_date: 刚结束的自然日((now_shanghai() - 1day).date())。
         dimension_summary: 代码预聚合的 6 维 peak/mean/high_ratio,
             不喂 LLM,write_results 节点直接写入 DB。
-        recent_reports_overview: 近 N 天历史报告摘要列表,每项含
-            {report_date, overall_status, today_overview},建图前查询,
-            load_context 嵌入 prompt。
-        crisis_detected_today: 当日逻辑窗口内是否有任一 crisis_detected=True,
+        crisis_detected_today: 当日 session 内是否有任一 crisis_detected=True,
             用于 overall_status 地板判定。
         max_output_attempts: ExpertReportSchema 调用上限,默认 3。
         token_budget: 资料收集 token 预算,默认 100_000;累计 LLM 输出 token
@@ -60,10 +54,7 @@ class ExpertContextSchema:
     session_id: uuid.UUID  # 当日 chat session,expert 锚定目标
     # 业务字段
     report_date: date  # 刚结束的逻辑日
-    day_start: datetime  # 逻辑日窗口起始(tz-aware)
-    day_end: datetime  # 逻辑日窗口结束(tz-aware)
     dimension_summary: dict  # 代码预聚合的 6 维聚合(不喂 LLM)
-    recent_reports_overview: list[dict]  # 近 N 天历史报告摘要
     crisis_detected_today: bool  # 当日是否有 crisis 标记
     max_output_attempts: int  # ExpertReportSchema 调用上限
     token_budget: int  # 资料收集 token 预算

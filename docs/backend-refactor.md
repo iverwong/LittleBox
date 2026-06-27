@@ -533,6 +533,16 @@ docker compose exec api alembic check
 
 ---
 
+## 后续重构条目
+
+- **Natural-Day Session 切日重构**(`refactor/expert-first-human-message-restructuring` 分支):
+  - `app/chat/session_policy.py` 改为自然日 + 跨日 30min 宽限 + 04:00 硬切(R1 / R2 / R3')。
+  - `app/api/me.py` 两处 `should_switch_session` 调用点传入 `latest.created_at`。
+  - `app/core/time.py` 新增 `same_natural_day` 纯函数。
+  - `app/expert/worker.py` 抽 `_compute_window(now)`,锚定自然日 `[T-1 00:00, T0 00:00)`,消除 chat↔expert 切日错位。
+
+---
+
 ## 验收门槛
 
 - **必达**:6 个 PR 全部 merge 回 `refactor/backend-audit-phase-1`(暂不回 main),`pytest` 全绿,5 path 路由 + commit① 7 行 + 集成测试 + 端到端冒烟 全部通过

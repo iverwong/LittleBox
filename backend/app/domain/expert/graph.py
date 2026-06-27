@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
+from datetime import date
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -26,11 +28,19 @@ from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import ValidationError
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from typing_extensions import TypedDict
 
 from app.core.enums import DailyStatus
 from app.domain.expert.llm import build_expert_llm
-from app.domain.expert.prompts import build_expert_system_prompt
+from app.domain.expert.prompts import (
+    CrisisMarkerItem,
+    RecentReportOverviewItem,
+    TodayRollingSummaryItem,
+    TurnSummaryItem,
+    build_expert_first_human_message,
+    build_expert_system_prompt,
+)
 from app.domain.expert.schemas import ExpertReportSchema
 from app.domain.expert.tools import EXPERT_TOOL_HANDLERS
 from app.domain.expert.usecase import write_expert_results
@@ -118,6 +128,108 @@ def _build_degraded_output(crisis_detected_today: bool = False) -> ExpertReportS
     )
 
 
+async def _fetch_recent_reports(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    child_user_id: uuid.UUID,
+    exclude_date: date,
+    limit: int = 5,
+) -> list[RecentReportOverviewItem]:
+    """查近 limit 条历史报告概要(原 worker._get_recent_reports,移入 graph.py)。
+
+    Args:
+        db_session_factory: DB 会话工厂。
+        child_user_id: 孩子用户 ID。
+        exclude_date: 报告日期(不包含)。
+        limit: 返回上限,默认 5。
+
+    Returns:
+        list[dict],每项含 report_date / overall_status / today_overview。
+        无数据时返回空 list。
+    """
+    from app.domain.expert.models import DailyReport
+
+    async with db_session_factory() as db:
+        stmt = (
+            select(
+                DailyReport.report_date,
+                DailyReport.overall_status,
+                DailyReport.today_overview,
+            )
+            .where(
+                DailyReport.child_user_id == child_user_id,
+                DailyReport.report_date < exclude_date,
+            )
+            .order_by(DailyReport.report_date.desc())
+            .limit(limit)
+        )
+        rows = (await db.execute(stmt)).all()
+    return [
+        {
+            "report_date": r.report_date,
+            "overall_status": r.overall_status,
+            "today_overview": r.today_overview,
+        }
+        for r in rows
+    ]
+
+
+async def _fetch_today_materials(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    session_id: uuid.UUID,
+) -> tuple[TodayRollingSummaryItem | None, CrisisMarkerItem | None]:
+    """查今日对话材料:today_summary + crisis 标记。
+
+    Args:
+        db_session_factory: DB 会话工厂。
+        session_id: 今日 chat session ID。
+
+    Returns:
+        (today_summary, crisis_marker) 元组。无数据时两个 list 都为空。
+    """
+    from app.domain.audit.models import AuditRecord, RollingSummary
+
+    async with db_session_factory() as db:
+        rs_row = (
+            await db.execute(
+                select(RollingSummary).where(
+                    RollingSummary.session_id == session_id,
+                )
+            )
+        ).scalar_one_or_none()
+        ar_row = (
+            await db.execute(
+                select(AuditRecord)
+                .where(AuditRecord.session_id == session_id, AuditRecord.crisis_detected.is_(True))
+                .order_by(AuditRecord.created_at)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+    crisis_marker: CrisisMarkerItem | None = None
+    today_summary: TodayRollingSummaryItem | None = None
+
+    if rs_row:
+        today_summary = TodayRollingSummaryItem(
+            session_id=str(rs_row.session_id),
+            turn_summaries=[
+                TurnSummaryItem(
+                    turn_number=entry.turn_number, summary=entry.summary, time=entry.created_at
+                )
+                for entry in (rs_row.turn_summaries or [])
+            ],
+            session_notes=rs_row.session_notes or "",
+        )
+
+    if ar_row:
+        crisis_marker = CrisisMarkerItem(
+            session_id=str(ar_row.session_id),
+            turn_number=ar_row.turn_number,
+            crisis_topic=ar_row.crisis_topic or "",
+        )
+
+    return today_summary, crisis_marker
+
+
 # ---------------------------------------------------------------------------
 # Node: load_context
 # ---------------------------------------------------------------------------
@@ -127,108 +239,42 @@ async def load_context(
     state: ExpertGraphState,
     runtime: Runtime[ExpertContextSchema],
 ) -> dict:
-    """从 PG 读今日对话材料 + 历史报告概览 → 构造首帧 messages。
+    """构造首帧 messages: system prompt + 含材料的 HumanMessage。
 
-    1. 从 context 取 recent_reports_overview
-    2. 查今日时间线:遍历该孩子的所有 sessions → rolling_summaries.turn_summaries
-       + crisis 标记 + session_notes
-    3. 用 4 点逻辑日窗口(boundary_hour=4)过滤今日范围内的 audit 条目
-    4. 构造首帧 [SystemMessage(prompt), HumanMessage(材料)]
+    锚定 `ctx.session_id`(由 worker 强制 1:1 invariant,本节点无需再校验),
+    通过 `_fetch_today_materials` 取单条 today_summary + crisis_marker。
 
     Args:
         state: 当前图状态(空,首次运行)。
         runtime: LangGraph Runtime,context 即 ExpertContextSchema。
 
     Returns:
-        含 messages(首帧 + SystemMessage + HumanMessage)与其余状态字段的 dict。
+        含 messages(首帧 system + human)与其余状态字段的 dict。
     """
     ctx = runtime.context
-    report_date = ctx.report_date
-    owned_sids = list(ctx.owned_session_ids)
-    day_start = ctx.day_start
-    day_end = ctx.day_end
 
-    # 组装 HumanMessage 内容
-    parts: list[str] = [f"报告日期: {report_date.isoformat()}", ""]
+    # 1. 抓数据(helper 内起短 DB session)
+    recent_reports = await _fetch_recent_reports(
+        ctx.db_session_factory,
+        ctx.child_user_id,
+        ctx.report_date,
+    )
+    today_summary, crisis_marker = await _fetch_today_materials(
+        ctx.db_session_factory,
+        ctx.session_id,
+    )
 
-    # --- 历史报告概览 ---
-    if ctx.recent_reports_overview:
-        parts.append("## 近期历史报告概览")
-        for overview in ctx.recent_reports_overview:
-            rd = overview.get("report_date", "")
-            st = overview.get("overall_status", "")
-            ov = overview.get("today_overview", "")
-            parts.append(f"- {rd} [{st}]: {ov}")
-        parts.append("")
-
-    # --- 今日对话材料 ---
-    if owned_sids:
-        async with ctx.db_session_factory() as db:
-            from app.domain.audit.models import AuditRecord, RollingSummary
-
-            # Rolling summaries: session_notes + turn_summaries
-            rs_rows = (
-                (
-                    await db.execute(
-                        select(RollingSummary).where(RollingSummary.session_id.in_(owned_sids))
-                    )
-                )
-                .scalars()
-                .all()
-            )
-
-            # Today's audit records: crisis markers + dimension scores
-            ar_rows = (
-                (
-                    await db.execute(
-                        select(AuditRecord)
-                        .where(
-                            AuditRecord.session_id.in_(owned_sids),
-                            AuditRecord.created_at >= day_start,
-                            AuditRecord.created_at < day_end,
-                        )
-                        .order_by(AuditRecord.created_at)
-                    )
-                )
-                .scalars()
-                .all()
-            )
-
-        # 时间线
-        parts.append("## 今日对话材料")
-        crisis_markers = [r for r in ar_rows if r.crisis_detected]
-
-        for rs_row in rs_rows:
-            sid = rs_row.session_id
-            session_notes = rs_row.session_notes or ""
-            turn_summaries = rs_row.turn_summaries or []
-
-            if turn_summaries:
-                parts.append(f"### Session: {sid}")
-                for entry in turn_summaries:
-                    turn_num = entry.get("turn", entry.get("turn_number", ""))
-                    summary = entry.get("summary", "")
-                    parts.append(f"- Turn {turn_num}: {summary}")
-                parts.append("")
-
-            if session_notes:
-                parts.append(f"会话笔记 ({sid}):")
-                parts.append(session_notes)
-                parts.append("")
-
-        # 危机标记
-        if crisis_markers:
-            parts.append("## 危机标记")
-            for r in crisis_markers:
-                parts.append(f"- Session {r.session_id}, Turn {r.turn_number}: {r.crisis_topic}")
-            parts.append("")
-
-    # 首帧消息
-    system_prompt = build_expert_system_prompt(ctx.max_output_attempts)
-    human_content = "\n".join(parts)
-
+    # 2. 拼首帧
     return {
-        "messages": [system_prompt, HumanMessage(content=human_content)],
+        "messages": [
+            build_expert_system_prompt(ctx.max_output_attempts),
+            build_expert_first_human_message(
+                report_date=ctx.report_date,
+                recent_reports_overview=recent_reports,
+                today_summary=today_summary,
+                crisis_marker=crisis_marker,
+            ),
+        ],
         "output_attempts": 0,
         "total_output_tokens": 0,
         "structured_output": None,

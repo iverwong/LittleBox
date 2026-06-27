@@ -96,12 +96,14 @@ class TestListSessionsHappy:
             title="Session 1",
             status="active",
             last_active_at=datetime(2025, 1, 2, 12, 0, 0, tzinfo=timezone.utc),
+            created_at=datetime(2025, 1, 2, 12, 0, 0, tzinfo=timezone.utc),
         )
         s2 = SessionModel(
             child_user_id=child_id,
             title="Session 2",
             status="active",
             last_active_at=datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+            created_at=datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
         )
         db_session.add_all([s1, s2])
         await db_session.commit()
@@ -132,9 +134,11 @@ class TestListSessionsHappy:
         )
 
         for i in range(3):
+            past = datetime.now(timezone.utc) - timedelta(days=2, hours=i)
             db_session.add(SessionModel(
                 child_user_id=child_id, title=f"S{i}", status="active",
-                last_active_at=datetime.now(timezone.utc) - timedelta(days=2, hours=i),
+                last_active_at=past,
+                created_at=past,
             ))
         await db_session.commit()
 
@@ -208,12 +212,14 @@ class TestListSessionsKeysetPagination:
 
         # Create 3 sessions with distinct timestamps
         for i in range(3):
+            ts = datetime(2025, 1, i + 1, 12, 0, 0, tzinfo=timezone.utc)
             db_session.add(
                 SessionModel(
                     child_user_id=child_id,
                     title=f"S{i}",
                     status="active",
-                    last_active_at=datetime(2025, 1, i + 1, 12, 0, 0, tzinfo=timezone.utc),
+                    last_active_at=ts,
+                    created_at=ts,
                 )
             )
         await db_session.commit()
@@ -325,9 +331,11 @@ class TestListSessionsCursorValidation:
         child_id, child_token = await _child_with_token_via_api(
             api_client, db_session, seeded_parent, phone="ch23"
         )
+        past = datetime.now(timezone.utc) - timedelta(days=2)
         db_session.add(SessionModel(
             child_user_id=child_id, title="S1", status="active",
-            last_active_at=datetime.now(timezone.utc) - timedelta(days=2),
+            last_active_at=past,
+            created_at=past,
         ))
         await db_session.commit()
 
@@ -361,12 +369,14 @@ class TestListSessionsCursorValidation:
             title="Child1 S1",
             status="active",
             last_active_at=datetime(2025, 1, 2, 12, 0, 0, tzinfo=timezone.utc),
+            created_at=datetime(2025, 1, 2, 12, 0, 0, tzinfo=timezone.utc),
         )
         s2 = SessionModel(
             child_user_id=child2_id,
             title="Child2 S1",
             status="active",
             last_active_at=datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+            created_at=datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
         )
         db_session.add_all([s1, s2])
         await db_session.commit()
@@ -404,13 +414,17 @@ class TestListSessionsStatus:
             api_client, db_session, seeded_parent, phone="ch30"
         )
 
+        active_past = datetime.now(timezone.utc) - timedelta(days=2)
         db_session.add(SessionModel(
             child_user_id=child_id, title="Active", status="active",
-            last_active_at=datetime.now(timezone.utc) - timedelta(days=2),
+            last_active_at=active_past,
+            created_at=active_past,
         ))
+        deleted_past = datetime.now(timezone.utc) - timedelta(days=2)
         db_session.add(SessionModel(
             child_user_id=child_id, title="Deleted", status="deleted",
-            last_active_at=datetime.now(timezone.utc) - timedelta(days=2),
+            last_active_at=deleted_past,
+            created_at=deleted_past,
         ))
         await db_session.commit()
 

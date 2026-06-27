@@ -420,7 +420,7 @@ async def update_child_profile(
     profile.nickname = payload.nickname
     profile.birth_date = payload.birth_date
     profile.gender = payload.gender  # 已是 Gender 枚举,无需 Gender() 包装
-    profile.sensitivity = payload.sensitivity.model_dump()
+    profile.sensitivity = payload.sensitivity
     profile.concerns = payload.concerns
     profile.custom_redlines = payload.custom_redlines
 

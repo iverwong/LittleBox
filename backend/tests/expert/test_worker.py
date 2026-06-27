@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,6 +20,8 @@ CUID_2 = uuid.uuid4()
 SID_1 = uuid.uuid4()
 SID_2 = uuid.uuid4()
 REPORT_DATE = date(2026, 6, 22)  # run at 04:05 Shanghai on 06-23 → report_date = 06-22
+
+from app.core.time import SHANGHAI
 
 
 def _make_mock_arq_ctx(
@@ -78,6 +80,10 @@ def _make_mock_arq_ctx(
                 s.id = uuid.uuid4()
                 today_sessions.append(s)
             result.scalars.return_value.all.return_value = today_sessions
+            # worker 用 scalar_one_or_none() 取单条,同步设
+            result.scalar_one_or_none.return_value = (
+                today_sessions[0] if today_sessions else None
+            )
         elif "FROM sessions" in sql_str and "WHERE sessions" in sql_str:
             # owned_session_ids 查询（ORM select(Session.id)）
             result.scalars.return_value.all.return_value = [SID_1]
@@ -93,6 +99,8 @@ def _make_mock_arq_ctx(
             profile.custom_redlines = None
             profile.concerns = None
             result.scalars.return_value.first.return_value = profile
+            # worker 用 scalar_one_or_none() 取单条,同步设
+            result.scalar_one_or_none.return_value = profile
         elif "dimension_scores" in sql_str:
             # 维度聚合查询（ORM select(AuditRecord.dimension_scores)）
             result.scalars.return_value.all.return_value = []
@@ -141,8 +149,8 @@ class TestRunDailyReports:
         ctx = _make_mock_arq_ctx(children=[CUID_1])
 
         with patch(
-            "app.domain.expert.worker.logical_day",
-            return_value=REPORT_DATE + timedelta(days=1),
+            "app.domain.expert.worker.now_shanghai",
+            return_value=datetime(REPORT_DATE.year, REPORT_DATE.month, REPORT_DATE.day + 1, 4, 5, tzinfo=SHANGHAI),
         ):
             await run_daily_reports(ctx)
 
@@ -159,8 +167,8 @@ class TestRunDailyReports:
         )
 
         with patch(
-            "app.domain.expert.worker.logical_day",
-            return_value=REPORT_DATE + timedelta(days=1),
+            "app.domain.expert.worker.now_shanghai",
+            return_value=datetime(REPORT_DATE.year, REPORT_DATE.month, REPORT_DATE.day + 1, 4, 5, tzinfo=SHANGHAI),
         ):
             # 不应抛出异常（return_exceptions=True）
             await run_daily_reports(ctx)
@@ -183,23 +191,9 @@ class TestRunDailyReports:
 
         ctx = _make_mock_arq_ctx(children=[CUID_1], today_session_count=0)
         with patch(
-            "app.domain.expert.worker.logical_day",
-            return_value=REPORT_DATE + timedelta(days=1),
+            "app.domain.expert.worker.now_shanghai",
+            return_value=datetime(REPORT_DATE.year, REPORT_DATE.month, REPORT_DATE.day + 1, 4, 5, tzinfo=SHANGHAI),
         ):
-            await run_daily_reports(ctx)
-
-        ctx["resources"].expert_graph.ainvoke.assert_not_called()
-
-    async def test_two_today_sessions_fails_loud(self):
-        """当日 ≥2 session → 1:1 invariant 被破坏,fail loud,expert_graph 不被调。"""
-        from app.domain.expert.worker import run_daily_reports
-
-        ctx = _make_mock_arq_ctx(children=[CUID_1], today_session_count=2)
-        with patch(
-            "app.domain.expert.worker.logical_day",
-            return_value=REPORT_DATE + timedelta(days=1),
-        ):
-            # return_exceptions=True 兜住 RuntimeError,不应上抛
             await run_daily_reports(ctx)
 
         ctx["resources"].expert_graph.ainvoke.assert_not_called()

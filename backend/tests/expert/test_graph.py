@@ -26,7 +26,7 @@ from app.domain.expert.graph import (
     route_after_tools,
     write_results,
 )
-from app.domain.expert.schemas import ExpertReportSchema
+from app.domain.expert.schemas import DailyDimensionSummary, ExpertReportSchema
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 # 注意：pytest.mark.asyncio 只在需要 async 的类上单独标注
@@ -110,19 +110,12 @@ def _make_mock_db_cm() -> AsyncMock:
 
 def _make_mock_ctx(**overrides) -> ExpertContextSchema:
     """构造最小 ExpertContextSchema（mock 资源字段）。"""
-    day_start = datetime.combine(REPORT_DATE, datetime.min.time()).replace(
-        tzinfo=SHANGHAI,
-    ) + timedelta(hours=4)
-    day_end = day_start + timedelta(days=1)
     defaults = dict(
         child_user_id=CUID,
         owned_session_ids=frozenset({SID}),
         session_id=SID,
         report_date=REPORT_DATE,
-        day_start=day_start,
-        day_end=day_end,
-        dimension_summary={},
-        recent_reports_overview=[],
+        dimension_summary=DailyDimensionSummary(peak=0.0, mean=0.0, high_ratio=0.0),
         crisis_detected_today=False,
         max_output_attempts=3,
         token_budget=100_000,
@@ -213,19 +206,6 @@ class TestLoadContextNode:
         human = result["messages"][1]
         assert isinstance(human, HumanMessage)
         assert str(REPORT_DATE) in human.content
-
-    async def test_includes_recent_reports_in_human_message(self):
-        recent = [
-            {"report_date": "2026-06-22", "overall_status": "stable", "today_overview": "正常"},
-        ]
-        result = await load_context(
-            _initial_state(),
-            _make_fake_runtime(recent_reports_overview=recent),
-        )
-        human = result["messages"][1]
-        assert isinstance(human, HumanMessage)
-        assert "2026-06-22" in human.content
-        assert "近期历史报告概览" in human.content
 
     async def test_no_owned_sids_skips_db(self):
         """无 owned_sids 时跳过 DB 查询，HumanMessage 不含对话材料头。"""

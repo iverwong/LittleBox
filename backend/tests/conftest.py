@@ -90,7 +90,7 @@ from typing import Any
 from app.core.config import settings
 from app.core.db import get_db
 from app.core.redis import get_redis
-from app.domain.accounts.schemas import ChildProfileSnapshot
+from app.domain.accounts.schemas import ChildProfileSnapshot, SensitivityConfig
 from app.domain.chat.context_schema import ChatContextSchema
 from app.main import create_app
 from fastapi import FastAPI
@@ -529,7 +529,7 @@ def make_child_profile_snapshot(
     gender: str = "male",
     birth_date: date | None = None,
     age: int = 8,
-    sensitivity: dict | None = None,
+    sensitivity: SensitivityConfig | None = None,
     custom_redlines: str | None = None,
     concerns: str | None = None,
 ) -> ChildProfileSnapshot:

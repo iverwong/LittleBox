@@ -113,10 +113,19 @@ def _parse_sse_frames(raw: str) -> list[dict]:
 # ---- Group 3: last_active_at 硬切点 ----
 
 @pytest.mark.asyncio
-async def test_cross_4am_boundary_creates_new_session(
-    api_client_with_eval, auth_headers_child, db_session, app_with_eval,
+async def test_cross_natural_day_boundary_creates_new_session(
+    api_client_with_eval, auth_headers_child, db_session, app_with_eval, monkeypatch
 ):
-    """user_msg.created_at 与 latest.last_active_at 跨 04:00 → 新建 session。（Group 3）"""
+    """跨自然日 → 新建 session。
+
+    新策略 R2:跨自然日 + 大 gap → 切。
+    场景:session create_at=昨日 03:30, last_active=昨日 03:30,
+         now=今日 04:05(gap 24h+) → 切。
+
+    时间注入通过 monkeypatch me.now_shanghai,确保不依赖 wall-clock。
+    """
+    from app.api import me as me_module
+
     headers, child = auth_headers_child
 
     fake_payloads = [{"delta": "[reply]"}, {"finish_reason": "stop"}]
@@ -125,17 +134,20 @@ async def test_cross_4am_boundary_creates_new_session(
         for p in fake_payloads:
             yield p
 
-    # 写入昨日 03:30 的 session（逻辑日 = 前一日）
+    fake_now = datetime(2026, 5, 11, 4, 5, 0, tzinfo=SHANGHAI)
+    monkeypatch.setattr(me_module, "now_shanghai", lambda: fake_now)
+
+    old_create = datetime(2026, 5, 10, 3, 30, tzinfo=SHANGHAI)
     old_sid = uuid.uuid4()
-    yesterday = datetime(2026, 5, 10, 3, 30, tzinfo=SHANGHAI)
     old_session = SessionModel(
         id=old_sid, child_user_id=child.id, title="昨日会话",
-        last_active_at=yesterday,
+        last_active_at=old_create,
+        created_at=old_create,
     )
     db_session.add(old_session)
     old_msg = Message(
         session_id=old_sid, role=MessageRole.human, content="昨日消息",
-        status=MessageStatus.active, created_at=yesterday,
+        status=MessageStatus.active, created_at=old_create,
     )
     db_session.add(old_msg)
     await db_session.commit()
@@ -150,10 +162,9 @@ async def test_cross_4am_boundary_creates_new_session(
     frames = _parse_sse_frames(resp.text)
     new_sid = uuid.UUID(frames[0]["data"]["session_id"])
 
-    # 新 sid ≠ 旧 sid（跨硬切点触发了新建）
-    assert new_sid != old_sid, "硬切点应创建新 session"
+    assert new_sid != old_sid, "跨自然日应创建新 session"
     new_session = await db_session.get(SessionModel, new_sid)
     assert new_session is not None
     assert new_session.child_user_id == child.id
-    # 标题是中文日期格式
+    # 标题是中文日期格式（新策略下是 5月11日 自然日）
     assert "周" in new_session.title and "月" in new_session.title

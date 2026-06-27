@@ -91,7 +91,7 @@ expert_token_budget: int = 100_000
 |------|------|
 | `child_user_id` | 孩子 UUID（DI 注入，不进工具参数） |
 | `owned_session_ids` | `frozenset[uuid.UUID]`，该孩子所有 session ID 白名单（建图前一次性查出） |
-| `report_date` | 刚结束的逻辑日（`logical_day(now, boundary_hour=4) - 1day`） |
+| `report_date` | 刚结束的自然日（`(now_shanghai() - 1day).date()`,与 chat 域 R1 对齐） |
 | `dimension_summary` | `dict` 代码预聚合的 6 维 peak/mean/high_ratio（不喂 LLM，图内 write_results 直写 DB） |
 | `recent_reports_overview` | `list[dict]`，近 N 天历史报告摘要 `[{report_date, overall_status, today_overview}]`（建图前查询，`load_context` 嵌入 prompt） |
 | `crisis_detected_today` | `bool`，当日逻辑窗口内是否有任一 `crisis_detected=True`（worker 层预查，供 `overall_status` 地板判定） |
@@ -248,7 +248,7 @@ ON CONFLICT (child_user_id, report_date) DO UPDATE SET
 ```python
 async def run_daily_reports(ctx, ...) -> None:
     rr = ctx["resources"]
-    report_date = logical_day(datetime.now(UTC), boundary_hour=4) - timedelta(days=1)
+    report_date, day_start, day_end = _compute_window()
 
     # 遍历所有活跃孩子（有 ChildProfile 的才可生成报告）
     async with rr.db_session_factory() as db:
