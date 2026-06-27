@@ -110,17 +110,11 @@ def _make_mock_db_cm() -> AsyncMock:
 
 def _make_mock_ctx(**overrides) -> ExpertContextSchema:
     """构造最小 ExpertContextSchema（mock 资源字段）。"""
-    day_start = datetime.combine(REPORT_DATE, datetime.min.time()).replace(
-        tzinfo=SHANGHAI,
-    ) + timedelta(hours=4)
-    day_end = day_start + timedelta(days=1)
     defaults = dict(
         child_user_id=CUID,
         owned_session_ids=frozenset({SID}),
         session_id=SID,
         report_date=REPORT_DATE,
-        day_start=day_start,
-        day_end=day_end,
         dimension_summary={},
         crisis_detected_today=False,
         max_output_attempts=3,

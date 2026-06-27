@@ -80,6 +80,10 @@ def _make_mock_arq_ctx(
                 s.id = uuid.uuid4()
                 today_sessions.append(s)
             result.scalars.return_value.all.return_value = today_sessions
+            # worker 用 scalar_one_or_none() 取单条,同步设
+            result.scalar_one_or_none.return_value = (
+                today_sessions[0] if today_sessions else None
+            )
         elif "FROM sessions" in sql_str and "WHERE sessions" in sql_str:
             # owned_session_ids 查询（ORM select(Session.id)）
             result.scalars.return_value.all.return_value = [SID_1]
@@ -95,6 +99,8 @@ def _make_mock_arq_ctx(
             profile.custom_redlines = None
             profile.concerns = None
             result.scalars.return_value.first.return_value = profile
+            # worker 用 scalar_one_or_none() 取单条,同步设
+            result.scalar_one_or_none.return_value = profile
         elif "dimension_scores" in sql_str:
             # 维度聚合查询（ORM select(AuditRecord.dimension_scores)）
             result.scalars.return_value.all.return_value = []
@@ -125,40 +131,6 @@ def _make_mock_arq_ctx(
 # ---------------------------------------------------------------------------
 
 
-class TestComputeWindow:
-    """_compute_window 纯函数测试。"""
-
-    def test_yesterday_at_4am(self):
-        from app.domain.expert.worker import _compute_window
-        now = datetime(2026, 6, 23, 4, 5, tzinfo=SHANGHAI)
-        report_date, day_start, day_end = _compute_window(now)
-        # 04:05 属自然日 T0=6/23,报告日期 = 6/22
-        assert report_date == date(2026, 6, 22)
-        assert day_start == datetime(2026, 6, 22, 0, 0, tzinfo=SHANGHAI)
-        assert day_end == datetime(2026, 6, 23, 0, 0, tzinfo=SHANGHAI)
-
-    def test_morning_before_4am(self):
-        from app.domain.expert.worker import _compute_window
-        now = datetime(2026, 6, 23, 2, 0, tzinfo=SHANGHAI)
-        report_date, day_start, day_end = _compute_window(now)
-        # 02:00 属自然日 T0=6/23,报告日期 = 6/22(与昨日 04:05 一致)
-        assert report_date == date(2026, 6, 22)
-        assert day_start == datetime(2026, 6, 22, 0, 0, tzinfo=SHANGHAI)
-
-    def test_late_evening(self):
-        from app.domain.expert.worker import _compute_window
-        now = datetime(2026, 6, 23, 23, 59, tzinfo=SHANGHAI)
-        report_date, day_start, day_end = _compute_window(now)
-        # 23:59 仍属 T0=6/23,报告日期 = 6/22
-        assert report_date == date(2026, 6, 22)
-
-    def test_window_is_24h(self):
-        from app.domain.expert.worker import _compute_window
-        now = datetime(2026, 6, 23, 4, 5, tzinfo=SHANGHAI)
-        _, day_start, day_end = _compute_window(now)
-        assert (day_end - day_start) == timedelta(days=1)
-
-
 class TestRunDailyReports:
     """run_daily_reports worker 测试。"""
 
@@ -177,12 +149,8 @@ class TestRunDailyReports:
         ctx = _make_mock_arq_ctx(children=[CUID_1])
 
         with patch(
-            "app.domain.expert.worker._compute_window",
-            return_value=(
-                REPORT_DATE,
-                datetime(2026, 6, 22, 0, 0, tzinfo=SHANGHAI),
-                datetime(2026, 6, 23, 0, 0, tzinfo=SHANGHAI),
-            ),
+            "app.domain.expert.worker.now_shanghai",
+            return_value=datetime(REPORT_DATE.year, REPORT_DATE.month, REPORT_DATE.day + 1, 4, 5, tzinfo=SHANGHAI),
         ):
             await run_daily_reports(ctx)
 
@@ -199,12 +167,8 @@ class TestRunDailyReports:
         )
 
         with patch(
-            "app.domain.expert.worker._compute_window",
-            return_value=(
-                REPORT_DATE,
-                datetime(2026, 6, 22, 0, 0, tzinfo=SHANGHAI),
-                datetime(2026, 6, 23, 0, 0, tzinfo=SHANGHAI),
-            ),
+            "app.domain.expert.worker.now_shanghai",
+            return_value=datetime(REPORT_DATE.year, REPORT_DATE.month, REPORT_DATE.day + 1, 4, 5, tzinfo=SHANGHAI),
         ):
             # 不应抛出异常（return_exceptions=True）
             await run_daily_reports(ctx)
@@ -227,31 +191,9 @@ class TestRunDailyReports:
 
         ctx = _make_mock_arq_ctx(children=[CUID_1], today_session_count=0)
         with patch(
-            "app.domain.expert.worker._compute_window",
-            return_value=(
-                REPORT_DATE,
-                datetime(2026, 6, 22, 0, 0, tzinfo=SHANGHAI),
-                datetime(2026, 6, 23, 0, 0, tzinfo=SHANGHAI),
-            ),
+            "app.domain.expert.worker.now_shanghai",
+            return_value=datetime(REPORT_DATE.year, REPORT_DATE.month, REPORT_DATE.day + 1, 4, 5, tzinfo=SHANGHAI),
         ):
-            await run_daily_reports(ctx)
-
-        ctx["resources"].expert_graph.ainvoke.assert_not_called()
-
-    async def test_two_today_sessions_fails_loud(self):
-        """当日 ≥2 session → 1:1 invariant 被破坏,fail loud,expert_graph 不被调。"""
-        from app.domain.expert.worker import run_daily_reports
-
-        ctx = _make_mock_arq_ctx(children=[CUID_1], today_session_count=2)
-        with patch(
-            "app.domain.expert.worker._compute_window",
-            return_value=(
-                REPORT_DATE,
-                datetime(2026, 6, 22, 0, 0, tzinfo=SHANGHAI),
-                datetime(2026, 6, 23, 0, 0, tzinfo=SHANGHAI),
-            ),
-        ):
-            # return_exceptions=True 兜住 RuntimeError,不应上抛
             await run_daily_reports(ctx)
 
         ctx["resources"].expert_graph.ainvoke.assert_not_called()

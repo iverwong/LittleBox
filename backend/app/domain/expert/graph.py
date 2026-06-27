@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import date, datetime
+from datetime import date
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -174,88 +174,61 @@ async def _fetch_recent_reports(
 
 async def _fetch_today_materials(
     db_session_factory: async_sessionmaker[AsyncSession],
-    owned_session_ids: frozenset[uuid.UUID],
-    day_start: datetime,
-    day_end: datetime,
-) -> tuple[list[_TodayRollingSummaryItem], list[_CrisisMarkerItem]]:
-    """查今日对话材料:rolling_summaries + crisis 标记。
-
-    前置条件:owned_session_ids 非空(由 load_context 守门,本 helper 不再二次检查)。
+    session_id: uuid.UUID,
+) -> tuple[_TodayRollingSummaryItem | None, _CrisisMarkerItem | None]:
+    """查今日对话材料:today_summary + crisis 标记。
 
     Args:
         db_session_factory: DB 会话工厂。
-        owned_session_ids: 该孩子所有 session ID 白名单,调用方保证非空。
-        day_start: 逻辑日窗口起始(tz-aware)。
-        day_end: 逻辑日窗口结束(tz-aware)。
+        session_id: 今日 chat session ID。
 
     Returns:
-        (today_summaries, crisis_markers) 元组。无数据时两个 list 都为空。
+        (today_summary, crisis_marker) 元组。无数据时两个 list 都为空。
     """
     from app.domain.audit.models import AuditRecord, RollingSummary
 
     async with db_session_factory() as db:
-        rs_rows = (
-            (
-                await db.execute(
-                    select(RollingSummary).where(
-                        RollingSummary.session_id.in_(owned_session_ids),
-                    )
+        rs_row = (
+            await db.execute(
+                select(RollingSummary).where(
+                    RollingSummary.session_id == session_id,
                 )
             )
-            .scalars()
-            .all()
-        )
-        ar_rows = (
-            (
-                await db.execute(
-                    select(AuditRecord)
-                    .where(
-                        AuditRecord.session_id.in_(owned_session_ids),
-                        AuditRecord.created_at >= day_start,
-                        AuditRecord.created_at < day_end,
-                    )
-                    .order_by(AuditRecord.created_at)
-                )
+        ).scalar_one_or_none()
+        ar_row = (
+            await db.execute(
+                select(AuditRecord)
+                .where(AuditRecord.session_id == session_id, AuditRecord.crisis_detected.is_(True))
+                .order_by(AuditRecord.created_at)
+                .limit(1)
             )
-            .scalars()
-            .all()
-        )
+        ).scalar_one_or_none()
 
-    today_summaries: list[_TodayRollingSummaryItem] = [
-        {
-            "session_id": str(rsid.session_id),
-            "turn_summaries": [
+    crisis_marker: _CrisisMarkerItem | None = None
+    today_summary: _TodayRollingSummaryItem | None = None
+
+    if rs_row:
+        today_summary = _TodayRollingSummaryItem(
+            session_id=str(rs_row.session_id),
+            turn_summaries=[
                 {
-                    "turn_number": int(entry["turn_number"]),
-                    "summary": entry.get("summary", ""),
+                    "turn_number": entry["turn_number"],
+                    "summary": entry["summary"],
+                    "time": entry["time"],
                 }
-                for entry in (rsid.turn_summaries or [])
+                for entry in (rs_row.turn_summaries or [])
             ],
-            "session_notes": rsid.session_notes or "",
-        }
-        for rsid in rs_rows
-    ]
-
-    crisis_markers: list[_CrisisMarkerItem] = []
-    for ar in ar_rows:
-        if not ar.crisis_detected:
-            continue
-        # 数据契约:crisis_detected=True 时 crisis_topic 必填(audit schemas validator 守)。
-        # 兜底:若 DB 出现历史脏数据 / 绕过 validator 的直写,记 warning 不静默丢失。
-        if not ar.crisis_topic:
-            logger.warning(
-                "expert.crisis_marker_missing_topic session=%s turn=%s",
-                ar.session_id,
-                ar.turn_number,
-            )
-        crisis_markers.append(
-            {
-                "session_id": str(ar.session_id),
-                "turn_number": ar.turn_number,
-                "crisis_topic": ar.crisis_topic or "",
-            }
+            session_notes=rs_row.session_notes or "",
         )
-    return today_summaries, crisis_markers
+
+    if ar_row:
+        crisis_marker = _CrisisMarkerItem(
+            session_id=str(ar_row.session_id),
+            turn_number=ar_row.turn_number,
+            crisis_topic=ar_row.crisis_topic or "",
+        )
+
+    return today_summary, crisis_marker
 
 
 # ---------------------------------------------------------------------------
@@ -269,10 +242,8 @@ async def load_context(
 ) -> dict:
     """构造首帧 messages: system prompt + 含材料的 HumanMessage。
 
-    Invariant:本节点被调用时 ctx.owned_session_ids 必非空
-    (worker._report_for_child 在 today_sessions 为空时已早退,
-    而 owned_session_ids 包含今日 session)。一旦发现空,记 error
-    日志并短路,不开 DB session、不调 _fetch_today_materials。
+    锚定 `ctx.session_id`(由 worker 强制 1:1 invariant,本节点无需再校验),
+    通过 `_fetch_today_materials` 取单条 today_summary + crisis_marker。
 
     Args:
         state: 当前图状态(空,首次运行)。
@@ -289,23 +260,10 @@ async def load_context(
         ctx.child_user_id,
         ctx.report_date,
     )
-
-    if not ctx.owned_session_ids:
-        # 生产路径不应触发,留 error 日志便于追源
-        logger.error(
-            "expert.load_context.empty_owned_sessions child=%s report_date=%s",
-            ctx.child_user_id,
-            ctx.report_date,
-        )
-        today_summaries: list[_TodayRollingSummaryItem] = []
-        crisis_markers: list[_CrisisMarkerItem] = []
-    else:
-        today_summaries, crisis_markers = await _fetch_today_materials(
-            ctx.db_session_factory,
-            ctx.owned_session_ids,
-            ctx.day_start,
-            ctx.day_end,
-        )
+    today_summary, crisis_marker = await _fetch_today_materials(
+        ctx.db_session_factory,
+        ctx.session_id,
+    )
 
     # 2. 拼首帧
     return {
@@ -314,8 +272,8 @@ async def load_context(
             build_expert_first_human_message(
                 report_date=ctx.report_date,
                 recent_reports_overview=recent_reports,
-                today_rolling_summaries=today_summaries,
-                crisis_markers=crisis_markers,
+                today_summary=today_summary,
+                crisis_marker=crisis_marker,
             ),
         ],
         "output_attempts": 0,

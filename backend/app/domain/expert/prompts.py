@@ -45,10 +45,13 @@ def build_expert_system_prompt(max_output_attempts: int) -> SystemMessage:
 
 # 数据源说明
 你看到的材料包括：
-- **今日对话时间线**: 今日每一轮的对话摘要(turn_summary)，按时间排列
-- **会话笔记(session_notes)**: 审查员维护的跨轮趋势笔记
-- **危机标记(crisis)**: 审查员标记的危机信号（如有）
-- **历史报告**: 最近数天的日终报告摘要，助你判断连续性与变化
+- **近期报告概览**: 使用<report>...</report>包裹最近数天的日终报告摘要，\
+包含报告日期和报告状态，助你判断连续性与变化
+- **今日对话时间线**: 使用<today_summary>...</today_summary>包裹今日每一轮的对话摘要，\
+每一轮的对话摘要使用<turn>...</turn>包裹，包含轮次编号和时间信息
+- **今日审查笔记**: 使用<note>...</note>包裹审查员维护的跨轮趋势笔记
+- **今日危机标记**: 使用<crisis>...</crisis>包裹审查员标记的危机信号（如有）
+
 
 # 工作流程
 1. **先看历史报告**: 了解近期状态基线，识别变化趋势
@@ -87,6 +90,7 @@ class _TurnSummaryItem(TypedDict):
 
     turn_number: int
     summary: str
+    time: str
 
 
 class _TodayRollingSummaryItem(TypedDict):
@@ -108,8 +112,8 @@ class _CrisisMarkerItem(TypedDict):
 def build_expert_first_human_message(
     report_date: date,
     recent_reports_overview: list[_RecentReportOverviewItem],
-    today_rolling_summaries: list[_TodayRollingSummaryItem],
-    crisis_markers: list[_CrisisMarkerItem],
+    today_summary: _TodayRollingSummaryItem | None,
+    crisis_marker: _CrisisMarkerItem | None,
 ) -> HumanMessage:
     """组装首轮 HumanMessage。
 
@@ -119,38 +123,48 @@ def build_expert_first_human_message(
       3. ## 今日对话材料(today_rolling_summaries 非空时,内含 session 块)
       4. ## 危机标记(today_rolling_summaries 非空且 crisis_markers 非空时)
     """
-    parts: list[str] = [f"报告日期: {report_date.isoformat()}", ""]
+    summary_parts: list[str] = []
+    note_msg: str | None = None
+    crisis_msg: str | None = None
+    report_parts = [
+        f"<report date={report['report_date'].isoformat()} status={report['overall_status'].value}>\
+{report['today_overview']}</report>"
+        for report in recent_reports_overview
+    ]
 
-    if recent_reports_overview:
-        parts.append("## 近期历史报告概览")
-        for overview in recent_reports_overview:
-            rd = overview["report_date"].isoformat()
-            st = overview["overall_status"].value
-            ov = overview["today_overview"]
-            parts.append(f"- {rd} [{st}]: {ov}")
-        parts.append("")
+    if today_summary:
+        for turn in today_summary["turn_summaries"]:
+            summary_parts.append(
+                f"<turn idx={turn['turn_number']} time={turn['time']}>{turn['summary']}</turn>"
+            )
+        note_msg = today_summary["session_notes"]
 
-    if today_rolling_summaries:
-        parts.append("## 今日对话材料")
-        for rsid in today_rolling_summaries:
-            turn_summaries = rsid["turn_summaries"]
-            if turn_summaries:
-                parts.append(f"### Session: {rsid['session_id']}")
-                for entry in turn_summaries:
-                    parts.append(f"- Turn {entry['turn_number']}: {entry['summary']}")
-                parts.append("")
+    if crisis_marker:
+        crisis_msg = (
+            f"<crisis turn={crisis_marker['turn_number']}>{crisis_marker['crisis_topic']}</crisis>"
+        )
 
-            if rsid["session_notes"]:
-                parts.append(f"会话笔记 ({rsid['session_id']}):")
-                parts.append(rsid["session_notes"])
-                parts.append("")
+    return HumanMessage(
+        content=f"""\
+# 今日日期: {report_date.isoformat()}
 
-        if crisis_markers:
-            parts.append("## 危机标记")
-            for cm in crisis_markers:
-                parts.append(
-                    f"- Session {cm['session_id']}, Turn {cm['turn_number']}: {cm['crisis_topic']}"
-                )
-            parts.append("")
+---
 
-    return HumanMessage(content="\n".join(parts))
+## 近期报告概览
+{"\n".join(report_parts)}
+
+## 今日对话时间线
+<today_summary>
+{"\n".join(summary_parts)}
+</today_summary>
+
+## 今日审查笔记
+<note>
+{note_msg}
+</note>
+
+## 今日危机标记
+<crisis>
+{crisis_msg}
+</crisis>"""
+    )

@@ -30,30 +30,6 @@ DIMENSIONS = ["emotional", "social", "values", "boundaries", "academic", "lifest
 _HIGH_SCORE_THRESHOLD = 7
 
 
-def _compute_window(
-    now: datetime | None = None,
-) -> tuple[date, datetime, datetime]:
-    """Compute the report window for the previous natural day in Shanghai.
-
-    以"自然日"为单位:无论 cron 在 04:05 触发还是其它时间,
-    报告始终锚定到 `now` 之前那个自然日 `[T-1 00:00, T0 00:00) Shanghai`。
-
-    Args:
-        now: 用于计算的当前时间(带时区),None 取 `now_shanghai()`。
-
-    Returns:
-        (report_date, day_start, day_end):
-          - report_date: 上一自然日(Shanghai 日期)
-          - day_start: report_date 00:00:00 Shanghai
-          - day_end:   (report_date + 1day) 00:00:00 Shanghai
-    """
-    now = now or now_shanghai()
-    report_date = (now - timedelta(days=1)).date()
-    day_start = datetime.combine(report_date, datetime.min.time(), tzinfo=SHANGHAI)
-    day_end = day_start + timedelta(days=1)
-    return report_date, day_start, day_end
-
-
 async def _check_crisis_today(
     db: AsyncSession,
     session_id: uuid.UUID,
@@ -120,10 +96,10 @@ async def _aggregate_dimensions(
         ds = ds or {}
         for d in DIMENSIONS:
             score = ds.get(d)
-            if isinstance(score, (int, float)):
-                dim_scores[d].append(int(score))
+            if score:
+                dim_scores[d].append(score)
 
-    summary: dict[str, dict[str, int | float]] = {}
+    summary: dict[str, dict[str, float]] = {}
     for d in DIMENSIONS:
         vals = dim_scores[d]
         if vals:
@@ -146,8 +122,6 @@ async def _assemble_expert_context(
     settings: Settings,
     child_user_id_val: uuid.UUID,
     report_date: date,
-    day_start: datetime,
-    day_end: datetime,
 ) -> ExpertContextSchema | None:
     """读阶段：为单个 child 装配 ExpertContextSchema。
 
@@ -159,9 +133,7 @@ async def _assemble_expert_context(
         rr: RuntimeResources（含 db_session_factory / shared_http_client）。
         settings: 应用配置（expert_token_budget）。
         child_user_id_val: 孩子用户 ID。
-        report_date: 报告日期。
-        day_start: 逻辑日起（Shanghai 04:00）。
-        day_end: 逻辑日止（Shanghai 04:00 +1）。
+        report_date: 报告日期(自然日)。
 
     Returns:
         ExpertContextSchema: 装配好的上下文,可喂给 ainvoke。
@@ -184,43 +156,34 @@ async def _assemble_expert_context(
         sid_rows = (await child_db.execute(sid_stmt)).scalars().all()
         owned_sids = frozenset(sid_rows)
 
-        today_sessions = (
-            (
-                await child_db.execute(
-                    select(Session).where(
-                        Session.child_user_id == child_user_id_val,
-                        Session.created_at >= day_start,
-                        Session.created_at < day_end,
-                    )
+        day_start = datetime.combine(report_date, datetime.min.time(), tzinfo=SHANGHAI)
+        day_end = day_start + timedelta(days=1)
+
+        # 当天 session 通过 created_at 落在自然日窗口内判定
+        today_session = (
+            await child_db.execute(
+                select(Session).where(
+                    Session.child_user_id == child_user_id_val,
+                    Session.created_at >= day_start,
+                    Session.created_at < day_end,
                 )
             )
-            .scalars()
-            .all()
-        )
-        if not today_sessions:
+        ).scalar_one_or_none()
+        if not today_session:
             logger.info(
                 "expert.skip_no_today_session child=%s date=%s",
                 child_user_id_val,
                 report_date,
             )
             return None
-        if len(today_sessions) >= 2:
-            raise RuntimeError(
-                f"child {child_user_id_val} has {len(today_sessions)} sessions "
-                f"on {report_date}, 1:1 invariant violated",
-            )
-        today_session_id: uuid.UUID = today_sessions[0].id
+        today_session_id: uuid.UUID = today_session.id
 
         # b. ChildProfile -> ChildProfileSnapshot
         child_profile: ChildProfile | None = (
-            (
-                await child_db.execute(
-                    select(ChildProfile).where(ChildProfile.child_user_id == child_user_id_val)
-                )
+            await child_db.execute(
+                select(ChildProfile).where(ChildProfile.child_user_id == child_user_id_val)
             )
-            .scalars()
-            .first()
-        )
+        ).scalar_one_or_none()
         if child_profile is None:
             logger.error(
                 "expert.child_no_profile child=%s",
@@ -248,8 +211,6 @@ async def _assemble_expert_context(
             owned_session_ids=owned_sids,
             session_id=today_session_id,
             report_date=report_date,
-            day_start=day_start,
-            day_end=day_end,
             dimension_summary=dimension_summary,
             crisis_detected_today=crisis_detected,
             max_output_attempts=3,
@@ -273,7 +234,7 @@ async def run_daily_reports(ctx: dict[str, Any]) -> None:
     rr: RuntimeResources = ctx["resources"]
     settings = rr.settings
 
-    report_date, day_start, day_end = _compute_window()
+    report_date = now_shanghai().date() - timedelta(days=1)
     logger.info("expert.run_daily_reports start report_date=%s", report_date)
 
     # 查所有活跃孩子（JOIN ChildProfile 确保存在画像）
@@ -312,8 +273,6 @@ async def run_daily_reports(ctx: dict[str, Any]) -> None:
                 settings,
                 child_user_id_val,
                 report_date,
-                day_start,
-                day_end,
             )
             if expert_ctx is None:
                 return  # 装配阶段决定跳过(无 today session 或无 profile)

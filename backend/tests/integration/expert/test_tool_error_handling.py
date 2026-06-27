@@ -51,8 +51,6 @@ def _make_ctx(child_user_id, db_session_factory, report_date):
         report_date=report_date,
         db_session_factory=db_session_factory,
         session_id=child_user_id,  # 占位,_search_history 不读
-        day_start=report_date,  # 占位
-        day_end=report_date,  # 占位
         dimension_summary={},
         crisis_detected_today=False,
         max_output_attempts=1,
