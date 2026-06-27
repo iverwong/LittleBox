@@ -85,13 +85,25 @@ async def _seed_data(db, ids: dict):
         )
     turn_summaries_1 = json.dumps(
         [
-            {"turn_number": 1, "summary": "今天在学校玩得很开心"},
-            {"turn_number": 2, "summary": "讨论了下周末去哪里玩"},
+            {
+                "turn_number": 1,
+                "summary": "今天在学校玩得很开心",
+                "created_at": "2026-06-26T00:00:00+00:00",
+            },
+            {
+                "turn_number": 2,
+                "summary": "讨论了下周末去哪里玩",
+                "created_at": "2026-06-26T00:00:01+00:00",
+            },
         ]
     )
     turn_summaries_2 = json.dumps(
         [
-            {"turn_number": 1, "summary": "今天有点不开心"},
+            {
+                "turn_number": 1,
+                "summary": "今天有点不开心",
+                "created_at": "2026-06-26T00:00:00+00:00",
+            },
         ]
     )
     await db.execute(

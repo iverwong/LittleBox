@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from app.core.time import SHANGHAI
 from app.domain.expert.context_schema import ExpertContextSchema
+from app.domain.expert.schemas import DailyDimensionSummary
 from app.domain.expert.tools import EXPERT_TOOL_HANDLERS, _fetch_by_ref, _search_history
 
 CUID = uuid.uuid4()
@@ -28,7 +29,7 @@ def _make_mock_ctx(**overrides: dict) -> ExpertContextSchema:
         owned_session_ids=frozenset({SID}),
         session_id=SID,
         report_date=REPORT_DATE,
-        dimension_summary={},
+        dimension_summary=DailyDimensionSummary(peak=0.0, mean=0.0, high_ratio=0.0),
         crisis_detected_today=False,
         max_output_attempts=3,
         token_budget=100_000,

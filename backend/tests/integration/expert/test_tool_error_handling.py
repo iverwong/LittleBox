@@ -22,6 +22,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 from app.domain.expert.context_schema import ExpertContextSchema
+from app.domain.expert.schemas import DailyDimensionSummary
 from app.domain.expert.tools import EXPERT_TOOL_HANDLERS
 from langchain_core.messages import ToolMessage
 from sqlalchemy import text
@@ -51,7 +52,7 @@ def _make_ctx(child_user_id, db_session_factory, report_date):
         report_date=report_date,
         db_session_factory=db_session_factory,
         session_id=child_user_id,  # 占位,_search_history 不读
-        dimension_summary={},
+        dimension_summary=DailyDimensionSummary(peak=0.0, mean=0.0, high_ratio=0.0),
         crisis_detected_today=False,
         max_output_attempts=1,
         token_budget=100_000,

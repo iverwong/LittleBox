@@ -34,9 +34,10 @@ from typing_extensions import TypedDict
 from app.core.enums import DailyStatus
 from app.domain.expert.llm import build_expert_llm
 from app.domain.expert.prompts import (
-    _CrisisMarkerItem,
-    _RecentReportOverviewItem,
-    _TodayRollingSummaryItem,
+    CrisisMarkerItem,
+    RecentReportOverviewItem,
+    TodayRollingSummaryItem,
+    TurnSummaryItem,
     build_expert_first_human_message,
     build_expert_system_prompt,
 )
@@ -132,7 +133,7 @@ async def _fetch_recent_reports(
     child_user_id: uuid.UUID,
     exclude_date: date,
     limit: int = 5,
-) -> list[_RecentReportOverviewItem]:
+) -> list[RecentReportOverviewItem]:
     """查近 limit 条历史报告概要(原 worker._get_recent_reports,移入 graph.py)。
 
     Args:
@@ -175,7 +176,7 @@ async def _fetch_recent_reports(
 async def _fetch_today_materials(
     db_session_factory: async_sessionmaker[AsyncSession],
     session_id: uuid.UUID,
-) -> tuple[_TodayRollingSummaryItem | None, _CrisisMarkerItem | None]:
+) -> tuple[TodayRollingSummaryItem | None, CrisisMarkerItem | None]:
     """查今日对话材料:today_summary + crisis 标记。
 
     Args:
@@ -204,25 +205,23 @@ async def _fetch_today_materials(
             )
         ).scalar_one_or_none()
 
-    crisis_marker: _CrisisMarkerItem | None = None
-    today_summary: _TodayRollingSummaryItem | None = None
+    crisis_marker: CrisisMarkerItem | None = None
+    today_summary: TodayRollingSummaryItem | None = None
 
     if rs_row:
-        today_summary = _TodayRollingSummaryItem(
+        today_summary = TodayRollingSummaryItem(
             session_id=str(rs_row.session_id),
             turn_summaries=[
-                {
-                    "turn_number": entry["turn_number"],
-                    "summary": entry["summary"],
-                    "time": entry["time"],
-                }
+                TurnSummaryItem(
+                    turn_number=entry.turn_number, summary=entry.summary, time=entry.created_at
+                )
                 for entry in (rs_row.turn_summaries or [])
             ],
             session_notes=rs_row.session_notes or "",
         )
 
     if ar_row:
-        crisis_marker = _CrisisMarkerItem(
+        crisis_marker = CrisisMarkerItem(
             session_id=str(ar_row.session_id),
             turn_number=ar_row.turn_number,
             crisis_topic=ar_row.crisis_topic or "",

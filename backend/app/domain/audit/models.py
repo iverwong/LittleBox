@@ -8,10 +8,12 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import Boolean, ForeignKey, Index, Integer, Text, func, text
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
+from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base, BaseMixin
+from app.core.orm_types import PydanticJSONB
+from app.domain.audit.schemas import AuditDimensionScores, TurnSummaryEntry
 
 
 class AuditRecord(BaseMixin, Base):
@@ -44,8 +46,8 @@ class AuditRecord(BaseMixin, Base):
         nullable=True,
         comment="被审查的 ai_msg id(本轮审查锚点),由 enqueue_audit 从 me.py generator 传入",
     )
-    dimension_scores: Mapped[Optional[dict]] = mapped_column(
-        JSONB,
+    dimension_scores: Mapped[Optional[AuditDimensionScores]] = mapped_column(
+        PydanticJSONB(AuditDimensionScores),
         nullable=True,
         comment="AuditDimensionScores JSON:6 维度 score(0-9) + detail;"
         "供日终专家按维度诊断与跨日聚合;需要综合分时由代码派生 max(score),不单独存储",
@@ -106,8 +108,8 @@ class RollingSummary(BaseMixin, Base):
         "话题脉络 / 风险观察 / 情绪走向 / 家长关注点回应。"
         "供审查自身跨轮复用 + 日终专家生成家长报告;不注入主 LLM,避免风控判断泄漏",
     )
-    turn_summaries: Mapped[Optional[list]] = mapped_column(
-        JSONB,
+    turn_summaries: Mapped[Optional[list[TurnSummaryEntry]]] = mapped_column(
+        PydanticJSONB(list[TurnSummaryEntry]),
         nullable=True,
         comment="list[TurnSummaryEntry] JSON:每轮客观中立短摘要(turn + summary);"
         "供主对话图超窗压缩时注入主 LLM;"

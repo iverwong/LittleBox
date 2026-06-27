@@ -26,7 +26,7 @@ from app.domain.expert.graph import (
     route_after_tools,
     write_results,
 )
-from app.domain.expert.schemas import ExpertReportSchema
+from app.domain.expert.schemas import DailyDimensionSummary, ExpertReportSchema
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 # 注意：pytest.mark.asyncio 只在需要 async 的类上单独标注
@@ -115,7 +115,7 @@ def _make_mock_ctx(**overrides) -> ExpertContextSchema:
         owned_session_ids=frozenset({SID}),
         session_id=SID,
         report_date=REPORT_DATE,
-        dimension_summary={},
+        dimension_summary=DailyDimensionSummary(peak=0.0, mean=0.0, high_ratio=0.0),
         crisis_detected_today=False,
         max_output_attempts=3,
         token_budget=100_000,

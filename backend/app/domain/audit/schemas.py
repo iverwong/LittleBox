@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal, Self
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class AuditDimensionScores(BaseModel):
@@ -22,6 +22,8 @@ class AuditDimensionScores(BaseModel):
     审查 Agent 在评分时已通过 prompt 内化家长配置,输出即最终分数。
     范围 0-9(10 阶)。
 
+    `frozen=True` 防止原地修改绕过 SQLAlchemy 脏检测。
+
     Attributes:
         emotional: 情绪与心理维度评分。
         social: 人际与社交维度评分。
@@ -30,6 +32,8 @@ class AuditDimensionScores(BaseModel):
         academic: 学习独立性维度评分。
         lifestyle: 生活方式维度评分。
     """
+
+    model_config = ConfigDict(frozen=True)
 
     emotional: int = Field(
         default=0,
@@ -95,11 +99,15 @@ class TurnSummaryEntry(BaseModel):
     审查图每轮 append 一条到 `rolling_summaries.turn_summaries`;
     摘要口吻严格客观中立,禁带风控判断。
 
+    `frozen=True` 防止原地修改绕过 SQLAlchemy 脏检测。
+
     Attributes:
         turn_number: 对话轮次编号,与 ai_turn_counter 对齐。
         summary: 单行摘要,≤100 字符。
         created_at: ISO-8601 格式 UTC 时间戳。
     """
+
+    model_config = ConfigDict(frozen=True)
 
     turn_number: int = Field(description="对话轮次编号，与 ai_turn_counter 对齐")
     summary: str = Field(max_length=100, description="单行摘要，≤100 字符")

@@ -11,6 +11,7 @@ import uuid
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from app.domain.expert.schemas import DailyDimensionSummary
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,7 +26,7 @@ from app.domain.expert.graph import ExpertGraphState
 logger = logging.getLogger("expert.worker")
 
 # 六维度 key 列表，对齐 AuditDimensionScores / SensitivityConfig
-DIMENSIONS = ["emotional", "social", "values", "boundaries", "academic", "lifestyle"]
+DIMENSIONS = list(DailyDimensionSummary.model_fields)
 # 高维分数阈值（>= 此值计为 high_turn）
 _HIGH_SCORE_THRESHOLD = 7
 
@@ -63,7 +64,7 @@ async def _check_crisis_today(
 async def _aggregate_dimensions(
     db: AsyncSession,
     session_id: uuid.UUID,
-) -> dict:
+) -> dict[str, DailyDimensionSummary]:
     """从指定 session 的 audit_records 聚合维度的 peak / mean / high_ratio。
 
     仅查询 dimension_scores IS NOT NULL 的记录。
@@ -80,7 +81,7 @@ async def _aggregate_dimensions(
         session_id: 被查询的 session ID(由 caller 传入 today_session_id)。
 
     Returns:
-        {dim: {"peak": int, "mean": float, "high_ratio": float}} 格式的 dict。
+        {dim: DailyDimensionSummary} 格式的 dict。
         无数据时各值为 0。
     """
     from app.domain.audit.models import AuditRecord
@@ -91,28 +92,28 @@ async def _aggregate_dimensions(
     )
     rows = (await db.execute(stmt)).scalars().all()
 
-    dim_scores: dict[str, list[int]] = {d: [] for d in DIMENSIONS}
+    dim_scores: dict[str, list[float]] = {d: [] for d in DIMENSIONS}
     for ds in rows:
-        ds = ds or {}
+        if ds is None:
+            continue
         for d in DIMENSIONS:
-            score = ds.get(d)
-            if score:
-                dim_scores[d].append(score)
+            score: float = getattr(ds, d)
+            dim_scores[d].append(score)
 
-    summary: dict[str, dict[str, float]] = {}
+    summary: dict[str, DailyDimensionSummary] = {}
     for d in DIMENSIONS:
         vals = dim_scores[d]
         if vals:
-            summary[d] = {
-                "peak": max(vals),
-                "mean": round(sum(vals) / len(vals), 2),
-                "high_ratio": round(
+            summary[d] = DailyDimensionSummary(
+                peak=max(vals),
+                mean=round(sum(vals) / len(vals), 2),
+                high_ratio=round(
                     sum(1 for v in vals if v >= _HIGH_SCORE_THRESHOLD) / len(vals),
                     4,
                 ),
-            }
+            )
         else:
-            summary[d] = {"peak": 0, "mean": 0.0, "high_ratio": 0.0}
+            summary[d] = DailyDimensionSummary(peak=0.0, mean=0.0, high_ratio=0.0)
 
     return summary
 

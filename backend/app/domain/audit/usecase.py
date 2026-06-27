@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import cast
 
 from sqlalchemy import select
 
@@ -57,7 +58,7 @@ async def write_audit_results(
     result = await db.execute(
         select(RollingSummary).where(RollingSummary.session_id == sid).with_for_update(),
     )
-    rs = result.scalar_one_or_none()
+    rs = cast(RollingSummary | None, result.scalar_one_or_none())
 
     # 防回退检查:必须在 INSERT 之前;rs.last_turn 已 ≥ 本轮说明是旧消息回放,跳过
     if rs is not None and turn_number <= rs.last_turn:
@@ -70,17 +71,12 @@ async def write_audit_results(
         return
 
     # INSERT audit_records
-    dims = (
-        structured_output.dimension_scores.model_dump()
-        if structured_output.dimension_scores is not None
-        else None
-    )
     db.add(
         AuditRecord(
             session_id=sid,
             turn_number=turn_number,
             target_message_id=target_message_id,
-            dimension_scores=dims,
+            dimension_scores=structured_output.dimension_scores,
             crisis_detected=structured_output.crisis_detected,
             crisis_topic=structured_output.crisis_topic,
             guidance_injection=structured_output.guidance_injection,
@@ -94,7 +90,6 @@ async def write_audit_results(
         summary=turn_summary,
         created_at=now_utc().isoformat(),
     )
-    entry_dict = entry.model_dump()
 
     if rs is None:
         # 首次写入:INSERT 新行,crisis_locked_message_id 仅在初始命中时写
@@ -106,13 +101,13 @@ async def write_audit_results(
                     target_message_id if structured_output.crisis_detected else None
                 ),
                 session_notes=session_notes_final,
-                turn_summaries=[entry_dict],
+                turn_summaries=[entry],
             )
         )
     else:
         # 既有行:append turn_summaries + 更新 last_turn + 视情况设 crisis_locked,
         # crisis_locked_message_id 短路保留旧值(粘性不可逆)
-        summaries = (rs.turn_summaries or []) + [entry_dict]
+        summaries = (rs.turn_summaries or []) + [entry]
         rs.turn_summaries = summaries
         rs.last_turn = turn_number
         if rs.crisis_locked_message_id is None and structured_output.crisis_detected:

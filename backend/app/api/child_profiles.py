@@ -20,7 +20,6 @@ from app.domain.accounts.schemas import (
     ChildProfileDetail,
     CurrentAccount,
     PutChildProfileRequest,
-    SensitivityConfig,
 )
 from app.domain.accounts.service import (
     load_child_profile_in_family,
@@ -46,7 +45,7 @@ def _to_detail(profile: ChildProfile) -> ChildProfileDetail:
         gender=profile.gender,
         birth_date=profile.birth_date,
         concerns=profile.concerns,
-        sensitivity=SensitivityConfig(**profile.sensitivity) if profile.sensitivity else None,
+        sensitivity=profile.sensitivity,
         custom_redlines=profile.custom_redlines,
     )
 

@@ -18,6 +18,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base, BaseMixin
 from app.core.enums import DevicePlatform, Gender, SubTier, UserRole
+from app.core.orm_types import PydanticJSONB
+from app.domain.accounts.schemas import (
+    DeviceInfo,
+    SensitivityConfig,
+)
 
 
 class Family(BaseMixin, Base):
@@ -161,8 +166,8 @@ class ChildProfile(BaseMixin, Base):
         nullable=True,
         comment="家长自然语言描述的关注点,注入审查提示词与日终专家提示词",
     )
-    sensitivity: Mapped[Optional[dict]] = mapped_column(
-        JSONB,
+    sensitivity: Mapped[Optional[SensitivityConfig]] = mapped_column(
+        PydanticJSONB(SensitivityConfig),
         nullable=True,
         comment="SensitivityConfig JSON,6 维度 0-9(默认 5)",
     )
@@ -211,8 +216,8 @@ class AuthToken(BaseMixin, Base):
         comment="父账号解绑时写入",
     )
     device_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    device_info: Mapped[Optional[dict]] = mapped_column(
-        JSONB,
+    device_info: Mapped[Optional[DeviceInfo]] = mapped_column(
+        PydanticJSONB(DeviceInfo),
         nullable=True,
         comment="审计用:{ua, ip, platform}",
     )
@@ -314,7 +319,7 @@ class DataDeletionRequest(BaseMixin, Base):
         nullable=False,
         comment="被删 child 的 user.id(快照)",
     )
-    deleted_tables: Mapped[dict] = mapped_column(
+    deleted_tables: Mapped[dict[str, int]] = mapped_column(
         JSONB,
         nullable=False,
         comment="{table: count} 各表删除行数",

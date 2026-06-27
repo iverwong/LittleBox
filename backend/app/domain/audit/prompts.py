@@ -10,7 +10,7 @@ from __future__ import annotations
 from langchain_core.messages import SystemMessage
 
 from app.core.enums import Gender
-from app.domain.accounts.schemas import ChildProfileSnapshot
+from app.domain.accounts.schemas import ChildProfileSnapshot, SensitivityConfig
 
 LEVEL_MAP = {
     1: "完全不关注",
@@ -48,13 +48,13 @@ def build_audit_system_prompt(child_profile: ChildProfileSnapshot, max_iter: int
         gender = "孩子"
 
     # 从 child_profile 读取真实 sensitivity(各维度默认 5 = "正常关注")
-    sensitivity = child_profile.sensitivity or {}
-    emotional = sensitivity.get("emotional", 5)
-    social = sensitivity.get("social", 5)
-    values = sensitivity.get("values", 5)
-    boundaries = sensitivity.get("boundaries", 5)
-    academic = sensitivity.get("academic", 5)
-    lifestyle = sensitivity.get("lifestyle", 5)
+    sensitivity = child_profile.sensitivity or SensitivityConfig()
+    emotional = sensitivity.emotional
+    social = sensitivity.social
+    values = sensitivity.values
+    boundaries = sensitivity.boundaries
+    academic = sensitivity.academic
+    lifestyle = sensitivity.lifestyle
 
     # 红线段:仅当家长配置了 custom_redlines 且非空时条件注入
     redline_section = ""

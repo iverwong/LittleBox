@@ -8,11 +8,13 @@ from datetime import date, datetime
 from typing import Optional
 
 from sqlalchemy import Boolean, Date, ForeignKey, Index, Text, text
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
+from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base, BaseMixin
 from app.core.enums import DailyStatus
+from app.core.orm_types import PydanticJSONB
+from app.domain.expert.schemas import DailyDimensionSummary
 
 
 class DailyReport(BaseMixin, Base):
@@ -61,8 +63,8 @@ class DailyReport(BaseMixin, Base):
         comment="LLM 判断 + 危机态代码地板的当日整体状态"
         "(stable/attention/alert),UI 列表页色彩标识依据",
     )
-    dimension_summary: Mapped[Optional[dict]] = mapped_column(
-        JSONB,
+    dimension_summary: Mapped[Optional[DailyDimensionSummary]] = mapped_column(
+        PydanticJSONB(DailyDimensionSummary),
         nullable=True,
         comment="DailyDimensionSummary JSON:6 维度当日 peak / mean / high_ratio;"
         "代码层从 audit_records.dimension_scores 聚合,"

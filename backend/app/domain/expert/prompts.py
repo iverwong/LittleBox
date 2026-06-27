@@ -77,7 +77,7 @@ def build_expert_system_prompt(max_output_attempts: int) -> SystemMessage:
     )
 
 
-class _RecentReportOverviewItem(TypedDict):
+class RecentReportOverviewItem(TypedDict):
     """近期历史报告概览(由 _fetch_recent_reports 产出)。"""
 
     report_date: date
@@ -85,7 +85,7 @@ class _RecentReportOverviewItem(TypedDict):
     today_overview: str
 
 
-class _TurnSummaryItem(TypedDict):
+class TurnSummaryItem(TypedDict):
     """单轮对话摘要(由 ORM 行 turn_summaries JSONB 元素归一化)。"""
 
     turn_number: int
@@ -93,15 +93,15 @@ class _TurnSummaryItem(TypedDict):
     time: str
 
 
-class _TodayRollingSummaryItem(TypedDict):
+class TodayRollingSummaryItem(TypedDict):
     """单 session 的滚动摘要。"""
 
     session_id: str
-    turn_summaries: list[_TurnSummaryItem]
+    turn_summaries: list[TurnSummaryItem]
     session_notes: str
 
 
-class _CrisisMarkerItem(TypedDict):
+class CrisisMarkerItem(TypedDict):
     """单条危机标记(从 AuditRecord.crisis_detected=True 行映射)。"""
 
     session_id: str
@@ -111,9 +111,9 @@ class _CrisisMarkerItem(TypedDict):
 
 def build_expert_first_human_message(
     report_date: date,
-    recent_reports_overview: list[_RecentReportOverviewItem],
-    today_summary: _TodayRollingSummaryItem | None,
-    crisis_marker: _CrisisMarkerItem | None,
+    recent_reports_overview: list[RecentReportOverviewItem],
+    today_summary: TodayRollingSummaryItem | None,
+    crisis_marker: CrisisMarkerItem | None,
 ) -> HumanMessage:
     """组装首轮 HumanMessage。
 
