@@ -52,29 +52,6 @@ def extract_finish_reason(chunk: AIMessageChunk) -> str | None:
     return fr if fr in ALLOWED_FINISH_REASONS else None
 
 
-def extract_usage(chunk: AIMessageChunk) -> dict | None:
-    """从 LLM 末帧提取 usage 元数据。
-
-    实际字段路径：`chunk.usage_metadata`（`AIMessageChunk` 标准字段，
-    末帧由 SDK 自动设置）。
-
-    Args:
-        chunk: LLM 输出 chunk。
-
-    Returns:
-        `{"input_tokens", "output_tokens", "total_tokens"}` 字典，或
-        `None`（usage 不可用时）。
-    """
-    um = chunk.usage_metadata
-    if um is None:
-        return None
-    return {
-        "input_tokens": um["input_tokens"],
-        "output_tokens": um["output_tokens"],
-        "total_tokens": um["total_tokens"],
-    }
-
-
 def extract_reasoning_content(chunk: AIMessageChunk, profile: ModelProfile) -> str | None:
     """按模型档提取 reasoning_content（思考文本），无则返回 `None`。
 

@@ -17,6 +17,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
+from langchain_core.messages import UsageMetadata
 from redis.asyncio import Redis
 
 from app.core.enums import InterventionType
@@ -92,7 +93,7 @@ async def run_llm_pipeline(
     accumulated = ""
     last_finish_reason = "stop"
     last_intervention_type: InterventionType | None = None
-    usage_meta: dict | None = None
+    usage_meta: UsageMetadata | None = None
     has_emitted_content = False
     user_stopped = False
     thinking_started = False
