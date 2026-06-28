@@ -278,7 +278,6 @@ async def audit_llm_call(
         messages.append(
             HumanMessage(
                 content="请调用 AuditOutputSchema 工具给出最终结论"
-                "(verdict 为 pass / warn / fail),"
                 "不要直接回复文本。你仍然可以在调用 AuditOutputSchema"
                 " 之前先调用 ReplaceInNotes"
                 " 更新记录笔记。",
@@ -291,7 +290,7 @@ async def audit_llm_call(
             # 任何 guidance 注入(route_by_risk.ready 分支 guidance 为 None
             # → 落到 main 分支而非 guidance 分支)。
             # structured_output 由 audit_tools 防御性兜底(无 tool_call 路径)设 default。
-            logger.warning("audit_pipeline: 模型连续两次未调用 audit_output，默认 verdict=warn")
+            logger.warning("audit_pipeline: 模型连续两次未调用 audit_output，审查降级")
 
     # 规则校验(混/多 OUTPUT)、参数校验(pydantic)、单 OUTPUT 终止由 audit_tools 负责
     # 本节点只把 AIMessage 透传,structured_output 不设
@@ -537,7 +536,7 @@ async def write_results(
             )
             await db.commit()
 
-    return {"structured_output": output}
+    return {}
 
 
 # ---------------------------------------------------------------------------

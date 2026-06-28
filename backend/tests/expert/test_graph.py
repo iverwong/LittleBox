@@ -61,10 +61,19 @@ def _aim(
     content: str = "",
     tool_calls: list[dict] | None = None,
     token_usage: dict | None = None,
+    usage_metadata: dict | None = None,
 ) -> AIMessage:
+    """构造 fake AIMessage。
+
+    兼容两种用法:
+    - ``token_usage``: 旧 response_metadata["token_usage"] 形式(只为后向兼容保留)
+    - ``usage_metadata``: 新 form,模拟 LangChain SDK 自动设置的 usage_metadata 字段
+    """
     msg = AIMessage(content=content, tool_calls=tool_calls or [])
     if token_usage is not None:
         msg.response_metadata["token_usage"] = token_usage
+    if usage_metadata is not None:
+        msg.usage_metadata = usage_metadata
     return msg
 
 
@@ -228,28 +237,29 @@ class TestExpertLLMCallNode:
     """expert_llm_call 节点测试。"""
 
     async def test_calls_llm_and_accumulates_tokens(self):
-        """LLM 调用成功应累计 total_output_tokens。"""
+        """LLM 调用成功应设 total_output_tokens 为当次 usage.total_tokens。"""
         runtime = _make_fake_runtime()
         fake = FakeExpertLLM(
             [
-                _aim(tool_calls=[_TC_OUTPUT], token_usage={"output_tokens": 42}),
+                _aim(tool_calls=[_TC_OUTPUT], usage_metadata={"total_tokens": 42}),
             ]
         )
 
         with patch("app.domain.expert.graph.build_expert_llm", return_value=fake):
             result = await expert_llm_call(_initial_state(), runtime)
 
+        # messages 累加 → provider 返回的 total_tokens 已含历史 input,覆盖式即可
         assert result["total_output_tokens"] == 42
         assert len(result["messages"]) == 1
         assert result["messages"][0].tool_calls
 
     async def test_no_tool_calls_triggers_post_processing(self):
-        """首次无 tool_calls 应触发后处理追问，追问成功则累计双倍 token。"""
+        """首次无 tool_calls 应触发后处理追问,追问成功则取最后一次 usage 覆盖。"""
         runtime = _make_fake_runtime()
         fake = FakeExpertLLM(
             [
                 _aim(content="text reply", tool_calls=[]),
-                _aim(tool_calls=[_TC_OUTPUT], token_usage={"output_tokens": 58}),
+                _aim(tool_calls=[_TC_OUTPUT], usage_metadata={"total_tokens": 58}),
             ]
         )
 
@@ -259,8 +269,8 @@ class TestExpertLLMCallNode:
                 runtime,
             )
 
-        # first call 没有 output_tokens，追问 58，累计 10 + 0 + 58 = 68
-        assert result["total_output_tokens"] == 68
+        # 覆盖式:首次无 usage 保留 state=10,追问 usage=58 覆盖 → 最终 58
+        assert result["total_output_tokens"] == 58
 
     async def test_double_no_tool_calls_logs_warning(self):
         """连续两次无 tool_calls 应触发降级警告。"""
@@ -275,6 +285,7 @@ class TestExpertLLMCallNode:
         with patch("app.domain.expert.graph.build_expert_llm", return_value=fake):
             result = await expert_llm_call(_initial_state(), runtime)
 
+        # 两次都无 usage → tokens 保留初始 state 值
         assert result["total_output_tokens"] == 0
         assert not result["messages"][0].tool_calls
 
@@ -481,7 +492,7 @@ class TestWriteResultsNode:
         return mock_db, runtime
 
     async def test_writes_output_to_db(self):
-        """正常输出应调用 write_expert_results 并 commit。"""
+        """正常输出应调用 write_expert_results 并 commit,节点返回空 dict。"""
         output = ExpertReportSchema(
             overall_status=DailyStatus.stable,
             today_overview="平稳",
@@ -499,7 +510,8 @@ class TestWriteResultsNode:
 
         mock_write.assert_awaited_once()
         mock_db.commit.assert_awaited_once()
-        assert result["structured_output"] is output
+        # 节点不返回 state 字段,返回空 dict(与 audit graph 对齐)
+        assert result == {}
 
     async def test_crisis_override_to_alert(self):
         """crisis_detected_today=True 时即使 LLM 输出 stable 也覆写为 alert。"""
@@ -526,7 +538,7 @@ class TestWriteResultsNode:
         assert written_output.overall_status == DailyStatus.alert
 
     async def test_none_output_does_not_write(self):
-        """structured_output 为 None 时不落库。"""
+        """structured_output 为 None 时不落库,但节点仍返回空 dict。"""
         state = _initial_state()
         runtime = _make_fake_runtime()
 
@@ -534,7 +546,7 @@ class TestWriteResultsNode:
             result = await write_results(state, runtime)
 
         mock_write.assert_not_awaited()
-        assert result["structured_output"] is None
+        assert result == {}
 
 
 # ---------------------------------------------------------------------------
@@ -568,7 +580,7 @@ class TestGraphIntegration:
         """Happy path：load_context → llm → tools(OUTPUT) → write_results。"""
         fake = FakeExpertLLM(
             [
-                _aim(tool_calls=[_TC_OUTPUT], token_usage={"output_tokens": 50}),
+                _aim(tool_calls=[_TC_OUTPUT], usage_metadata={"total_tokens": 50}),
             ]
         )
         monkeypatch.setattr("app.domain.expert.graph.build_expert_llm", lambda s, **kw: fake)
@@ -620,8 +632,8 @@ class TestGraphIntegration:
         """仅数据工具 → 返回 ToolMessage → LLM 再调用 → 最终输出。"""
         fake = FakeExpertLLM(
             [
-                _aim(tool_calls=[_TC_SEARCH], token_usage={"output_tokens": 30}),
-                _aim(tool_calls=[_TC_OUTPUT], token_usage={"output_tokens": 70}),
+                _aim(tool_calls=[_TC_SEARCH], usage_metadata={"total_tokens": 30}),
+                _aim(tool_calls=[_TC_OUTPUT], usage_metadata={"total_tokens": 70}),
             ]
         )
         monkeypatch.setattr("app.domain.expert.graph.build_expert_llm", lambda s, **kw: fake)
@@ -651,4 +663,5 @@ class TestGraphIntegration:
         )
 
         assert result.get("structured_output") is not None
-        assert result["total_output_tokens"] == 100
+        # 覆盖式:最后一次 llm_call 的 usage.total_tokens=70 覆盖之前的 30
+        assert result["total_output_tokens"] == 70
