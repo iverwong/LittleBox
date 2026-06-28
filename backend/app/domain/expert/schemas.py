@@ -51,7 +51,7 @@ class SearchHistoryInput(BaseModel):
         "daily_report",
     ] = Field(
         ...,
-        description="单源检索;多源请多次调用",
+        description="搜索来源。turn_summary:历史轮次会话摘要;session_notes:历史审查笔记;crisis_topic:历史触发的危机主题;daily_report:历史日终专家报告",
     )
     start_date: Optional[date] = Field(
         default=None,
@@ -59,19 +59,19 @@ class SearchHistoryInput(BaseModel):
     )
     end_date: Optional[date] = Field(
         default=None,
-        description="检索范围结束日期(可选),默认 = report_date - 1 日",
+        description="检索范围结束日期(可选),默认 = report_date - 1 日, 不得晚于 start_date 90 天",
     )
     limit: int = Field(
-        default=10,
+        default=20,
         ge=1,
         le=50,
-        description="返回结果上限,1-50 条,默认 10",
+        description="返回结果上限,1-50 条,默认 20",
     )
     context_chars: int = Field(
-        default=80,
+        default=200,
         ge=0,
         le=400,
-        description="长源开窗字符数,0-400,默认 80",
+        description="长源开窗字符数,0-400,默认 200",
     )
 
     @field_validator("keywords")

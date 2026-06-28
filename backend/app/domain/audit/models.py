@@ -108,6 +108,7 @@ class RollingSummary(BaseMixin, Base):
         "话题脉络 / 风险观察 / 情绪走向 / 家长关注点回应。"
         "供审查自身跨轮复用 + 日终专家生成家长报告;不注入主 LLM,避免风控判断泄漏",
     )
+    # TODO 这里要摊开建新表，优化写入，使用gin索引来优化查询
     turn_summaries: Mapped[Optional[list[TurnSummaryEntry]]] = mapped_column(
         PydanticJSONB(list[TurnSummaryEntry]),
         nullable=True,

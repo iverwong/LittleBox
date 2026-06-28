@@ -11,7 +11,7 @@ import json
 import logging
 import re
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from functools import wraps
 from typing import TYPE_CHECKING, Any
 
@@ -19,6 +19,7 @@ from langchain_core.messages import ToolMessage
 from pydantic import ValidationError
 from sqlalchemy.exc import DBAPIError, ProgrammingError, ResourceClosedError
 
+from app.core.time import SHANGHAI
 from app.domain.expert.repository import (
     fetch_notes,
     fetch_report,
@@ -131,8 +132,19 @@ async def _search_history(
     try:
         validated = SearchHistoryInput.model_validate(args)
     except ValidationError as exc:
+        payload = {
+            "error": "SearchHistoryInput args 校验失败，请按 schema 重发",
+            "validation_errors": [
+                {
+                    "loc": list(err["loc"]),
+                    "msg": err["msg"],
+                    "type": err["type"],
+                }
+                for err in exc.errors()
+            ],
+        }
         return ToolMessage(
-            content=json.dumps({"error": str(exc)}, ensure_ascii=False),
+            content=json.dumps(payload, ensure_ascii=False),
             tool_call_id=tool_call_id,
         )
 
@@ -143,11 +155,14 @@ async def _search_history(
     # ---- 2. 日期窗口 ----
     end_date: date = validated.end_date or (report_date - timedelta(days=1))
     start_date: date = validated.start_date or (end_date - timedelta(days=30))
+    # 转换为带时区的 datetime
+    end_dt = datetime.combine(end_date + timedelta(days=1), time.min, SHANGHAI)
+    start_dt = datetime.combine(start_date, time.min, SHANGHAI)
 
     if start_date > end_date:
         return ToolMessage(
             content=json.dumps(
-                {"error": "start_date cannot be after end_date"},
+                {"error": "start_date 不能晚于 end_date"},
                 ensure_ascii=False,
             ),
             tool_call_id=tool_call_id,
@@ -155,7 +170,7 @@ async def _search_history(
     if end_date >= report_date:
         return ToolMessage(
             content=json.dumps(
-                {"error": "end_date must be before report_date"},
+                {"error": "end_date 需在报告日期之前"},
                 ensure_ascii=False,
             ),
             tool_call_id=tool_call_id,
@@ -164,7 +179,7 @@ async def _search_history(
     if span > 90:
         return ToolMessage(
             content=json.dumps(
-                {"error": f"date span {span}d exceeds maximum 90 days"},
+                {"error": f"日期间隔 {span} 天，超过允许的 90 天上限"},
                 ensure_ascii=False,
             ),
             tool_call_id=tool_call_id,
@@ -175,7 +190,7 @@ async def _search_history(
     keywords = validated.keywords
     limit = validated.limit
     context_chars = validated.context_chars
-
+    # TODO 方法调用尚未改造完全，待DB排查完成后继续
     results: list[dict[str, Any]] = []
     async with ctx.db_session_factory() as db:
         if source == "turn_summary":
@@ -184,8 +199,8 @@ async def _search_history(
                     db,
                     child_user_id_str,
                     keywords,
-                    start_date,
-                    end_date,
+                    start_dt,
+                    end_dt,
                     limit,
                     context_chars,
                 ),

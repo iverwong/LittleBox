@@ -20,8 +20,8 @@ class TestSearchHistoryInput:
         s = SearchHistoryInput(keywords=["游戏"], source="turn_summary")
         assert s.keywords == ["游戏"]
         assert s.source == "turn_summary"
-        assert s.limit == 10
-        assert s.context_chars == 80
+        assert s.limit == 20
+        assert s.context_chars == 200
         assert s.start_date is None
         assert s.end_date is None
 
