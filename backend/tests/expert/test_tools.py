@@ -94,7 +94,7 @@ class TestSearchHistoryHandler:
         result = await _search_history(args, runtime, "call-err")
         payload = json.loads(result.content)
         assert "error" in payload
-        assert "start_date cannot be after end_date" in payload["error"]
+        assert "start_date 不能晚于 end_date" in payload["error"]
 
     async def test_end_date_equals_report_date_returns_error(self):
         """end_date == report_date 应返回 error。"""
@@ -108,7 +108,7 @@ class TestSearchHistoryHandler:
         result = await _search_history(args, runtime, "call-err")
         payload = json.loads(result.content)
         assert "error" in payload
-        assert "end_date must be before report_date" in payload["error"]
+        assert "end_date 需在报告日期之前" in payload["error"]
 
     async def test_keyword_validation_error(self):
         """单字符关键词应导致 Pydantic 校验失败。"""

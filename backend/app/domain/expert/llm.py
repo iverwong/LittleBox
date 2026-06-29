@@ -23,6 +23,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import httpx
+from langchain_core.language_models.base import LanguageModelInput
+from langchain_core.messages import AIMessage
 from langchain_core.runnables import Runnable
 
 from app.core.llm import build_role_fallback, build_role_primary, wrap_resilience
@@ -37,7 +39,7 @@ def build_expert_llm(
     settings: Settings,
     *,
     http_async_client: httpx.AsyncClient | None = None,
-) -> Runnable:
+) -> Runnable[LanguageModelInput, AIMessage]:
     """构建专家 LLM:主备裸实例各 bind_tools,再 wrap_resilience 一体化。
 
     装配链:

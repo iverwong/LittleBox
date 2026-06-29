@@ -13,7 +13,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import any_, func, or_, select
@@ -173,8 +173,8 @@ async def search_turn_summaries(
     db: AsyncSession,
     child_user_id: str,
     keywords: list[str],
-    start: date | None,
-    end: date | None,
+    start: datetime,
+    end: datetime,
     limit: int,
     context_chars: int,
 ) -> list[dict[str, Any]]:
@@ -212,8 +212,8 @@ async def search_turn_summaries(
         .where(
             Session.child_user_id == child_user_id,
             RollingSummary.turn_summaries.isnot(None),
-            or_(start is None, Session.created_at >= start),  # type: ignore[arg-type]
-            or_(end is None, Session.created_at <= end),  # type: ignore[arg-type]
+            Session.created_at >= start,
+            Session.created_at < end,
         )
     )
     rows = (await db.execute(stmt)).all()

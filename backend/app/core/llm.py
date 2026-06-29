@@ -162,6 +162,8 @@ def _adapter_chat_deepseek(
         "model": b.model,
         "timeout": LLM_HTTPX_TIMEOUT,
         "max_retries": 0,
+        # TODO 百炼端未能在流式请求后返回 usage. 尝试增加该配置，后续通过 langsmith 验证
+        "stream_usage": True,
         "extra_body": extra_body,
     }
     if b.temperature is not None:

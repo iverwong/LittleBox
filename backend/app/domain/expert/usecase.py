@@ -11,6 +11,7 @@ import logging
 import uuid
 from datetime import date
 
+from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert
 
 from app.domain.expert.models import DailyReport
@@ -43,34 +44,32 @@ async def write_expert_results(
         output: LLM 产出的 ExpertReportSchema（含 overall_status、degraded、6 段正文）。
         dimension_summary: 代码预聚合的 6 维聚合 dict（不进 LLM，直接写 DB）。
     """
-    stmt = insert(DailyReport).values(
-        child_user_id=child_user_id,
-        session_id=session_id,
-        report_date=report_date,
-        overall_status=output.overall_status,
-        dimension_summary=dimension_summary,
-        today_overview=output.today_overview,
-        what_was_discussed=output.what_was_discussed,
-        emotion_changes=output.emotion_changes,
-        noteworthy=output.noteworthy,
-        suggestions=output.suggestions,
-        anomaly_periods=output.anomaly_periods,
-        degraded=output.degraded,
-    )
+    insert_values = {
+        DailyReport.child_user_id.key: child_user_id,
+        DailyReport.session_id.key: session_id,
+        DailyReport.report_date.key: report_date,
+        DailyReport.overall_status.key: output.overall_status,
+        DailyReport.dimension_summary.key: dimension_summary,
+        DailyReport.today_overview.key: output.today_overview,
+        DailyReport.what_was_discussed.key: output.what_was_discussed,
+        DailyReport.emotion_changes.key: output.emotion_changes,
+        DailyReport.noteworthy.key: output.noteworthy,
+        DailyReport.suggestions.key: output.suggestions,
+        DailyReport.anomaly_periods.key: output.anomaly_periods,
+        DailyReport.degraded.key: output.degraded,
+    }
+
+    stmt = insert(DailyReport).values(**insert_values)
+
+    conflict_keys = {DailyReport.child_user_id.key, DailyReport.report_date.key}
+    update_cols = {
+        col: getattr(stmt.excluded, col) for col in insert_values if col not in conflict_keys
+    }
+    update_cols[DailyReport.updated_at.key] = func.now()
+    # upsert
     stmt = stmt.on_conflict_do_update(
         index_elements=[DailyReport.child_user_id, DailyReport.report_date],
-        set_={
-            DailyReport.session_id: stmt.excluded.session_id,
-            DailyReport.overall_status: stmt.excluded.overall_status,
-            DailyReport.dimension_summary: stmt.excluded.dimension_summary,
-            DailyReport.today_overview: stmt.excluded.today_overview,
-            DailyReport.what_was_discussed: stmt.excluded.what_was_discussed,
-            DailyReport.emotion_changes: stmt.excluded.emotion_changes,
-            DailyReport.noteworthy: stmt.excluded.noteworthy,
-            DailyReport.suggestions: stmt.excluded.suggestions,
-            DailyReport.anomaly_periods: stmt.excluded.anomaly_periods,
-            DailyReport.degraded: stmt.excluded.degraded,
-        },
+        set_=update_cols,
     )
     await db.execute(stmt)
 

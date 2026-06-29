@@ -11,7 +11,6 @@ import uuid
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from app.domain.expert.schemas import DailyDimensionSummary
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +21,7 @@ from app.domain.accounts.models import ChildProfile
 from app.domain.accounts.schemas import ChildProfileSnapshot
 from app.domain.expert.context_schema import ExpertContextSchema
 from app.domain.expert.graph import ExpertGraphState
+from app.domain.expert.schemas import DailyDimensionSummary
 
 logger = logging.getLogger("expert.worker")
 

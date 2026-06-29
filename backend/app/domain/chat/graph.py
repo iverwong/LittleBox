@@ -40,7 +40,6 @@ from app.core.llm import build_compression_llm, build_crisis_llm, build_main_llm
 from app.core.llm_extractors import (
     extract_finish_reason,
     extract_reasoning_content,
-    extract_usage,
     role_profile,
 )
 from app.core.llm_topology import ModelProfile, Role
@@ -609,10 +608,9 @@ async def _stream_llm_chunks(
             writer({"finish_reason": fr})
 
         # usage_metadata passthrough:末帧 usage-only chunk 由 SDK 自动注入
-        if _chunk_typed.usage_metadata is not None:
-            usage = extract_usage(_chunk_typed)
-            if usage:
-                writer({"usage_metadata": usage})
+        usage = _chunk_typed.usage_metadata
+        if usage is not None:
+            writer({"usage_metadata": usage})
 
     return {"messages": [AIMessage(content="".join(parts))]}
 

@@ -20,7 +20,7 @@ import json
 import logging
 import uuid
 from datetime import date
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langgraph.graph import StateGraph
@@ -55,7 +55,7 @@ logger = logging.getLogger("expert.graph")
 TOOL_NAME_OUTPUT = "ExpertReportSchema"
 TOOL_NAME_SEARCH = "SearchHistoryInput"
 TOOL_NAME_FETCH = "FetchByRefInput"
-_DATA_TOOL_NAMES = {TOOL_NAME_SEARCH, TOOL_NAME_FETCH}
+DATA_TOOL_NAMES = {TOOL_NAME_SEARCH, TOOL_NAME_FETCH}
 
 
 # ---------------------------------------------------------------------------
@@ -164,11 +164,11 @@ async def _fetch_recent_reports(
         )
         rows = (await db.execute(stmt)).all()
     return [
-        {
-            "report_date": r.report_date,
-            "overall_status": r.overall_status,
-            "today_overview": r.today_overview,
-        }
+        RecentReportOverviewItem(
+            report_date=r.report_date,
+            overall_status=r.overall_status,
+            today_overview=r.today_overview,
+        )
         for r in rows
     ]
 
@@ -318,9 +318,10 @@ async def expert_llm_call(
     response = await llm.ainvoke(messages)
 
     # 累计 token
-    token_usage = response.response_metadata.get("token_usage", {})
-    output_tokens = token_usage.get("output_tokens", 0)
-    new_total = state["total_output_tokens"] + output_tokens
+    tokens: int = state["total_output_tokens"]
+    usage = response.usage_metadata
+    if usage:
+        tokens = usage["total_tokens"]
 
     # 协议违规:模型返回纯文本 → post-processing 追问
     if not response.tool_calls:
@@ -335,16 +336,16 @@ async def expert_llm_call(
         response = await llm.ainvoke(messages)
 
         # 累计追问 token
-        token_usage = response.response_metadata.get("token_usage", {})
-        output_tokens = token_usage.get("output_tokens", 0)
-        new_total += output_tokens
+        usage = response.usage_metadata
+        if usage:
+            tokens = usage["total_tokens"]
 
         if not response.tool_calls:
             # 两次都未调 ExpertReportSchema → 降级路径。
             # structured_output 由 expert_tools 防御性兜底(无 tool_call 路径)设 degraded。
             logger.warning("expert_pipeline: 模型连续两次未调用 ExpertReportSchema，降级")
 
-    return {"messages": [response], "total_output_tokens": new_total}
+    return {"messages": [response], "total_output_tokens": tokens}
 
 
 # ---------------------------------------------------------------------------
@@ -395,21 +396,87 @@ async def expert_tools(
         }
 
     # --- Token 预算检查 ---
+    # 是否已发催缴 HumanMessage
     budget_forced = state.get("_budget_forced", False)
+    # 是否预算已超
     budget_exceeded = state["total_output_tokens"] >= ctx.token_budget
-    force_msg_sent = False
 
     # 分类 tool_calls
     output_tcs = [tc for tc in last_ai.tool_calls if tc["name"] == TOOL_NAME_OUTPUT]
-    data_tcs = [tc for tc in last_ai.tool_calls if tc["name"] in _DATA_TOOL_NAMES]
+    data_tcs = [tc for tc in last_ai.tool_calls if tc["name"] in DATA_TOOL_NAMES]
     other_tcs = [
         tc
         for tc in last_ai.tool_calls
-        if tc["name"] not in _DATA_TOOL_NAMES and tc["name"] != TOOL_NAME_OUTPUT
+        if tc["name"] not in DATA_TOOL_NAMES and tc["name"] != TOOL_NAME_OUTPUT
     ]
 
-    # --- 单 OUTPUT 终止路径:整帧恰好 1 个 output + 无 data + 无 other ---
-    if len(output_tcs) == 1 and not data_tcs and not other_tcs:
+    tool_messages: list[ToolMessage] = []
+
+    # 优先执行 data_tcs
+    for tc in data_tcs:
+        name, args, tid = tc["name"], tc["args"], tc["id"]
+        handler = EXPERT_TOOL_HANDLERS.get(name)
+        if handler is None:
+            logger.error("expert.no_handler name=%s", name)
+            tool_messages.append(
+                ToolMessage(
+                    content=json.dumps(
+                        {"error": f"handler not found: {name}"},
+                        ensure_ascii=False,
+                    ),
+                    tool_call_id=tid,
+                ),
+            )
+        elif budget_exceeded and budget_forced:
+            tool_messages.append(
+                ToolMessage(
+                    content=json.dumps(
+                        {
+                            "error": "token 预算已超限,请立即根据现有信息\
+单独调用 ExpertReportSchema 工具提交最终报告"
+                        },
+                        ensure_ascii=False,
+                    ),
+                    tool_call_id=tid,
+                ),
+            )
+        else:
+            tool_msg = await handler(args, runtime, tid)
+            tool_messages.append(tool_msg)
+
+    # 处理其他未定义工具
+    for tc in other_tcs:
+        name, tid = tc["name"], tc["id"]
+        logger.warning("expert.undefined_tool_call name=%s", name)
+        tool_messages.append(
+            ToolMessage(
+                content=json.dumps(
+                    {"error": f"未定义的 tool_call: {name}"},
+                    ensure_ascii=False,
+                ),
+                tool_call_id=tid,
+            )
+        )
+
+    # 处理 OUTPUT
+    output_attempts = state["output_attempts"]
+    if len(last_ai.tool_calls) != 1 or len(output_tcs) != 1:
+        for tc in output_tcs:
+            tid = tc["id"]
+            tool_messages.append(
+                ToolMessage(
+                    content=json.dumps(
+                        {
+                            "error": "请单独调用一次 ExpertReportSchema 给出最终报告，"
+                            "不要与数据检索工具混调或重复调用"
+                        },
+                        ensure_ascii=False,
+                    ),
+                    tool_call_id=tid,
+                ),
+            )
+        output_attempts += 1
+    else:
         tc = output_tcs[0]
         tid = tc["id"]
         try:
@@ -426,6 +493,7 @@ async def expert_tools(
                     for err in exc.errors()
                 ],
             }
+            output_attempts += 1
             return {
                 "messages": [
                     ToolMessage(
@@ -433,99 +501,34 @@ async def expert_tools(
                         tool_call_id=tid,
                     )
                 ],
-                "output_attempts": state["output_attempts"] + 1,
+                "output_attempts": output_attempts,
             }
         else:
             # 单 OUTPUT 校验通过:不发 ToolMessage,直接终止
             return {"structured_output": structured}
 
-    # --- 多 tool_call 路径 ---
-    tool_messages: list[ToolMessage | HumanMessage] = []
-
-    # 预算已超且尚未催缴 → 注入强制交卷 HumanMessage
+    # 处理预算
+    forced_message = []
     if budget_exceeded and not budget_forced:
-        tool_messages.append(
+        forced_message.append(
             HumanMessage(
-                content="你已收集了大量材料，token 预算接近上限，"
+                content="你已收集了大量材料，token 预算抵达上限，"
                 "请立即调用 ExpertReportSchema 提交最终报告。"
-            ),
-        )
-        force_msg_sent = True
-
-    # 处理其他(未定义)工具
-    for tc in other_tcs:
-        name, tid = tc["name"], tc["id"]
-        logger.error("expert.undefined_tool_call name=%s", name)
-        tool_messages.append(
-            ToolMessage(
-                content=json.dumps(
-                    {"error": f"未定义的 tool_call: {name}"},
-                    ensure_ascii=False,
-                ),
-                tool_call_id=tid,
-            ),
-        )
-
-    # 处理 OUTPUT 违规(混调/多 OUTPUT)
-    for tc in output_tcs:
-        tid = tc["id"]
-        tool_messages.append(
-            ToolMessage(
-                content=json.dumps(
-                    {
-                        "error": "请单独调用一次 ExpertReportSchema 给出最终报告，"
-                        "不要与数据检索工具混调或重复调用"
-                    },
-                    ensure_ascii=False,
-                ),
-                tool_call_id=tid,
-            ),
-        )
-
-    # 处理数据工具调用
-    for tc in data_tcs:
-        name, args, tid = tc["name"], tc["args"], tc["id"]
-        handler = EXPERT_TOOL_HANDLERS.get(name)
-        if handler is None:
-            logger.error("expert.no_handler name=%s", name)
-            tool_messages.append(
-                ToolMessage(
-                    content=json.dumps(
-                        {"error": f"handler not found: {name}"},
-                        ensure_ascii=False,
-                    ),
-                    tool_call_id=tid,
-                ),
             )
-        elif budget_exceeded and not force_msg_sent:
-            # 预算已超:拒绝更多数据检索
-            tool_messages.append(
-                ToolMessage(
-                    content=json.dumps(
-                        {"error": "token 预算已超限,请立即调用 ExpertReportSchema"},
-                        ensure_ascii=False,
-                    ),
-                    tool_call_id=tid,
-                ),
-            )
-        else:
-            tool_msg = await handler(args, runtime, tid)
-            tool_messages.append(tool_msg)
+        )
 
-    result_dict: dict[str, Any] = {
-        "messages": tool_messages,
-        "_budget_forced": force_msg_sent or budget_forced,
+    result_dict: dict = {
+        "messages": tool_messages + forced_message,
+        "_budget_forced": True if forced_message else False,
+        "output_attempts": output_attempts,
     }
 
-    # --- Max attempts 尾部兜底 ---
-    new_output_attempts = state["output_attempts"] + len(output_tcs)
-    result_dict["output_attempts"] = new_output_attempts
-
-    if new_output_attempts >= ctx.max_output_attempts:
+    # max_output_attempts 兜底:OUTPUT 提交次数达上限时强制降级,避免无限循环
+    if output_attempts >= ctx.max_output_attempts:
         logger.warning(
             "expert.max_attempts_exceeded child=%s attempts=%d",
             ctx.child_user_id,
-            new_output_attempts,
+            output_attempts,
         )
         result_dict["structured_output"] = _build_degraded_output(
             crisis_detected_today=ctx.crisis_detected_today,
@@ -583,9 +586,10 @@ async def write_results(
         {"structured_output": output},供 ainvoke 最终结果回传。
     """
     output = state["structured_output"]
-    if output is not None:
-        ctx = runtime.context
-
+    ctx = runtime.context
+    if output is None:
+        logger.error("write_results 节点应包含 structured_output, sid=%s", ctx.session_id)
+    else:
         # 二层兜底:当日有 crisis 标记 → 覆写 overall_status 为 alert
         if ctx.crisis_detected_today and output.overall_status != DailyStatus.alert:
             output = output.model_copy(update={"overall_status": DailyStatus.alert})
@@ -600,8 +604,7 @@ async def write_results(
                 dimension_summary=ctx.dimension_summary,
             )
             await db.commit()
-
-    return {"structured_output": output}
+    return {}
 
 
 # ---------------------------------------------------------------------------

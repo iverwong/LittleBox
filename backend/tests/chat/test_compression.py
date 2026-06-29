@@ -10,35 +10,7 @@ from app.domain.chat.compression import (
     extract_compression_summary,
     split_for_compression,
 )
-from app.core.llm_extractors import extract_usage
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
-
-
-def _make_chunk(usage: dict | None = None) -> AIMessageChunk:
-    """构造一个携带 usage_metadata 的 AIMessageChunk。"""
-    return AIMessageChunk(content="", usage_metadata=usage)
-
-
-class TestExtractUsage:
-    """extract_usage 边界覆盖。"""
-
-    def test_usage_none(self):
-        assert extract_usage(_make_chunk(None)) is None
-
-    def test_usage_zero(self):
-        um = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-        got = extract_usage(_make_chunk(um))
-        assert got == um
-
-    def test_usage_typical(self):
-        um = {"input_tokens": 350, "output_tokens": 120, "total_tokens": 470}
-        got = extract_usage(_make_chunk(um))
-        assert got == um
-
-    def test_usage_large(self):
-        um = {"input_tokens": 300_000, "output_tokens": 200_001, "total_tokens": 500_001}
-        got = extract_usage(_make_chunk(um))
-        assert got == um
 
 
 class TestCompressionPrompt:

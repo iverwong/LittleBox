@@ -7,7 +7,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, ForeignKey, Index, Text, text
+from sqlalchemy import Boolean, Date, ForeignKey, Index, Text, func, text
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -108,6 +108,11 @@ class DailyReport(BaseMixin, Base):
         comment="True 表示降级产物(交卷耗尽 / token 超限),前端展示降级提示",
     )
     delivered_at: Mapped[Optional[datetime]] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True, comment="报告送达时间"
+    )
+    updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),
-        nullable=True,
+        nullable=False,
+        server_default=func.now(),
+        comment="日报更新时间，多次写入时该时间与 created_at 不一致",
     )
