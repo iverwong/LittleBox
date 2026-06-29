@@ -412,7 +412,7 @@ async def expert_tools(
 
     tool_messages: list[ToolMessage] = []
 
-    # CHECK 优先执行 data_tcs
+    # 优先执行 data_tcs
     for tc in data_tcs:
         name, args, tid = tc["name"], tc["args"], tc["id"]
         handler = EXPERT_TOOL_HANDLERS.get(name)
@@ -444,7 +444,7 @@ async def expert_tools(
             tool_msg = await handler(args, runtime, tid)
             tool_messages.append(tool_msg)
 
-    # CHECK 处理其他未定义工具
+    # 处理其他未定义工具
     for tc in other_tcs:
         name, tid = tc["name"], tc["id"]
         logger.warning("expert.undefined_tool_call name=%s", name)
@@ -458,7 +458,7 @@ async def expert_tools(
             )
         )
 
-    # CHECK 处理 OUTPUT
+    # 处理 OUTPUT
     output_attempts = state["output_attempts"]
     if len(last_ai.tool_calls) != 1 or len(output_tcs) != 1:
         for tc in output_tcs:
@@ -507,7 +507,7 @@ async def expert_tools(
             # 单 OUTPUT 校验通过:不发 ToolMessage,直接终止
             return {"structured_output": structured}
 
-    # CHECK 处理预算
+    # 处理预算
     forced_message = []
     if budget_exceeded and not budget_forced:
         forced_message.append(
@@ -523,7 +523,7 @@ async def expert_tools(
         "output_attempts": output_attempts,
     }
 
-    # CHECK max_output_attempts 兜底:OUTPUT 提交次数达上限时强制降级,避免无限循环
+    # max_output_attempts 兜底:OUTPUT 提交次数达上限时强制降级,避免无限循环
     if output_attempts >= ctx.max_output_attempts:
         logger.warning(
             "expert.max_attempts_exceeded child=%s attempts=%d",
