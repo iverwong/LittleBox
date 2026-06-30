@@ -859,7 +859,7 @@ class TestMaxIterTailFallback:
 class TestRouteAfterToolsShortCircuit:
     """C5 段:route_after_tools structured_output 短路,修复 [NOTE, OUTPUT] 回环。"""
 
-    def test_structured_output_short_circuits_to_write_results(self):
+    async def test_structured_output_short_circuits_to_write_results(self):
         from app.domain.audit.graph import route_after_tools
 
         # tool_iter_count < max_iter 但 structured_output 已设

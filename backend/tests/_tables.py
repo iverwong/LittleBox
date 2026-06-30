@@ -21,11 +21,12 @@ _GUARD_TABLES: list[str] = [
     "messages",
     "audit_records",
     "rolling_summaries",
+    "turn_summaries",
     "daily_reports",
     "notifications",
     "data_deletion_requests",
 ]
-"""全量 13 张业务表 — 任何「清理测试库 / 兜底 prod 库行数」的 fixture 都应引用此列表。
+"""全量 14 张业务表 — 任何「清理测试库 / 兜底 prod 库行数」的 fixture 都应引用此列表。
 
 历史教训(2026-06-24 调研):expert 域测试 `_TABLES` 漏掉 families + family_members,
 concurrent_db_sessions teardown TRUNCATE 不清这两张,11 个测试每个留 1 行污染。

@@ -105,12 +105,13 @@ async def _seed_crisis_anchor(seed_sess: AsyncSession, sid: uuid4) -> uuid4:
     await seed_sess.flush()
     anchor_id = msg.id
 
-    # Seed RollingSummary with crisis_locked_message_id
+    # Seed RollingSummary with crisis_locked_message_id(M11 后 turn_summaries 不再挂在
+    # RollingSummary 上,改为独立 turn_summaries 表,这里只 seed rolling 行本身)
     from datetime import datetime, timezone
     from sqlalchemy import text
     await seed_sess.execute(
-        text("INSERT INTO rolling_summaries (session_id, last_turn, crisis_locked_message_id, turn_summaries, session_notes, created_at) "
-             "VALUES (:sid, 1, :mid, '[]', '', :now)"),
+        text("INSERT INTO rolling_summaries (session_id, last_turn, crisis_locked_message_id, session_notes, created_at) "
+             "VALUES (:sid, 1, :mid, '', :now)"),
         {"sid": sid, "mid": anchor_id, "now": datetime.now(timezone.utc)},
     )
 

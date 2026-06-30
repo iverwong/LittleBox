@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from app.core.enums import DailyStatus
 from app.domain.expert.schemas import (
     ExpertReportSchema,
     FetchByRefInput,
     SearchHistoryInput,
+    SearchSourceType,
 )
 from pydantic import ValidationError
 
@@ -96,38 +99,120 @@ class TestSearchHistoryInput:
         s = SearchHistoryInput(keywords=["test"], source="turn_summary", context_chars=0)
         assert s.context_chars == 0
 
+    def test_keywords_strip_whitespace(self):
+        """keyword validator 应剥前后空白。"""
+        s = SearchHistoryInput(keywords=["  游戏  "], source="turn_summary")
+        assert s.keywords == ["游戏"]
+
+    def test_keywords_dedup_preserves_order(self):
+        """keyword validator 应按首次出现顺序去重。"""
+        s = SearchHistoryInput(
+            keywords=["游戏", "学校", "游戏", "学校"],
+            source="turn_summary",
+        )
+        assert s.keywords == ["游戏", "学校"]
+
+    def test_keywords_blank_string_raises(self):
+        """纯空白 keyword 应明确报"关键词不能为空或纯空白"。"""
+        with pytest.raises(ValidationError, match="不能为空或纯空白"):
+            SearchHistoryInput(keywords=["  "], source="turn_summary")
+
+    def test_keywords_mixed_blank_and_valid_raises(self):
+        """混杂空串的 keyword 应报错。"""
+        with pytest.raises(ValidationError):
+            SearchHistoryInput(keywords=["", "游戏"], source="turn_summary")
+
+    def test_keywords_pure_whitespace_after_valid_strip_short(self):
+        """剥后变短的 keyword 应报长度错误。"""
+        with pytest.raises(ValidationError, match="长度必须"):
+            SearchHistoryInput(keywords=["  a  "], source="turn_summary")
+
 
 class TestFetchByRefInput:
     """FetchByRefInput schema 校验测试。"""
 
-    def test_valid_turn_ref(self):
-        """有效的 turn 格式引用。"""
-        f = FetchByRefInput(ref="turn:00000000-0000-0000-0000-000000000001#3")
-        assert f.ref.startswith("turn:")
+    _REFS = {
+        "turn": uuid.UUID("00000000-0000-0000-0000-000000000001"),
+        "notes": uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        "report": uuid.UUID("00000000-0000-0000-0000-000000000003"),
+        "crisis": uuid.UUID("00000000-0000-0000-0000-000000000004"),
+    }
+
+    def test_valid_turn_summary(self):
+        """turn_summary + UUID ref 应通过。"""
+        f = FetchByRefInput(
+            search_source=SearchSourceType.TURN_SUMMARY,
+            ref=self._REFS["turn"],
+        )
+        assert f.ref == self._REFS["turn"]
         assert f.context_turns == 0
 
-    def test_valid_notes_ref(self):
-        """有效的 notes 格式引用。"""
-        f = FetchByRefInput(ref="notes:00000000-0000-0000-0000-000000000001")
-        assert f.ref == "notes:00000000-0000-0000-0000-000000000001"
+    def test_valid_crisis_topic(self):
+        """crisis_topic + UUID ref 应通过。"""
+        f = FetchByRefInput(
+            search_source=SearchSourceType.CRISIS_TOPIC,
+            ref=self._REFS["crisis"],
+            context_turns=2,
+        )
+        assert f.context_turns == 2
 
-    def test_valid_report_ref(self):
-        """有效的 report 格式引用。"""
-        f = FetchByRefInput(ref="report:00000000-0000-0000-0000-000000000001")
-        assert f.ref == "report:00000000-0000-0000-0000-000000000001"
+    def test_valid_session_notes(self):
+        f = FetchByRefInput(
+            search_source=SearchSourceType.SESSION_NOTES,
+            ref=self._REFS["notes"],
+        )
+
+    def test_valid_daily_report(self):
+        f = FetchByRefInput(
+            search_source=SearchSourceType.DAILY_REPORT,
+            ref=self._REFS["report"],
+        )
+
+    def test_search_source_required(self):
+        """search_source 缺失应报错。"""
+        with pytest.raises(ValidationError):
+            FetchByRefInput(ref=self._REFS["turn"])
+
+    def test_invalid_source_type(self):
+        """search_source 非法值应报错。"""
+        with pytest.raises(ValidationError):
+            FetchByRefInput(search_source="bogus", ref=self._REFS["turn"])
+
+    def test_ref_required(self):
+        """ref 缺失应报错。"""
+        with pytest.raises(ValidationError):
+            FetchByRefInput(search_source=SearchSourceType.DAILY_REPORT)
+
+    def test_ref_must_be_uuid(self):
+        """ref 必须为合法 UUID 字符串。"""
+        with pytest.raises(ValidationError):
+            FetchByRefInput(
+                search_source=SearchSourceType.DAILY_REPORT,
+                ref="not-a-uuid",
+            )
 
     def test_context_turns_bounds(self):
         """context_turns 超过 0-3 范围应报错。"""
-        valid_ref = "turn:00000000-0000-0000-0000-000000000001#1"
         with pytest.raises(ValidationError):
-            FetchByRefInput(ref=valid_ref, context_turns=-1)
+            FetchByRefInput(
+                search_source=SearchSourceType.TURN_SUMMARY,
+                ref=self._REFS["turn"],
+                context_turns=-1,
+            )
         with pytest.raises(ValidationError):
-            FetchByRefInput(ref=valid_ref, context_turns=4)
+            FetchByRefInput(
+                search_source=SearchSourceType.TURN_SUMMARY,
+                ref=self._REFS["turn"],
+                context_turns=4,
+            )
 
-    def test_empty_ref(self):
-        """空 ref 应报错。"""
-        with pytest.raises(ValidationError):
-            FetchByRefInput(ref="")
+    def test_context_turns_default_zero(self):
+        """context_turns 默认 0。"""
+        f = FetchByRefInput(
+            search_source=SearchSourceType.CRISIS_TOPIC,
+            ref=self._REFS["crisis"],
+        )
+        assert f.context_turns == 0
 
 
 class TestExpertReportSchema:
