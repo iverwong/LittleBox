@@ -7,57 +7,51 @@ LLM 工具入口用 `SearchHistoryInput` / `FetchByRefInput` 由 LangChain `bind
 
 from __future__ import annotations
 
-from datetime import date
-from typing import Literal, Optional
+from datetime import date, datetime
+from enum import StrEnum
+from typing import TypedDict
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.core.enums import DailyStatus
+from app.core.enums import DailyStatus, MessageRole
 
-EXPERT_SEARCH_SOURCE_VALUES: tuple[str, ...] = (
-    "turn_summary",
-    "session_notes",
-    "crisis_topic",
-    "daily_report",
-)
-"""Expert 工具支持的 4 类检索数据源(单源,见 SearchHistoryInput.source)。
 
-LLM 想要多源时调多次 SearchHistoryInput,每次一个 source。"""
+class SearchSourceType(StrEnum):
+    """Expert 工具检索数据源枚举。
+
+    由 ``SearchHistoryInput.source`` 与 ``FetchByRefInput.search_source`` 共同消费。
+    LLM 想多源检索时调多次 ``SearchHistoryInput``,每次传一个 source。
+    """
+
+    TURN_SUMMARY = "turn_summary"  # 历史轮次会话摘要(audit.TurnSummary 表)
+    SESSION_NOTES = "session_notes"  # 历史会话审查笔记(audit.RollingSummary.session_notes)
+    CRISIS_TOPIC = "crisis_topic"  # 历史轮次危机触发主题(audit.AuditRecord.crisis_topic)
+    DAILY_REPORT = "daily_report"  # 历史会话日终专家报告(expert.DailyReport)
 
 
 class SearchHistoryInput(BaseModel):
-    """检索历史数据(单源)。
+    """当现有信息无法支撑报告连续性和脉络完整性时调用。通过对指定来源进行检索，获取命中关键字的相关信息"""
 
-    Attributes:
-        keywords: 检索关键词列表,1-8 个,每词至少 2 字符(OR 匹配)。
-        source: 单源检索;多源请多次调用。4 类候选见 EXPERT_SEARCH_SOURCE_VALUES。
-        start_date: 检索范围起始日期(可选),默认 = end_date - 30 日。
-        end_date: 检索范围结束日期(可选),默认 = report_date - 1 日。
-        limit: 返回结果上限,1-50 条,默认 15。
-        context_chars: 长源开窗字符数,0-400,默认 80。仅对 session_notes /
-            daily_report 生效(以匹配位置为中心取前后 N 字符);短源
-            (turn_summary / crisis_topic)整段返回。
-    """
-
+    source: SearchSourceType = Field(
+        ...,
+        description="""搜索来源
+- turn_summary:历史轮次会话摘要
+- session_notes:历史会话审查笔记
+- crisis_topic:历史轮次危机触发主题
+- daily_report:历史会话日终专家报告
+        """,
+    )
     keywords: list[str] = Field(
         min_length=1,
         max_length=8,
-        description="检索关键词列表,1-8 个,每词至少 2 字符(OR 匹配)",
+        description="检索关键词列表,每词至少 2 字符(OR 匹配)",
     )
-    source: Literal[
-        "turn_summary",
-        "session_notes",
-        "crisis_topic",
-        "daily_report",
-    ] = Field(
-        ...,
-        description="搜索来源。turn_summary:历史轮次会话摘要;session_notes:历史审查笔记;crisis_topic:历史触发的危机主题;daily_report:历史日终专家报告",
-    )
-    start_date: Optional[date] = Field(
+    start_date: date | None = Field(
         default=None,
         description="检索范围起始日期(可选),默认 = end_date - 30 日",
     )
-    end_date: Optional[date] = Field(
+    end_date: date | None = Field(
         default=None,
         description="检索范围结束日期(可选),默认 = report_date - 1 日, 不得晚于 start_date 90 天",
     )
@@ -65,50 +59,73 @@ class SearchHistoryInput(BaseModel):
         default=20,
         ge=1,
         le=50,
-        description="返回结果上限,1-50 条,默认 20",
+        description="返回结果上限",
     )
     context_chars: int = Field(
         default=200,
         ge=0,
         le=400,
-        description="长源开窗字符数,0-400,默认 200",
+        description="长源开窗字符数,仅 session_notes, daily_report 有效",
     )
 
     @field_validator("keywords")
     @classmethod
     def _check_keyword_length(cls, v: list[str]) -> list[str]:
-        """校验每个关键词至少 2 字符。"""
-        for kw in v:
+        """关键字预处理:剔除空串 + 去前后空白 + 长度校验 + 去重。
+
+        Pydantic 校验顺序:
+        1. ``min_length=1`` / ``max_length=8`` 先抛 list 长度错误;
+        2. 本 validator 兜每条 entry 的字符级约束。
+        """
+        # 1. 过滤空串 / 纯空白条目,空字符串单独 raise(语义比"长度不足 2"更清晰)
+        cleaned: list[str] = []
+        for k in v:
+            if not isinstance(k, str):
+                raise ValueError(f"关键词必须为字符串,收到 {type(k).__name__}")
+            stripped = k.strip()
+            if not stripped:
+                raise ValueError("关键词不能为空或纯空白")
+            cleaned.append(stripped)
+        if not cleaned:
+            raise ValueError("keywords 不能为空")
+        # 2. 校验每个非空关键词至少 2 字符(在 stripped 后做,避免"  a"绕过)
+        for kw in cleaned:
             if len(kw) < 2:
                 raise ValueError(f"关键词长度必须 ≥2,收到 {kw!r}")
-        return v
+        # 3. 去重但保持首次出现顺序(``dict.fromkeys`` 语义)
+        return list(dict.fromkeys(cleaned))
 
 
 class FetchByRefInput(BaseModel):
-    """按引用键获取完整原文。
+    """当需要历史数据源完整信息时调用。按 ``(search_source, ref)`` 取完整原文。
 
-    ref 格式:
-    - `turn:{session_id}#{turn}`: 返回 turn_summary + human/ai 原文 + crisis 标记
-    - `notes:{session_id}`: 返回 session_notes 全文 + 元信息
-    - `report:{report_id}`: 返回结构化 daily_report dict
+    ``ref`` 为数据源主键的 UUID,与 ``search_source`` 一一对应:
+    - turn_summary → audit.TurnSummary.id
+    - session_notes → audit.RollingSummary.id
+    - crisis_topic → audit.AuditRecord.id
+    - daily_report → expert.DailyReport.id
 
-    Attributes:
-        ref: 引用键字符串,格式如 `turn:uuid#3` / `notes:uuid` / `report:uuid`。
-        context_turns: 仅对 `turn:` 类生效,展开前后各 N 轮原文,0-3,默认 0。
+    LLM 应先用 ``SearchHistoryInput`` 检索,从 ``MatchItem.ref`` 直接回带;
+    该键的物理含义对 LLM 透明,只需原样转发。
     """
 
-    ref: str = Field(
-        min_length=1,
-        description="""引用键字符串,格式:
-- turn:{session_id}#{turn}: 返回 turn_summary + human/ai 原文 + crisis 标记
-- notes:{session_id}: 返回 session_notes 全文 + 元信息
-- report:{report_id}: 返回结构化 daily_report dict""",
+    search_source: SearchSourceType = Field(
+        ...,
+        description="""引用来源
+- turn_summary, crisis_topic:获取检索结果中定位轮次的完整对话信息
+- session_notes:获取检索结果中定位会话的完整审查笔记信息
+- daily_report:获取检索结果中定位会话的完整日终专家报告
+""",
+    )
+    ref: UUID = Field(
+        ...,
+        description="数据源引用, 通过 SearchHistoryInput 检索后获取",
     )
     context_turns: int = Field(
         default=0,
         ge=0,
         le=3,
-        description="仅对 turn: 类生效,展开前后各 N 轮原文,0-3,默认 0",
+        description="仅对 turn_summary, crisis_topic 源生效,返回展开前后各 N 轮原文对话",
     )
 
 
@@ -174,3 +191,57 @@ class DailyDimensionSummary(BaseModel):
     peak: float = Field(ge=0, le=9)
     mean: float = Field(ge=0, le=9)
     high_ratio: float = Field(ge=0, le=1)
+
+
+class MatchItem(TypedDict):
+    """检索后匹配的数据
+    TypedDict
+    """
+
+    ref: UUID
+    source: SearchSourceType
+    snippet: str
+    occurred_at: datetime | None
+    locating: str
+
+
+class SearchResult(TypedDict):
+    """检索工具的返回结果
+    TypedDict
+    """
+
+    has_more: bool
+    match_list: list[MatchItem]
+
+
+class FetchMessageResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    session_id: UUID
+    turn_number: int
+    role: MessageRole
+    content: str
+    created_at: datetime
+
+
+class FetchRollingSummaryResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    session_id: UUID
+    session_notes: str | None
+    updated_at: datetime
+
+
+class FetchDailyReportResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    session_id: UUID
+    report_date: date
+    degraded: bool
+    overall_status: DailyStatus
+    today_overview: str
+    what_was_discussed: str
+    emotion_changes: str
+    noteworthy: str
+    suggestions: str
+    anomaly_periods: str

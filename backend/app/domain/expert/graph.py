@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from typing_extensions import TypedDict
 
 from app.core.enums import DailyStatus
+from app.domain.audit.models import TurnSummary
 from app.domain.expert.llm import build_expert_llm
 from app.domain.expert.prompts import (
     CrisisMarkerItem,
@@ -179,50 +180,56 @@ async def _fetch_today_materials(
 ) -> tuple[TodayRollingSummaryItem | None, CrisisMarkerItem | None]:
     """查今日对话材料:today_summary + crisis 标记。
 
+    三个查询在同一个短 DB session 块内顺序执行,worker 已锁定 1:1 invariant,
+    这里不再做会话存在性 / 时区窗口校验。
+
     Args:
         db_session_factory: DB 会话工厂。
         session_id: 今日 chat session ID。
 
     Returns:
-        (today_summary, crisis_marker) 元组。无数据时两个 list 都为空。
+        (today_summary, crisis_marker) 元组。无数据时两个字段都为 None。
     """
     from app.domain.audit.models import AuditRecord, RollingSummary
 
     async with db_session_factory() as db:
-        rs_row = (
-            await db.execute(
-                select(RollingSummary).where(
-                    RollingSummary.session_id == session_id,
-                )
+        rs_row = await db.scalar(
+            select(RollingSummary).where(
+                RollingSummary.session_id == session_id,
             )
-        ).scalar_one_or_none()
-        ar_row = (
-            await db.execute(
-                select(AuditRecord)
-                .where(AuditRecord.session_id == session_id, AuditRecord.crisis_detected.is_(True))
-                .order_by(AuditRecord.created_at)
-                .limit(1)
-            )
-        ).scalar_one_or_none()
+        )
+        # crisis marker 取首条:取最早一条 crisis 触发记录,LLM 视角足够呈现触发点;
+        # 后续 crisis 行由 rollingsummary.session_notes 跨轮承载。
+        ar_row = await db.scalar(
+            select(AuditRecord)
+            .where(AuditRecord.session_id == session_id, AuditRecord.crisis_detected.is_(True))
+            .order_by(AuditRecord.created_at)
+        )
+        # turn_summaries 按 created_at ASC 喂回 LLM(与对话正序对齐)
+        ts_row = await db.scalars(
+            select(TurnSummary)
+            .where(TurnSummary.session_id == session_id)
+            .order_by(TurnSummary.created_at)
+        )
 
     crisis_marker: CrisisMarkerItem | None = None
     today_summary: TodayRollingSummaryItem | None = None
 
     if rs_row:
         today_summary = TodayRollingSummaryItem(
-            session_id=str(rs_row.session_id),
+            session_id=rs_row.session_id,
             turn_summaries=[
                 TurnSummaryItem(
                     turn_number=entry.turn_number, summary=entry.summary, time=entry.created_at
                 )
-                for entry in (rs_row.turn_summaries or [])
+                for entry in (ts_row or [])
             ],
             session_notes=rs_row.session_notes or "",
         )
 
     if ar_row:
         crisis_marker = CrisisMarkerItem(
-            session_id=str(ar_row.session_id),
+            session_id=ar_row.session_id,
             turn_number=ar_row.turn_number,
             crisis_topic=ar_row.crisis_topic or "",
         )

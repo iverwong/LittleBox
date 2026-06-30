@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
-import uuid
 from datetime import date, datetime, time, timedelta
 from functools import wraps
 from typing import TYPE_CHECKING, Any
@@ -23,13 +21,13 @@ from app.core.time import SHANGHAI
 from app.domain.expert.repository import (
     fetch_notes,
     fetch_report,
-    fetch_turn,
+    fetch_turn_messages,
     search_crisis_topics,
     search_daily_reports,
     search_session_notes,
     search_turn_summaries,
 )
-from app.domain.expert.schemas import FetchByRefInput, SearchHistoryInput
+from app.domain.expert.schemas import FetchByRefInput, SearchHistoryInput, SearchSourceType
 
 if TYPE_CHECKING:
     from langgraph.runtime import Runtime
@@ -37,21 +35,6 @@ if TYPE_CHECKING:
     from app.domain.expert.context_schema import ExpertContextSchema
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# 常量
-# ---------------------------------------------------------------------------
-
-EXPERT_SEARCH_SOURCE_VALUES: tuple[str, ...] = (
-    "turn_summary",
-    "session_notes",
-    "crisis_topic",
-    "daily_report",
-)
-"""Expert 工具支持的 4 类检索数据源(仅作 Literal 候选)。
-
-LLM 工具入参 ``SearchHistoryInput.source`` 仅接受单值,多源需求由 LLM 多次调用覆盖。
-"""
 
 # ---------------------------------------------------------------------------
 # DB 异常装饰器
@@ -102,16 +85,6 @@ def _with_db_error_handling(handler):
 
 
 # ---------------------------------------------------------------------------
-# ref 正则
-# ---------------------------------------------------------------------------
-
-_REF_NAMED_PATTERN = re.compile(
-    r"^(?P<kind_turn>turn):(?P<sid>[0-9a-fA-F-]{36})#(?P<turn>\d+)$"
-    r"|^(?P<kind_notes>notes):(?P<nsid>[0-9a-fA-F-]{36})$"
-    r"|^(?P<kind_report>report):(?P<rid>[0-9a-fA-F-]{36})$",
-)
-
-# ---------------------------------------------------------------------------
 # 工具 handler
 # ---------------------------------------------------------------------------
 
@@ -149,15 +122,11 @@ async def _search_history(
         )
 
     ctx = runtime.context
-    child_user_id_str = str(ctx.child_user_id)
     report_date: date = ctx.report_date
 
     # ---- 2. 日期窗口 ----
     end_date: date = validated.end_date or (report_date - timedelta(days=1))
     start_date: date = validated.start_date or (end_date - timedelta(days=30))
-    # 转换为带时区的 datetime
-    end_dt = datetime.combine(end_date + timedelta(days=1), time.min, SHANGHAI)
-    start_dt = datetime.combine(start_date, time.min, SHANGHAI)
 
     if start_date > end_date:
         return ToolMessage(
@@ -190,73 +159,30 @@ async def _search_history(
     keywords = validated.keywords
     limit = validated.limit
     context_chars = validated.context_chars
-    # TODO 方法调用尚未改造完全，待DB排查完成后继续
-    results: list[dict[str, Any]] = []
+    # 转换为带时区的 datetime
+    end_dt = datetime.combine(end_date + timedelta(days=1), time.min, SHANGHAI)
+    start_dt = datetime.combine(start_date, time.min, SHANGHAI)
     async with ctx.db_session_factory() as db:
-        if source == "turn_summary":
-            results.extend(
-                await search_turn_summaries(
-                    db,
-                    child_user_id_str,
-                    keywords,
-                    start_dt,
-                    end_dt,
-                    limit,
-                    context_chars,
-                ),
+        if source == SearchSourceType.TURN_SUMMARY:
+            result = await search_turn_summaries(
+                db, ctx.child_user_id, keywords, start_dt, end_dt, limit
             )
-        elif source == "session_notes":
-            results.extend(
-                await search_session_notes(
-                    db,
-                    child_user_id_str,
-                    keywords,
-                    start_date,
-                    end_date,
-                    limit,
-                    context_chars,
-                ),
+        elif source == SearchSourceType.SESSION_NOTES:
+            result = await search_session_notes(
+                db, ctx.child_user_id, keywords, start_dt, end_dt, limit, context_chars
             )
-        elif source == "crisis_topic":
-            results.extend(
-                await search_crisis_topics(
-                    db,
-                    child_user_id_str,
-                    keywords,
-                    start_date,
-                    end_date,
-                    limit,
-                ),
+        elif source == SearchSourceType.CRISIS_TOPIC:
+            result = await search_crisis_topics(
+                db, ctx.child_user_id, keywords, start_dt, end_dt, limit
             )
-        elif source == "daily_report":
-            results.extend(
-                await search_daily_reports(
-                    db,
-                    child_user_id_str,
-                    keywords,
-                    start_date,
-                    end_date,
-                    limit,
-                    context_chars,
-                    exclude_report_date=report_date,
-                ),
+        elif source == SearchSourceType.DAILY_REPORT:
+            result = await search_daily_reports(
+                db, ctx.child_user_id, keywords, start_dt, end_dt, limit, context_chars
             )
-        else:
-            # schema Literal 已收口,此处仅为防御
-            return ToolMessage(
-                content=json.dumps(
-                    {"error": f"unknown source: {source}"},
-                    ensure_ascii=False,
-                ),
-                tool_call_id=tool_call_id,
-            )
-
-    # ---- 4. 截断 ----
-    results = results[:limit]
 
     return ToolMessage(
         content=json.dumps(
-            {"results": results, "total": len(results)},
+            result,
             ensure_ascii=False,
         ),
         tool_call_id=tool_call_id,
@@ -268,153 +194,67 @@ async def _fetch_by_ref(
     runtime: Runtime[ExpertContextSchema],
     tool_call_id: str,
 ) -> ToolMessage:
-    """按引用键获取完整原文。
+    """按 ``(search_source, ref)`` 取对应数据源的完整原文。
 
-    支持三种 ref 格式：
-    - turn:{session_id}#{turn}
-    - notes:{session_id}
-    - report:{report_id}
+    ``search_source`` 取自 ``SearchSourceType``;``ref`` 为该源主键的 UUID
+    (由 ``SearchHistoryInput`` 检索结果 ``MatchItem.ref`` 回带)。四种源:
+    - turn_summary / crisis_topic → ``fetch_turn_messages`` 取该轮所在上下文窗口
+    - session_notes → ``fetch_notes`` 取整段 notes
+    - daily_report → ``fetch_report`` 取整条 report
+
+    所有 fetch 均按 ``ctx.child_user_id`` 做行级 join,跨 child 取值会被滤掉。
     """
     # ---- 1. Pydantic 校验 ----
     try:
         validated = FetchByRefInput.model_validate(args)
     except ValidationError as exc:
+        payload = {
+            "error": "SearchHistoryInput args 校验失败，请按 schema 重发",
+            "validation_errors": [
+                {
+                    "loc": list(err["loc"]),
+                    "msg": err["msg"],
+                    "type": err["type"],
+                }
+                for err in exc.errors()
+            ],
+        }
         return ToolMessage(
-            content=json.dumps({"error": str(exc)}, ensure_ascii=False),
+            content=json.dumps(payload, ensure_ascii=False),
             tool_call_id=tool_call_id,
         )
 
-    # ---- 2. 正则解析 ref ----
     ref = validated.ref
-    match = _REF_NAMED_PATTERN.match(ref)
-    if not match:
-        return ToolMessage(
-            content=json.dumps(
-                {"error": f"invalid ref format: {ref}"},
-                ensure_ascii=False,
-            ),
-            tool_call_id=tool_call_id,
-        )
-
+    source = validated.search_source
     ctx = runtime.context
     context_turns = validated.context_turns
 
-    # ---- 3. 按 kind 调 repository ----
     async with ctx.db_session_factory() as db:
-        # turn:...
-        if match.group("kind_turn") is not None:
-            sid = match.group("sid")
-            turn_str = match.group("turn")
-            turn_number = int(turn_str)
-
-            # 所有权校验
-            try:
-                sid_uuid = uuid.UUID(sid)
-            except ValueError:
-                return ToolMessage(
-                    content=json.dumps(
-                        {"error": f"invalid session id format: {sid}"},
-                        ensure_ascii=False,
-                    ),
-                    tool_call_id=tool_call_id,
-                )
-            if sid_uuid not in ctx.owned_session_ids:
-                return ToolMessage(
-                    content=json.dumps(
-                        {"error": f"session {sid} not owned by child"},
-                        ensure_ascii=False,
-                    ),
-                    tool_call_id=tool_call_id,
-                )
-
-            bundle = await fetch_turn(db, sid, turn_number, context_turns)
-            if bundle is None:
-                return ToolMessage(
-                    content=json.dumps(
-                        {"error": f"turn {turn_number} in session {sid} not found"},
-                        ensure_ascii=False,
-                    ),
-                    tool_call_id=tool_call_id,
-                )
-
-        # notes:...
-        elif match.group("kind_notes") is not None:
-            sid = match.group("nsid")
-
-            # 所有权校验
-            try:
-                sid_uuid = uuid.UUID(sid)
-            except ValueError:
-                return ToolMessage(
-                    content=json.dumps(
-                        {"error": f"invalid session id format: {sid}"},
-                        ensure_ascii=False,
-                    ),
-                    tool_call_id=tool_call_id,
-                )
-            if sid_uuid not in ctx.owned_session_ids:
-                return ToolMessage(
-                    content=json.dumps(
-                        {"error": f"session {sid} not owned by child"},
-                        ensure_ascii=False,
-                    ),
-                    tool_call_id=tool_call_id,
-                )
-
-            bundle = await fetch_notes(db, sid)
-            if bundle is None:
-                return ToolMessage(
-                    content=json.dumps(
-                        {"error": f"notes for session {sid} not found"},
-                        ensure_ascii=False,
-                    ),
-                    tool_call_id=tool_call_id,
-                )
-
-        # report:...
-        elif match.group("kind_report") is not None:
-            rid = match.group("rid")
-            try:
-                bundle = await fetch_report(db, rid)
-            except ValueError as exc:
-                return ToolMessage(
-                    content=json.dumps(
-                        {"error": str(exc)},
-                        ensure_ascii=False,
-                    ),
-                    tool_call_id=tool_call_id,
-                )
-            if bundle is None:
-                return ToolMessage(
-                    content=json.dumps(
-                        {"error": f"report {rid} not found"},
-                        ensure_ascii=False,
-                    ),
-                    tool_call_id=tool_call_id,
-                )
-            # Owner check:report 必须属于 ctx.child_user_id
-            if bundle["child_user_id"] != str(ctx.child_user_id):
-                return ToolMessage(
-                    content=json.dumps(
-                        {"error": f"report {rid} not owned by child"},
-                        ensure_ascii=False,
-                    ),
-                    tool_call_id=tool_call_id,
-                )
-
+        if source == SearchSourceType.TURN_SUMMARY:
+            result = await fetch_turn_messages(db, ctx.child_user_id, source, ref, context_turns)
+        elif source == SearchSourceType.CRISIS_TOPIC:
+            result = await fetch_turn_messages(db, ctx.child_user_id, source, ref, context_turns)
+        elif source == SearchSourceType.SESSION_NOTES:
+            result = await fetch_notes(db, ctx.child_user_id, ref)
+        elif source == SearchSourceType.DAILY_REPORT:
+            result = await fetch_report(db, ctx.child_user_id, ref)
         else:
-            # 理论上不会走到这里（正则已校验）
+            # 防御性:SearchSourceType 已穷举,理论上不可达;保留以防 schema 扩展。
+            payload = {"error": "search_source 非法"}
             return ToolMessage(
-                content=json.dumps(
-                    {"error": f"unexpected ref kind in {ref}"},
-                    ensure_ascii=False,
-                ),
+                content=json.dumps(payload, ensure_ascii=False),
                 tool_call_id=tool_call_id,
             )
 
-    # ---- 4. 返回结果 ----
+    if result is None:
+        payload = {"error": "ref 参数有误或数据源无权限，请检查 ref 值"}
+        return ToolMessage(
+            content=json.dumps(payload, ensure_ascii=False),
+            tool_call_id=tool_call_id,
+        )
+
     return ToolMessage(
-        content=json.dumps(bundle, default=str, ensure_ascii=False),
+        content=result,
         tool_call_id=tool_call_id,
     )
 
