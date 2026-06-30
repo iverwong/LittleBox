@@ -7,7 +7,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, ForeignKey, Index, Text, func, text
+from sqlalchemy import Boolean, Date, ForeignKey, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -38,8 +38,9 @@ class DailyReport(BaseMixin, Base):
 
     __tablename__ = "daily_reports"
     __table_args__ = (
-        Index("idx_reports_child", "child_user_id", "report_date", unique=True),
-        Index("idx_reports_session", "session_id", unique=True),
+        UniqueConstraint(
+            "child_user_id", "report_date", name="uq_daily_reports_child_user_id_report_date"
+        ),
     )
 
     child_user_id: Mapped[uuid.UUID] = mapped_column(
@@ -50,6 +51,7 @@ class DailyReport(BaseMixin, Base):
     session_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("sessions.id", ondelete="CASCADE"),
+        unique=True,
         nullable=False,
         comment="锚定当日 chat session,删除 child 时级联清理",
     )
