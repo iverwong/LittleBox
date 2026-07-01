@@ -116,7 +116,7 @@ def _build_degraded_output(crisis_detected_today: bool = False) -> ExpertReportS
         各段内容填写降级说明的 ExpertReportSchema。
     """
     status = DailyStatus.alert if crisis_detected_today else DailyStatus.attention
-    msg = "报告生成降级：系统未能完成正常分析流程，请稍后重试或联系客服"
+    msg = "报告生成降级：系统未能完成正常分析流程，请稍后重试"
     return ExpertReportSchema(
         overall_status=status,
         degraded=True,
@@ -524,7 +524,7 @@ async def expert_tools(
             )
         )
 
-    result_dict: dict = {
+    result_dict = {
         "messages": tool_messages + forced_message,
         "_budget_forced": True if forced_message else False,
         "output_attempts": output_attempts,
@@ -563,7 +563,7 @@ def route_after_tools(
     Returns:
         "write_results" 或 "expert_llm_call"。
     """
-    if state.get("structured_output") is not None:
+    if state["structured_output"] is not None:
         return "write_results"
     return "expert_llm_call"
 

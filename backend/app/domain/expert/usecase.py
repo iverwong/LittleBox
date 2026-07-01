@@ -61,10 +61,12 @@ async def write_expert_results(
 
     stmt = insert(DailyReport).values(**insert_values)
 
+    # upsert 逻辑判断
     conflict_keys = {DailyReport.child_user_id.key, DailyReport.report_date.key}
     update_cols = {
         col: getattr(stmt.excluded, col) for col in insert_values if col not in conflict_keys
     }
+    # 更新 updated_at
     update_cols[DailyReport.updated_at.key] = func.now()
     # upsert
     stmt = stmt.on_conflict_do_update(

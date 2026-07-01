@@ -31,5 +31,8 @@ pgdata/
 # === Docker ===
 .dockerignore
 
-# ===superpowers===
+# === superpowers ===
 .superpowers
+
+# === ruff ===
+.ruff_cache
