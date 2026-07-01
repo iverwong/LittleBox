@@ -7,13 +7,13 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, Text, func, text
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base, BaseMixin
 from app.core.orm_types import PydanticJSONB
-from app.domain.audit.schemas import AuditDimensionScores, TurnSummaryEntry
+from app.domain.audit.schemas import AuditDimensionScores
 
 
 class AuditRecord(BaseMixin, Base):
@@ -33,7 +33,9 @@ class AuditRecord(BaseMixin, Base):
     """
 
     __tablename__ = "audit_records"
-    __table_args__ = (Index("idx_audit_session", "session_id", "turn_number"),)
+    __table_args__ = (
+        UniqueConstraint("session_id", "turn_number", name="uq_audit_records_session_turn"),
+    )
 
     session_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -80,9 +82,11 @@ class RollingSummary(BaseMixin, Base):
             session 内不可逆,仅开启新 session 可重置。
         session_notes: 风控视角的跨轮叙事笔记,审查 Agent 按固定骨架整段重写维护
             (话题脉络 / 风险观察 / 情绪走向 / 家长关注点回应)。不注入主 LLM。
-        turn_summaries: list[TurnSummaryEntry] JSON,每轮客观中立短摘要,
-            供主对话图超窗压缩时注入主 LLM。
         updated_at: 行更新时间。
+
+    注:历史版本在本表持有 ``turn_summaries`` JSONB 字段。M11 拆分后改由独立的
+    ``TurnSummary`` 表按 (session_id, turn_number) 存放每轮短摘要,便于 GIN 索引
+    与日终专家搜索原子命中单条记录;本类不再存该数据。
     """
 
     __tablename__ = "rolling_summaries"
@@ -101,23 +105,50 @@ class RollingSummary(BaseMixin, Base):
         "指向触发 crisis 的首条 ai_msg id;"
         "空=未锁定. session 内不可逆,仅开启新 session 可重置.",
     )
-    session_notes: Mapped[Optional[str]] = mapped_column(
+    session_notes: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         comment="风控视角的跨轮叙事笔记(TEXT),审查 Agent 按固定骨架整段重写维护:"
         "话题脉络 / 风险观察 / 情绪走向 / 家长关注点回应。"
         "供审查自身跨轮复用 + 日终专家生成家长报告;不注入主 LLM,避免风控判断泄漏",
     )
-    # TODO 这里要摊开建新表，优化写入，使用gin索引来优化查询
-    turn_summaries: Mapped[Optional[list[TurnSummaryEntry]]] = mapped_column(
-        PydanticJSONB(list[TurnSummaryEntry]),
-        nullable=True,
-        comment="list[TurnSummaryEntry] JSON:每轮客观中立短摘要(turn + summary);"
-        "供主对话图超窗压缩时注入主 LLM;"
-        "日终专家时序分析直接读 audit_records.dimension_scores 原始数据,更精细",
-    )
     updated_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True),
-        server_default=func.now(),
-        nullable=False,
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False, comment="更新时间"
     )
+
+
+class TurnSummary(BaseMixin, Base):
+    """轮次摘要表:每轮对话一条客观中立短摘要。
+
+    由 ``audit.usecase.write_audit_results`` 与 ``audit_records`` 同事务插入,
+    取代历史 ``RollingSummary.turn_summaries`` JSONB 字段。拆表动机:
+    - 行级 GIN trigram 索引覆盖关键词搜索,无需整 JSON 拉取
+    - 原子单条 upsert,审计回放 (session_id, turn_number) 冲突由 unique 守门
+
+    Attributes:
+        session_id: 被审查对话 session 的外键,on_delete=CASCADE。
+        turn_number: 对话轮次编号,与 ai_turn_counter 对齐。
+        summary: 单行客观中立摘要,≤100 字符。
+    """
+
+    __tablename__ = "turn_summaries"
+    __table_args__ = (
+        UniqueConstraint("session_id", "turn_number", name="uq_turn_summaries_session_turn"),
+        # GIN trigram 索引:支持 ILIKE '%kw%' 类搜索走索引(非全表扫描)
+        Index(
+            "idx_ts_summary_trgm",
+            "summary",
+            postgresql_using="gin",
+            postgresql_ops={"summary": "gin_trgm_ops"},
+        ),
+    )
+
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("sessions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    turn_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)

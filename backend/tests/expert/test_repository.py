@@ -8,28 +8,31 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 import pytest
 from app.core.enums import DailyStatus
+from app.core.time import SHANGHAI
 from app.domain.expert.repository import (
     _extract_snippet,
-    _match_matched,
     fetch_notes,
     fetch_report,
-    fetch_turn,
+    fetch_turn_messages,
     search_crisis_topics,
     search_daily_reports,
     search_session_notes,
     search_turn_summaries,
 )
+from app.domain.expert.schemas import SearchSourceType
 from sqlalchemy import text
 from tests._tables import _GUARD_TABLES as _TABLES
 
 # 注意：pytest.mark.asyncio 只在需要 async 的类上单独标注
 
 REPORT_DATE = date(2026, 6, 23)
-NOW = datetime.now(UTC)
+# 种子时间锚定到 REPORT_DATE(测试不依赖运行时时间):
+# 各会话 created_at 落在 [REPORT_DATE-2, REPORT_DATE-1),与 dt_window(2, 0) 对齐。
+NOW = datetime.combine(REPORT_DATE - timedelta(days=1), time(12, 0, 0), tzinfo=SHANGHAI)
 
 
 def _make_ids() -> dict:
@@ -37,14 +40,21 @@ def _make_ids() -> dict:
     return {
         "fam_id": f"{uuid.uuid4()}",
         "cid": f"{uuid.uuid4()}",
+        "other_cid": f"{uuid.uuid4()}",  # 跨 child 取值测试用
         "sid1": f"{uuid.uuid4()}",
         "sid2": f"{uuid.uuid4()}",
     }
 
 
 async def _seed_data(db, ids: dict):
-    """种子数据：family + user + 2 sessions + turn_summaries + notes + crisis + reports。"""
+    """种子数据：family + user + 2 sessions + turn_summaries + notes + crisis + reports。
+
+    turn_summaries 写入新拆出的 ``turn_summaries`` 表(取代旧的
+    ``rolling_summaries.turn_summaries`` JSONB 列);rolling_summaries 只放
+    last_turn + session_notes。
+    """
     fam_id, cid, sid1, sid2 = ids["fam_id"], ids["cid"], ids["sid1"], ids["sid2"]
+    other_cid = ids["other_cid"]
 
     await db.execute(
         text("INSERT INTO families (id) VALUES (:fam_id)"),
@@ -53,9 +63,10 @@ async def _seed_data(db, ids: dict):
     await db.execute(
         text("""
             INSERT INTO users (id, family_id, role, is_active)
-            VALUES (:cuid, :fam_id, 'child', true)
+            VALUES (:cuid, :fam_id, 'child', true),
+                   (:other_cid, :fam_id, 'child', true)
         """),
-        {"cuid": cid, "fam_id": fam_id},
+        {"cuid": cid, "other_cid": other_cid, "fam_id": fam_id},
     )
     await db.execute(
         text("""
@@ -83,41 +94,29 @@ async def _seed_data(db, ids: dict):
                 "now": NOW - timedelta(days=1),
             },
         )
-    turn_summaries_1 = json.dumps(
-        [
-            {
-                "turn_number": 1,
-                "summary": "今天在学校玩得很开心",
-                "created_at": "2026-06-26T00:00:00+00:00",
-            },
-            {
-                "turn_number": 2,
-                "summary": "讨论了下周末去哪里玩",
-                "created_at": "2026-06-26T00:00:01+00:00",
-            },
-        ]
-    )
-    turn_summaries_2 = json.dumps(
-        [
-            {
-                "turn_number": 1,
-                "summary": "今天有点不开心",
-                "created_at": "2026-06-26T00:00:00+00:00",
-            },
-        ]
-    )
+    # 旧 ``rolling_summaries.turn_summaries`` JSONB 已下线,改为向 turn_summaries 表写
+    for sid, turn, summary in [
+        (sid1, 1, "今天在学校玩得很开心"),
+        (sid1, 2, "讨论了下周末去哪里玩"),
+        (sid2, 1, "今天有点不开心"),
+    ]:
+        await db.execute(
+            text("""
+                INSERT INTO turn_summaries (session_id, turn_number, summary, created_at)
+                VALUES (:sid, :turn, :summary, :now)
+            """),
+            {"sid": sid, "turn": turn, "summary": summary, "now": NOW - timedelta(days=1)},
+        )
     await db.execute(
         text("""
             INSERT INTO rolling_summaries
-                (session_id, last_turn, turn_summaries, session_notes, updated_at)
-            VALUES (:sid1, 2, CAST(:ts1 AS jsonb), :notes1, :now),
-                   (:sid2, 1, CAST(:ts2 AS jsonb), :notes2, :now)
+                (session_id, last_turn, session_notes, updated_at)
+            VALUES (:sid1, 2, :notes1, :now),
+                   (:sid2, 1, :notes2, :now)
         """),
         {
             "sid1": sid1,
             "sid2": sid2,
-            "ts1": turn_summaries_1,
-            "ts2": turn_summaries_2,
             "notes1": "孩子今天聊了很多关于学校的事情",
             "notes2": "孩子今天情绪不太稳定",
             "now": NOW - timedelta(days=1),
@@ -143,12 +142,12 @@ async def _seed_data(db, ids: dict):
                 (child_user_id, session_id, report_date, overall_status,
                  today_overview, what_was_discussed, emotion_changes,
                  noteworthy, suggestions, anomaly_periods,
-                 created_at)
+                 created_at, updated_at)
             VALUES
                 (:cuid, :sid1, :rd1, :status1,
-                 :ov1, :wd1, :ec1, :nt1, :sg1, :ap1, :now1),
+                 :ov1, :wd1, :ec1, :nt1, :sg1, :ap1, :now1, :now1),
                 (:cuid, :sid2, :rd2, :status2,
-                 :ov2, :wd2, :ec2, :nt2, :sg2, :ap2, :now2)
+                 :ov2, :wd2, :ec2, :nt2, :sg2, :ap2, :now2, :now2)
         """),
         {
             "cuid": cid,
@@ -177,6 +176,20 @@ async def _seed_data(db, ids: dict):
     await db.commit()
 
 
+async def _seed_turn_summaries_for_session(db, sid: str, summaries: list[tuple[int, str]]):
+    """辅助:向指定 session 写 turn_summaries(测试 search_turn_summaries 用)。"""
+
+    for turn, summary in summaries:
+        await db.execute(
+            text("""
+                INSERT INTO turn_summaries (session_id, turn_number, summary, created_at)
+                VALUES (:sid, :turn, :summary, :now)
+            """),
+            {"sid": sid, "turn": turn, "summary": summary, "now": NOW - timedelta(hours=1)},
+        )
+    await db.commit()
+
+
 # ---------------------------------------------------------------------------
 # Helper tests
 # ---------------------------------------------------------------------------
@@ -184,14 +197,6 @@ async def _seed_data(db, ids: dict):
 
 class TestHelpers:
     """仓储层辅助函数测试。"""
-
-    def test_match_matched(self):
-        result = _match_matched("今天在学校玩游戏", ["游戏", "学校", "不存在的"])
-        assert result == ["游戏", "学校"]
-
-    def test_match_matched_dedup(self):
-        result = _match_matched("游戏，游戏", ["游戏", "游戏"])
-        assert result == ["游戏"]
 
     def test_extract_snippet_context_window(self):
         text_str = "a" * 50 + "关键字" + "b" * 50
@@ -216,6 +221,19 @@ class TestHelpers:
 
 
 # ---------------------------------------------------------------------------
+# 日期窗口 helper:供 search_* 测试统一构造 dt 范围
+# ---------------------------------------------------------------------------
+
+
+def _dt_window(start_days_ago: int, end_days_ago: int) -> tuple[datetime, datetime]:
+    """构造带 SHANGHAI 时区的窗口 [start_dt, end_dt)。"""
+
+    start = datetime.combine(REPORT_DATE - timedelta(days=start_days_ago), time.min, SHANGHAI)
+    end = datetime.combine(REPORT_DATE - timedelta(days=end_days_ago - 1), time.min, SHANGHAI)
+    return start, end
+
+
+# ---------------------------------------------------------------------------
 # Repository tests
 # ---------------------------------------------------------------------------
 
@@ -228,16 +246,54 @@ class TestSearchTurnSummaries:
         sessions = await concurrent_db_sessions(count=2, tables=_TABLES)
         ids = _make_ids()
         await _seed_data(sessions[0], ids)
+        start, end = _dt_window(2, 0)
         results = await search_turn_summaries(
             sessions[1],
-            ids["cid"],
+            uuid.UUID(ids["cid"]),
             [],
-            None,
-            None,
+            start,
+            end,
             10,
-            100,
         )
-        assert results == []
+        assert results == {"has_more": False, "match_list": []}
+
+    async def test_keyword_match_returns_rows(self, concurrent_db_sessions):
+        """关键词命中:返回 turn_summaries 行,ref=行 id。"""
+        sessions = await concurrent_db_sessions(count=2, tables=_TABLES)
+        ids = _make_ids()
+        await _seed_data(sessions[0], ids)
+        start, end = _dt_window(2, 0)
+        # 使用唯一关键词排除 sessions 注入了 OTHER 数据干扰
+        results = await search_turn_summaries(
+            sessions[1],
+            uuid.UUID(ids["cid"]),
+            ["学校"],
+            start,
+            end,
+            10,
+        )
+        assert results["has_more"] is False
+        assert len(results["match_list"]) == 1
+        item = results["match_list"][0]
+        assert item["source"] == SearchSourceType.TURN_SUMMARY
+        assert "学校" in item["snippet"]
+        assert "session:" in item["locating"]
+
+    async def test_other_child_is_filtered(self, concurrent_db_sessions):
+        """跨 child 取值应被滤掉。"""
+        sessions = await concurrent_db_sessions(count=2, tables=_TABLES)
+        ids = _make_ids()
+        await _seed_data(sessions[0], ids)
+        start, end = _dt_window(2, 0)
+        results = await search_turn_summaries(
+            sessions[1],
+            uuid.UUID(ids["other_cid"]),  # 不属于种子的 child
+            ["学校"],
+            start,
+            end,
+            10,
+        )
+        assert results["match_list"] == []
 
 
 @pytest.mark.asyncio
@@ -248,16 +304,51 @@ class TestSearchSessionNotes:
         sessions = await concurrent_db_sessions(count=2, tables=_TABLES)
         ids = _make_ids()
         await _seed_data(sessions[0], ids)
+        start, end = _dt_window(2, 0)
         results = await search_session_notes(
             sessions[1],
-            ids["cid"],
+            uuid.UUID(ids["cid"]),
             [],
-            None,
-            None,
+            start,
+            end,
             10,
             100,
         )
-        assert results == []
+        assert results == {"has_more": False, "match_list": []}
+
+    async def test_keyword_match(self, concurrent_db_sessions):
+        sessions = await concurrent_db_sessions(count=2, tables=_TABLES)
+        ids = _make_ids()
+        await _seed_data(sessions[0], ids)
+        start, end = _dt_window(2, 0)
+        results = await search_session_notes(
+            sessions[1],
+            uuid.UUID(ids["cid"]),
+            ["情绪"],
+            start,
+            end,
+            10,
+            100,
+        )
+        assert len(results["match_list"]) >= 1
+        item = results["match_list"][0]
+        assert item["source"] == SearchSourceType.SESSION_NOTES
+
+    async def test_other_child_is_filtered(self, concurrent_db_sessions):
+        sessions = await concurrent_db_sessions(count=2, tables=_TABLES)
+        ids = _make_ids()
+        await _seed_data(sessions[0], ids)
+        start, end = _dt_window(2, 0)
+        results = await search_session_notes(
+            sessions[1],
+            uuid.UUID(ids["other_cid"]),
+            ["情绪"],
+            start,
+            end,
+            10,
+            100,
+        )
+        assert results["match_list"] == []
 
 
 @pytest.mark.asyncio
@@ -268,15 +359,49 @@ class TestSearchCrisisTopics:
         sessions = await concurrent_db_sessions(count=2, tables=_TABLES)
         ids = _make_ids()
         await _seed_data(sessions[0], ids)
+        start, end = _dt_window(2, 0)
         results = await search_crisis_topics(
             sessions[1],
-            ids["cid"],
+            uuid.UUID(ids["cid"]),
             [],
-            None,
-            None,
+            start,
+            end,
             10,
         )
-        assert results == []
+        assert results == {"has_more": False, "match_list": []}
+
+    async def test_keyword_match(self, concurrent_db_sessions):
+        sessions = await concurrent_db_sessions(count=2, tables=_TABLES)
+        ids = _make_ids()
+        await _seed_data(sessions[0], ids)
+        start, end = _dt_window(2, 0)
+        results = await search_crisis_topics(
+            sessions[1],
+            uuid.UUID(ids["cid"]),
+            ["校园"],
+            start,
+            end,
+            10,
+        )
+        assert len(results["match_list"]) == 1
+        item = results["match_list"][0]
+        assert item["source"] == SearchSourceType.CRISIS_TOPIC
+        assert "校园" in item["snippet"]
+
+    async def test_other_child_is_filtered(self, concurrent_db_sessions):
+        sessions = await concurrent_db_sessions(count=2, tables=_TABLES)
+        ids = _make_ids()
+        await _seed_data(sessions[0], ids)
+        start, end = _dt_window(2, 0)
+        results = await search_crisis_topics(
+            sessions[1],
+            uuid.UUID(ids["other_cid"]),
+            ["校园"],
+            start,
+            end,
+            10,
+        )
+        assert results["match_list"] == []
 
 
 @pytest.mark.asyncio
@@ -287,67 +412,176 @@ class TestSearchDailyReports:
         sessions = await concurrent_db_sessions(count=2, tables=_TABLES)
         ids = _make_ids()
         await _seed_data(sessions[0], ids)
+        start, end = _dt_window(7, 0)
         results = await search_daily_reports(
             sessions[1],
-            ids["cid"],
+            uuid.UUID(ids["cid"]),
             [],
-            REPORT_DATE - timedelta(days=7),
-            REPORT_DATE,
+            start,
+            end,
             10,
             100,
         )
-        assert results == []
+        assert results == {"has_more": False, "match_list": []}
+
+    async def test_keyword_match(self, concurrent_db_sessions):
+        sessions = await concurrent_db_sessions(count=2, tables=_TABLES)
+        ids = _make_ids()
+        await _seed_data(sessions[0], ids)
+        start, end = _dt_window(7, 0)
+        results = await search_daily_reports(
+            sessions[1],
+            uuid.UUID(ids["cid"]),
+            ["焦虑"],
+            start,
+            end,
+            10,
+            100,
+        )
+        assert len(results["match_list"]) >= 1
+        item = results["match_list"][0]
+        assert item["source"] == SearchSourceType.DAILY_REPORT
+
+    async def test_other_child_is_filtered(self, concurrent_db_sessions):
+        sessions = await concurrent_db_sessions(count=2, tables=_TABLES)
+        ids = _make_ids()
+        await _seed_data(sessions[0], ids)
+        start, end = _dt_window(7, 0)
+        results = await search_daily_reports(
+            sessions[1],
+            uuid.UUID(ids["other_cid"]),
+            ["焦虑"],
+            start,
+            end,
+            10,
+            100,
+        )
+        assert results["match_list"] == []
 
 
 @pytest.mark.asyncio
-class TestFetchTurn:
-    """fetch_turn 查询测试。"""
+class TestFetchTurnMessages:
+    """fetch_turn_messages 查询测试。"""
 
-    async def test_fetch_existing_turn(self, concurrent_db_sessions):
+    async def _fetch_first_turn_summary_id(self, db, sid: str) -> str:
+        row = (
+            await db.execute(
+                text(
+                    "SELECT id FROM turn_summaries WHERE session_id = :sid ORDER BY turn_number LIMIT 1"
+                ),
+                {"sid": sid},
+            )
+        ).first()
+        assert row is not None
+        return str(row[0])
+
+    async def _fetch_first_crisis_record_id(self, db, sid: str) -> str:
+        row = (
+            await db.execute(
+                text(
+                    "SELECT id FROM audit_records WHERE session_id = :sid AND crisis_detected = true "
+                    "ORDER BY created_at LIMIT 1"
+                ),
+                {"sid": sid},
+            )
+        ).first()
+        assert row is not None
+        return str(row[0])
+
+    async def test_fetch_existing_turn_summary(self, concurrent_db_sessions):
         sessions = await concurrent_db_sessions(count=2, tables=_TABLES)
         ids = _make_ids()
         await _seed_data(sessions[0], ids)
-        bundle = await fetch_turn(sessions[1], ids["sid1"], 1, context_turns=0)
-        assert bundle is not None
-        assert bundle["turn_number"] == 1
-        assert bundle["turn_summary"] is not None
-        assert bundle["crisis_detected"] is True
+        ref = await self._fetch_first_turn_summary_id(sessions[1], ids["sid1"])
+        result = await fetch_turn_messages(
+            sessions[1],
+            uuid.UUID(ids["cid"]),
+            SearchSourceType.TURN_SUMMARY,
+            uuid.UUID(ref),
+            context_turns=0,
+        )
+        assert result is not None
+        messages = json.loads(result)
+        assert isinstance(messages, list)
+        assert len(messages) >= 1
 
-    async def test_fetch_non_existent_turn(self, concurrent_db_sessions):
+    async def test_fetch_existing_crisis_record(self, concurrent_db_sessions):
         sessions = await concurrent_db_sessions(count=2, tables=_TABLES)
         ids = _make_ids()
         await _seed_data(sessions[0], ids)
-        bundle = await fetch_turn(sessions[1], ids["sid1"], 999, context_turns=0)
-        assert bundle is not None
-        assert bundle["turn_summary"] is None
+        ref = await self._fetch_first_crisis_record_id(sessions[1], ids["sid1"])
+        result = await fetch_turn_messages(
+            sessions[1],
+            uuid.UUID(ids["cid"]),
+            SearchSourceType.CRISIS_TOPIC,
+            uuid.UUID(ref),
+            context_turns=0,
+        )
+        assert result is not None
+        messages = json.loads(result)
+        assert isinstance(messages, list)
+        assert len(messages) >= 1
 
-    async def test_fetch_non_existent_session(self, concurrent_db_sessions):
+    async def test_fetch_non_existent_ref(self, concurrent_db_sessions):
         sessions = await concurrent_db_sessions(count=2, tables=_TABLES)
         ids = _make_ids()
         await _seed_data(sessions[0], ids)
-        bad_sid = f"{uuid.uuid4()}"
-        bundle = await fetch_turn(sessions[1], bad_sid, 1, context_turns=0)
-        assert bundle is None
+        result = await fetch_turn_messages(
+            sessions[1],
+            uuid.UUID(ids["cid"]),
+            SearchSourceType.TURN_SUMMARY,
+            uuid.uuid4(),
+            context_turns=0,
+        )
+        assert result is None
 
 
 @pytest.mark.asyncio
 class TestFetchNotes:
     """fetch_notes 查询测试。"""
 
+    async def _fetch_first_rolling_summary_id(self, db, sid: str) -> str:
+        row = (
+            await db.execute(
+                text("SELECT id FROM rolling_summaries WHERE session_id = :sid"),
+                {"sid": sid},
+            )
+        ).first()
+        assert row is not None
+        return str(row[0])
+
     async def test_fetch_existing_notes(self, concurrent_db_sessions):
         sessions = await concurrent_db_sessions(count=2, tables=_TABLES)
         ids = _make_ids()
         await _seed_data(sessions[0], ids)
-        bundle = await fetch_notes(sessions[1], ids["sid1"])
+        rsid = await self._fetch_first_rolling_summary_id(sessions[1], ids["sid1"])
+        bundle = await fetch_notes(
+            sessions[1],
+            uuid.UUID(ids["cid"]),
+            uuid.UUID(rsid),
+        )
         assert bundle is not None
-        assert "session_notes" in bundle
+        payload = json.loads(bundle)
+        assert payload["session_notes"] == "孩子今天聊了很多关于学校的事情"
+
+    async def test_fetch_other_child_returns_none(self, concurrent_db_sessions):
+        """跨 child 取值被 join Session 滤掉,返回 None。"""
+        sessions = await concurrent_db_sessions(count=2, tables=_TABLES)
+        ids = _make_ids()
+        await _seed_data(sessions[0], ids)
+        rsid = await self._fetch_first_rolling_summary_id(sessions[1], ids["sid1"])
+        bundle = await fetch_notes(
+            sessions[1],
+            uuid.UUID(ids["other_cid"]),  # 非种子 child
+            uuid.UUID(rsid),
+        )
+        assert bundle is None
 
     async def test_fetch_non_existent(self, concurrent_db_sessions):
         sessions = await concurrent_db_sessions(count=2, tables=_TABLES)
         ids = _make_ids()
         await _seed_data(sessions[0], ids)
-        bad_sid = f"{uuid.uuid4()}"
-        bundle = await fetch_notes(sessions[1], bad_sid)
+        bundle = await fetch_notes(sessions[1], uuid.UUID(ids["cid"]), uuid.uuid4())
         assert bundle is None
 
 
@@ -360,25 +594,57 @@ class TestFetchReport:
         ids = _make_ids()
         await _seed_data(sessions[0], ids)
 
+        # 显式 ORDER BY 让结果集确定(sid1 先行)
         row = (
             await sessions[1].execute(
-                text("SELECT id FROM daily_reports WHERE child_user_id = :cuid LIMIT 1"),
+                text(
+                    "SELECT id FROM daily_reports WHERE child_user_id = :cuid "
+                    "ORDER BY created_at DESC LIMIT 1"
+                ),
                 {"cuid": ids["cid"]},
             )
-        ).one_or_none()
+        ).first()
         assert row is not None
+        rid = str(row[0])
 
-        bundle = await fetch_report(sessions[1], str(row[0]))
+        bundle = await fetch_report(
+            sessions[1],
+            uuid.UUID(ids["cid"]),
+            uuid.UUID(rid),
+        )
         assert bundle is not None
-        assert "id" in bundle
-        assert "today_overview" in bundle
-        assert "what_was_discussed" in bundle
-        assert "child_user_id" in bundle
+        payload = json.loads(bundle)
+        assert payload["today_overview"] == "平稳的一天"
+        assert payload["what_was_discussed"] == "玩了游戏"
+        assert "session_id" in payload
+
+    async def test_fetch_other_child_returns_none(self, concurrent_db_sessions):
+        sessions = await concurrent_db_sessions(count=2, tables=_TABLES)
+        ids = _make_ids()
+        await _seed_data(sessions[0], ids)
+
+        row = (
+            await sessions[1].execute(
+                text(
+                    "SELECT id FROM daily_reports WHERE child_user_id = :cuid "
+                    "ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"cuid": ids["cid"]},
+            )
+        ).first()
+        assert row is not None
+        rid = str(row[0])
+
+        bundle = await fetch_report(
+            sessions[1],
+            uuid.UUID(ids["other_cid"]),
+            uuid.UUID(rid),
+        )
+        assert bundle is None
 
     async def test_fetch_non_existent(self, concurrent_db_sessions):
         sessions = await concurrent_db_sessions(count=2, tables=_TABLES)
         ids = _make_ids()
         await _seed_data(sessions[0], ids)
-        bad_id = f"{uuid.uuid4()}"
-        bundle = await fetch_report(sessions[1], bad_id)
+        bundle = await fetch_report(sessions[1], uuid.UUID(ids["cid"]), uuid.uuid4())
         assert bundle is None

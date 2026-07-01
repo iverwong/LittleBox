@@ -32,6 +32,7 @@ class Session(BaseMixin, Base):
             text("id DESC"),
             postgresql_where=text("status = 'active'"),
         ),
+        Index("idx_sessions_created_at", "created_at"),
     )
 
     child_user_id: Mapped[uuid.UUID] = mapped_column(

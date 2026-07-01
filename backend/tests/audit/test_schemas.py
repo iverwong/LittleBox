@@ -38,63 +38,23 @@ class TestAuditDimensionScores:
 
 
 class TestTurnSummaryEntry:
-    """summary 长度 / created_at ISO-8601 格式。"""
+    """``TurnSummaryEntry`` 是历史 JSONB 列的临时 Pydantic 形态;M11 拆出独立
+    ``turn_summaries`` 表后,``created_at`` 由 ORM 行基混入派生,不再由 schema 验证。
+
+    此处保留 ``summary`` 长度兜底,M12 若评估可下线此类(Pydantic 形态将无对应数据)。
+    """
 
     def test_summary_max_length_ok(self):
-        s = TurnSummaryEntry(
-            turn_number=1,
-            summary="a" * 100,
-            created_at="2026-05-17T10:00:00+00:00",
-        )
+        s = TurnSummaryEntry(turn_number=1, summary="a" * 100)
         assert len(s.summary) == 100
 
     def test_summary_too_long(self):
         with pytest.raises(ValidationError):
-            TurnSummaryEntry(
-                turn_number=1,
-                summary="a" * 101,
-                created_at="2026-05-17T10:00:00+00:00",
-            )
+            TurnSummaryEntry(turn_number=1, summary="a" * 101)
 
     def test_summary_minimal(self):
-        s = TurnSummaryEntry(
-            turn_number=1,
-            summary="",
-            created_at="2026-05-17T10:00:00+00:00",
-        )
+        s = TurnSummaryEntry(turn_number=1, summary="")
         assert s.summary == ""
-
-    def test_created_at_valid_iso8601_zulu(self):
-        s = TurnSummaryEntry(
-            turn_number=1,
-            summary="ok",
-            created_at="2026-05-17T10:00:00Z",
-        )
-        assert "T" in s.created_at
-
-    def test_created_at_valid_iso8601_offset(self):
-        s = TurnSummaryEntry(
-            turn_number=1,
-            summary="ok",
-            created_at="2026-05-17T10:00:00+08:00",
-        )
-        assert "+" in s.created_at
-
-    def test_created_at_invalid_format(self):
-        with pytest.raises(ValidationError):
-            TurnSummaryEntry(
-                turn_number=1,
-                summary="ok",
-                created_at="not-a-date",
-            )
-
-    def test_created_at_empty_string(self):
-        with pytest.raises(ValidationError):
-            TurnSummaryEntry(
-                turn_number=1,
-                summary="ok",
-                created_at="",
-            )
 
 
 class TestAuditOutputSchema:

@@ -91,7 +91,7 @@ class TestWriteAuditResults:
         assert rs.session_notes == "用户今天情绪稳定。"
 
     async def test_second_update(self, db_session, sid):
-        """第二轮写入：UPDATE rolling_summaries（append turn_summary）。"""
+        """第二轮写入：UPDATE rolling_summaries + 追加 turn_summaries 行。"""
         output_2 = _BASE_OUTPUT.model_copy(update={"guidance_injection": "继续观察", "turn_summary": "社交增多"})
 
         await write_audit_results(db_session, str(sid), 1, _BASE_OUTPUT, "第一轮笔记", "第一轮摘要")
@@ -101,16 +101,25 @@ class TestWriteAuditResults:
 
         rs = (
             await db_session.execute(
-                text("SELECT last_turn, session_notes, turn_summaries FROM rolling_summaries WHERE session_id=:sid"),
+                text("SELECT last_turn, session_notes FROM rolling_summaries WHERE session_id=:sid"),
                 {"sid": sid},
             )
         ).fetchone()
         assert rs.last_turn == 2
         assert rs.session_notes == "第二轮笔记"
-        summaries = rs.turn_summaries
-        assert len(summaries) == 2
-        assert summaries[1]["turn_number"] == 2
-        assert summaries[1]["summary"] == "第二轮摘要"
+
+        # turn_summaries 已拆为独立表;按 turn_number 排序取 2 行
+        rows = (
+            await db_session.execute(
+                text(
+                    "SELECT turn_number, summary FROM turn_summaries "
+                    "WHERE session_id=:sid ORDER BY turn_number"
+                ),
+                {"sid": sid},
+            )
+        ).fetchall()
+        assert [r[0] for r in rows] == [1, 2]
+        assert rows[1][1] == "第二轮摘要"
 
     async def test_turn_rollback_rejected(self, db_session, sid, caplog):
         """回退防御：turn=5 写入后 turn=3 → WARN + 零净写入（连 audit_records 也不插）。"""

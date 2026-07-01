@@ -9,16 +9,20 @@ import json
 import uuid
 from datetime import date, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from app.core.time import SHANGHAI
 from app.domain.expert.context_schema import ExpertContextSchema
-from app.domain.expert.schemas import DailyDimensionSummary
+from app.domain.expert.schemas import DailyDimensionSummary, SearchSourceType
 from app.domain.expert.tools import EXPERT_TOOL_HANDLERS, _fetch_by_ref, _search_history
 
 CUID = uuid.uuid4()
 SID = uuid.uuid4()
+TURN_SUMMARY_REF = uuid.uuid4()
+CRISIS_RECORD_REF = uuid.uuid4()
+DAILY_REPORT_REF = uuid.uuid4()
+ROLLING_SUMMARY_REF = uuid.uuid4()
 REPORT_DATE = date(2026, 6, 23)
 
 
@@ -57,37 +61,39 @@ class TestSearchHistoryHandler:
     """_search_history 工具 handler 测试。"""
 
     async def test_valid_args_returns_toolmessage(self):
-        """有效入参应返回 ToolMessage。"""
+        """有效入参应返回 ToolMessage,内容含 has_more + match_list。"""
         runtime = _make_mock_runtime()
-        args = {"keywords": ["游戏"], "source": "turn_summary"}
+        args = {"keywords": ["游戏"], "source": SearchSourceType.TURN_SUMMARY.value}
 
         with patch(
             "app.domain.expert.tools.search_turn_summaries",
-            AsyncMock(return_value=[]),
+            AsyncMock(
+                return_value={"has_more": False, "match_list": []},
+            ),
         ) as mock_ts:
             result = await _search_history(args, runtime, "call-1")
 
         assert result.tool_call_id == "call-1"
         payload = json.loads(result.content)
-        assert "results" in payload
-        assert payload["total"] == 0
+        assert payload == {"has_more": False, "match_list": []}
         mock_ts.assert_awaited_once()
 
     async def test_invalid_args_returns_error(self):
         """入参校验失败应返回 error ToolMessage。"""
         runtime = _make_mock_runtime()
         # keywords 空列表 → ValidationError
-        args = {"keywords": [], "source": "turn_summary"}
+        args = {"keywords": [], "source": SearchSourceType.TURN_SUMMARY.value}
         result = await _search_history(args, runtime, "call-err")
         payload = json.loads(result.content)
         assert "error" in payload
+        assert "validation_errors" in payload
 
     async def test_start_date_after_end_date_returns_error(self):
         """start_date > end_date 应返回 error ToolMessage。"""
         runtime = _make_mock_runtime()
         args = {
             "keywords": ["游戏"],
-            "source": "turn_summary",
+            "source": SearchSourceType.TURN_SUMMARY.value,
             "start_date": "2026-06-25",
             "end_date": "2026-06-20",
         }
@@ -101,7 +107,7 @@ class TestSearchHistoryHandler:
         runtime = _make_mock_runtime()
         args = {
             "keywords": ["游戏"],
-            "source": "turn_summary",
+            "source": SearchSourceType.TURN_SUMMARY.value,
             "start_date": str(REPORT_DATE - timedelta(days=1)),
             "end_date": str(REPORT_DATE),
         }
@@ -113,7 +119,7 @@ class TestSearchHistoryHandler:
     async def test_keyword_validation_error(self):
         """单字符关键词应导致 Pydantic 校验失败。"""
         runtime = _make_mock_runtime()
-        args = {"keywords": ["a"], "source": "turn_summary"}
+        args = {"keywords": ["a"], "source": SearchSourceType.TURN_SUMMARY.value}
         result = await _search_history(args, runtime, "call-err")
         payload = json.loads(result.content)
         assert "error" in payload
@@ -121,20 +127,20 @@ class TestSearchHistoryHandler:
     async def test_source_filter(self):
         """source 单值应只调对应 repository 函数。"""
         runtime = _make_mock_runtime()
-        args = {"keywords": ["游戏"], "source": "turn_summary"}
+        args = {"keywords": ["游戏"], "source": SearchSourceType.TURN_SUMMARY.value}
 
         with (
             patch(
                 "app.domain.expert.tools.search_turn_summaries",
-                AsyncMock(return_value=[]),
+                AsyncMock(return_value={"has_more": False, "match_list": []}),
             ) as mock_ts,
             patch(
                 "app.domain.expert.tools.search_session_notes",
-                AsyncMock(return_value=[]),
+                AsyncMock(return_value={"has_more": False, "match_list": []}),
             ) as mock_sn,
             patch(
                 "app.domain.expert.tools.search_daily_reports",
-                AsyncMock(return_value=[]),
+                AsyncMock(return_value={"has_more": False, "match_list": []}),
             ) as mock_dr,
         ):
             await _search_history(args, runtime, "call-1")
@@ -143,136 +149,159 @@ class TestSearchHistoryHandler:
         mock_sn.assert_not_awaited()
         mock_dr.assert_not_awaited()
 
+    async def test_keyword_strips_whitespace_and_dedups(self):
+        """keyword validator 应 strip 空白 + 去重,但仍传入完整清理后的列表。"""
+        runtime = _make_mock_runtime()
+        args = {
+            "keywords": ["  游戏  ", "游戏", "学校"],
+            "source": SearchSourceType.TURN_SUMMARY.value,
+        }
+
+        with patch(
+            "app.domain.expert.tools.search_turn_summaries",
+            AsyncMock(return_value={"has_more": False, "match_list": []}),
+        ) as mock_ts:
+            await _search_history(args, runtime, "call-1")
+
+        # schema 校验后清掉空白 + dedupe → ["游戏", "学校"]
+        passed_keywords = mock_ts.await_args[0][2]
+        assert passed_keywords == ["游戏", "学校"]
+
 
 @pytest.mark.asyncio
 class TestFetchByRefHandler:
     """_fetch_by_ref 工具 handler 测试。"""
 
-    async def test_invalid_ref_format_returns_error(self):
-        """不合法 ref 格式应返回 error ToolMessage。"""
+    async def test_invalid_args_returns_error(self):
+        """search_source 缺失应触发 ValidationError。"""
         runtime = _make_mock_runtime()
-        args = {"ref": "invalid:ref:format"}
+        args = {"ref": str(ROLLING_SUMMARY_REF)}  # 缺 search_source
         result = await _fetch_by_ref(args, runtime, "call-err")
         payload = json.loads(result.content)
         assert "error" in payload
-        assert "invalid ref format" in payload["error"]
+        assert "validation_errors" in payload
 
-    async def test_turn_ref_ownership_check(self, monkeypatch):
-        """turn 引用中 session 不在 owned 列表应返回 error。"""
-        other_sid = uuid.uuid4()
-        args = {"ref": f"turn:{other_sid}#1"}
-        runtime = _make_mock_runtime(owned_session_ids=frozenset({uuid.uuid4()}))
-        result = await _fetch_by_ref(args, runtime, "call-err")
-        payload = json.loads(result.content)
-        assert "error" in payload
-        assert "not owned by child" in payload["error"]
-
-    async def test_notes_ref_ownership_check(self):
-        """notes 引用中 session 不在 owned 列表应返回 error。"""
-        other_sid = uuid.uuid4()
-        args = {"ref": f"notes:{other_sid}"}
-        runtime = _make_mock_runtime(owned_session_ids=frozenset({uuid.uuid4()}))
-        result = await _fetch_by_ref(args, runtime, "call-err")
-        payload = json.loads(result.content)
-        assert "error" in payload
-        assert "not owned by child" in payload["error"]
-
-    async def test_turn_not_found(self):
-        """turn 不存在应返回 error。"""
-        sid = uuid.uuid4()
-        args = {"ref": f"turn:{sid}#99"}
-        runtime = _make_mock_runtime(owned_session_ids=frozenset({sid}))
-        with patch("app.domain.expert.tools.fetch_turn", AsyncMock(return_value=None)):
-            result = await _fetch_by_ref(args, runtime, "call-err")
-
-        payload = json.loads(result.content)
-        assert "error" in payload
-        assert "not found" in payload["error"]
-
-    async def test_valid_turn_ref(self):
-        """有效 turn 引用应返回 bundle。"""
-        sid = uuid.uuid4()
-        bundle = {"session_id": str(sid), "turn_number": 3, "turn_summary": "test"}
-        args = {"ref": f"turn:{sid}#3"}
-        runtime = _make_mock_runtime(owned_session_ids=frozenset({sid}))
-        with patch("app.domain.expert.tools.fetch_turn", AsyncMock(return_value=bundle)):
-            result = await _fetch_by_ref(args, runtime, "call-ok")
-
-        payload = json.loads(result.content)
-        assert payload["session_id"] == str(sid)
-        assert payload["turn_number"] == 3
-
-    async def test_valid_notes_ref(self):
-        """有效 notes 引用应返回 bundle。"""
-        sid = uuid.uuid4()
-        bundle = {"session_id": str(sid), "session_notes": "test notes"}
-        args = {"ref": f"notes:{sid}"}
-        runtime = _make_mock_runtime(owned_session_ids=frozenset({sid}))
-        with patch("app.domain.expert.tools.fetch_notes", AsyncMock(return_value=bundle)):
-            result = await _fetch_by_ref(args, runtime, "call-ok")
-
-        payload = json.loads(result.content)
-        assert payload["session_id"] == str(sid)
-        assert "session_notes" in payload
-
-    async def test_valid_report_ref(self):
-        """有效 report 引用应返回 bundle。"""
-        rid = uuid.uuid4()
-        bundle = {
-            "id": str(rid),
-            "child_user_id": str(CUID),
-            "session_id": str(SID),
-            "report_date": "2026-06-22",
-            "today_overview": "平稳",
-            "what_was_discussed": "学校",
+    async def test_invalid_uuid_returns_error(self):
+        """ref 非 UUID 格式应触发 ValidationError。"""
+        runtime = _make_mock_runtime()
+        args = {
+            "search_source": SearchSourceType.SESSION_NOTES.value,
+            "ref": "not-a-uuid",
         }
-        args = {"ref": f"report:{rid}"}
-        runtime = _make_mock_runtime()
-        with patch("app.domain.expert.tools.fetch_report", AsyncMock(return_value=bundle)):
-            result = await _fetch_by_ref(args, runtime, "call-ok")
-
+        result = await _fetch_by_ref(args, runtime, "call-err")
         payload = json.loads(result.content)
-        assert payload["id"] == str(rid)
-        assert payload["today_overview"] == "平稳"
+        assert "error" in payload
 
-    async def test_report_not_found_returns_error(self):
-        """report 不存在时 fetch_report 返回 None,handler 转 error ToolMessage。"""
-        rid = uuid.uuid4()
-        args = {"ref": f"report:{rid}"}
+    async def test_turn_summary_routes_to_fetch_turn_messages(self):
+        """turn_summary → fetch_turn_messages。"""
         runtime = _make_mock_runtime()
+        args = {
+            "search_source": SearchSourceType.TURN_SUMMARY.value,
+            "ref": str(TURN_SUMMARY_REF),
+        }
+        with patch(
+            "app.domain.expert.tools.fetch_turn_messages",
+            new=AsyncMock(return_value="[]"),
+        ) as m_fetch_turn:
+            result = await _fetch_by_ref(args, runtime, "call-1")
+        assert result.tool_call_id == "call-1"
+        payload = json.loads(result.content)
+        assert payload == []
+        m_fetch_turn.assert_awaited_once_with(
+            ANY,
+            CUID,
+            SearchSourceType.TURN_SUMMARY,
+            TURN_SUMMARY_REF,
+            0,
+        )
+
+    async def test_crisis_topic_routes_to_fetch_turn_messages(self):
+        """crisis_topic → fetch_turn_messages。"""
+        runtime = _make_mock_runtime()
+        args = {
+            "search_source": SearchSourceType.CRISIS_TOPIC.value,
+            "ref": str(CRISIS_RECORD_REF),
+        }
+        with patch(
+            "app.domain.expert.tools.fetch_turn_messages",
+            AsyncMock(return_value="[]"),
+        ) as m_fetch:
+            result = await _fetch_by_ref(args, runtime, "call-1")
+        assert result.tool_call_id == "call-1"
+        m_fetch.assert_awaited_once()
+        assert m_fetch.await_args[0][2] == SearchSourceType.CRISIS_TOPIC
+
+    async def test_session_notes_routes_to_fetch_notes(self):
+        """session_notes → fetch_notes,ref 即 RollingSummary.id。"""
+        runtime = _make_mock_runtime()
+        args = {
+            "search_source": SearchSourceType.SESSION_NOTES.value,
+            "ref": str(ROLLING_SUMMARY_REF),
+        }
+        notes_payload = json.dumps(
+            {
+                "session_id": str(SID),
+                "session_notes": "情绪稳定",
+                "updated_at": "2026-06-22T00:00:00+00:00",
+            }
+        )
+        with patch(
+            "app.domain.expert.tools.fetch_notes",
+            AsyncMock(return_value=notes_payload),
+        ) as m_fetch_notes:
+            result = await _fetch_by_ref(args, runtime, "call-1")
+        assert result.content == notes_payload
+        m_fetch_notes.assert_awaited_once()
+        assert m_fetch_notes.await_args[0][1] == CUID
+        assert m_fetch_notes.await_args[0][2] == ROLLING_SUMMARY_REF
+
+    async def test_daily_report_routes_to_fetch_report(self):
+        """daily_report → fetch_report,ref 即 DailyReport.id。"""
+        runtime = _make_mock_runtime()
+        args = {
+            "search_source": SearchSourceType.DAILY_REPORT.value,
+            "ref": str(DAILY_REPORT_REF),
+        }
+        report_payload = json.dumps(
+            {
+                "session_id": str(SID),
+                "report_date": "2026-06-22",
+                "today_overview": "平稳",
+                "what_was_discussed": "学校",
+                "emotion_changes": "无",
+                "noteworthy": "无",
+                "suggestions": "保持",
+                "anomaly_periods": "无",
+                "overall_status": "stable",
+                "degraded": False,
+            }
+        )
+        with patch(
+            "app.domain.expert.tools.fetch_report",
+            AsyncMock(return_value=report_payload),
+        ) as m_fetch_report:
+            result = await _fetch_by_ref(args, runtime, "call-1")
+        assert result.content == report_payload
+        m_fetch_report.assert_awaited_once()
+        assert m_fetch_report.await_args[0][1] == CUID
+        assert m_fetch_report.await_args[0][2] == DAILY_REPORT_REF
+
+    async def test_repo_returns_none_yields_error_toolmessage(self):
+        """repository 返回 None 时,handler 应发 error ToolMessage(带 tool_call_id)。"""
+        runtime = _make_mock_runtime()
+        args = {
+            "search_source": SearchSourceType.DAILY_REPORT.value,
+            "ref": str(uuid.uuid4()),  # 不存在的 ref
+        }
         with patch(
             "app.domain.expert.tools.fetch_report",
             AsyncMock(return_value=None),
         ):
             result = await _fetch_by_ref(args, runtime, "call-err")
-
+        assert result.tool_call_id == "call-err"
         payload = json.loads(result.content)
         assert "error" in payload
-        assert "not found" in payload["error"]
-
-    async def test_fetch_by_ref_report_owner_mismatch(self):
-        """report 不属于 ctx.child_user_id 时应返 not owned by child。
-
-        准备 child A 的 report row,ctx.child_user_id 模拟 child B,验证 owner check 兜住。
-        """
-        rid = uuid.uuid4()
-        child_a_id = uuid.uuid4()
-        bundle = {
-            "id": str(rid),
-            "child_user_id": str(child_a_id),
-            "session_id": str(uuid.uuid4()),
-            "report_date": "2026-06-22",
-            "today_overview": "平稳",
-        }
-        args = {"ref": f"report:{rid}"}
-        # ctx 是 child B(CUID),report 属于 child A
-        runtime = _make_mock_runtime()
-        with patch("app.domain.expert.tools.fetch_report", AsyncMock(return_value=bundle)):
-            result = await _fetch_by_ref(args, runtime, "call-err")
-
-        payload = json.loads(result.content)
-        assert "error" in payload
-        assert "not owned by child" in payload["error"]
+        assert "ref 参数有误" in payload["error"]
 
 
 class TestExportedHandlers:

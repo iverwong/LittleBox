@@ -1,52 +1,35 @@
 """expert 域数据源仓储层：ORM 只读查询。
 
-7 个只读函数 + 2 个 helper，全部走 ORM（``select`` + ``.where()``）。
-仅在 PG 专有语法必需时（本文件当前无）用 ``text()``。
+7 个只读函数（4 个 search_* + 3 个 fetch_*）+ 3 个 helper，全部走 ORM
+（``select`` + ``.where()``）。仅在 PG 专有语法必需时（本文件当前无）用 ``text()``。
 
 表依赖（只读，不跨域 import ORM 模型）：
-- sessions (chat 域)
-- messages (chat 域)
-- rolling_summaries (audit 域)
-- audit_records (audit 域)
+- sessions / messages (chat 域)
+- rolling_summaries / turn_summaries / audit_records (audit 域)
 - daily_reports (expert 域)
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime
-from typing import Any
+from datetime import datetime
+from typing import Literal
+from uuid import UUID
 
-from sqlalchemy import any_, func, or_, select
+from pydantic import TypeAdapter
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.audit.schemas import TurnSummaryEntry
-
-# ---------------------------------------------------------------------------
-# 返回格式
-# ---------------------------------------------------------------------------
-
-SEARCH_RESULT_KEYS = {"ref", "source", "snippet", "occurred_at", "matched", "locating"}
-"""每次命中返回 dict 的标准 key 集合。"""
-
-
-def _make_result(
-    *,
-    ref: str,
-    source: str,
-    snippet: str,
-    occurred_at: str | None,
-    matched: list[str],
-    locating: str,
-) -> dict[str, Any]:
-    """组装一条标准搜索结果 dict。"""
-    return {
-        "ref": ref,
-        "source": source,
-        "snippet": snippet,
-        "occurred_at": occurred_at,
-        "matched": matched,
-        "locating": locating,
-    }
+from app.domain.audit.models import AuditRecord, RollingSummary, TurnSummary
+from app.domain.chat.models import Message, MessageRole, MessageStatus, Session
+from app.domain.expert.models import DailyReport
+from app.domain.expert.schemas import (
+    FetchDailyReportResult,
+    FetchMessageResult,
+    FetchRollingSummaryResult,
+    MatchItem,
+    SearchResult,
+    SearchSourceType,
+)
 
 
 def _escape_like(s: str) -> str:
@@ -149,21 +132,6 @@ async def _get_session_time_range(
     )
 
 
-def _match_matched(
-    text: str,
-    keywords: list[str],
-) -> list[str]:
-    """返回在 text 中命中的关键词列表（去重，按首次出现顺序）。"""
-    text_lower = text.lower()
-    seen: set[str] = set()
-    matched: list[str] = []
-    for kw in keywords:
-        if kw.lower() in text_lower and kw.lower() not in seen:
-            seen.add(kw.lower())
-            matched.append(kw)
-    return matched
-
-
 # ---------------------------------------------------------------------------
 # 主查询函数
 # ---------------------------------------------------------------------------
@@ -171,325 +139,281 @@ def _match_matched(
 
 async def search_turn_summaries(
     db: AsyncSession,
-    child_user_id: str,
+    child_user_id: UUID,
+    keywords: list[str],
+    start: datetime,
+    end: datetime,
+    limit: int,
+) -> SearchResult:
+    """对 audit 域 ``turn_summaries`` 表的 ``summary`` 列做关键词 OR 匹配。
+
+    策略:PG 端 ``ILIKE`` 利用 ``idx_ts_summary_trgm`` (GIN trigram) 走索引,
+    单条 ``TurnSummary`` 行直接产出 ``MatchItem``,不再像旧版从 JSONB 数组
+    遍历展开。短源整段返回。
+
+    Args:
+        db: 异步 DB session。
+        child_user_id: 孩子用户 UUID。
+        keywords: 关键词列表。
+        start: 带时区的起始日期（含）。
+        end: 带时区的结束日期（不含）。
+        limit: 返回结果上限。
+
+    Returns:
+        搜索结果 ``SearchResult`` (has_more + match_list)。
+    """
+    if not keywords:
+        return SearchResult(has_more=False, match_list=[])
+
+    from app.domain.audit.models import TurnSummary
+
+    stmt = (
+        select(TurnSummary)
+        .join(Session, Session.id == TurnSummary.session_id)
+        .where(
+            Session.child_user_id == child_user_id,
+            Session.created_at >= start,
+            Session.created_at < end,
+            or_(
+                *[
+                    TurnSummary.summary.ilike(f"%{_escape_like(kw)}%", escape="\\")
+                    for kw in keywords
+                ]
+            ),
+        )
+        .distinct()
+        .order_by(TurnSummary.created_at.desc())
+        .limit(limit + 1)
+    )
+    scalars = (await db.execute(stmt)).scalars()
+    match_list = [
+        MatchItem(
+            ref=scalar.id,
+            source=SearchSourceType.TURN_SUMMARY,
+            snippet=scalar.summary,
+            occurred_at=scalar.created_at,
+            locating=f"session: {scalar.session_id} turn: {scalar.turn_number}",
+        )
+        for scalar in scalars
+    ]
+    return SearchResult(has_more=len(match_list) > limit, match_list=match_list[:limit])
+
+
+async def search_session_notes(
+    db: AsyncSession,
+    child_user_id: UUID,
     keywords: list[str],
     start: datetime,
     end: datetime,
     limit: int,
     context_chars: int,
-) -> list[dict[str, Any]]:
-    """对 ``rolling_summaries.turn_summaries`` JSONB 做关键词 OR 匹配。
-
-    策略:ORM 拉取该 child + 日期窗口内所有含 turn_summaries 的行,
-    Python 端迭代 turn_summaries 数组、字符串匹配关键词。短源整段返回。
-    不跨域 Python import 触发,在函数体内 inline import RollingSummary / Session。
+) -> SearchResult:
+    """对 ``rolling_summaries.session_notes`` 做关键词 OR 匹配,每个 session 一条 MatchItem。
 
     Args:
         db: 异步 DB session。
-        child_user_id: 孩子用户 UUID 字符串。
+        child_user_id: 孩子用户 UUID。
         keywords: 关键词列表。
-        start: 起始日期（含）。
-        end: 结束日期（含）。
-        limit: 返回结果上限。
-        context_chars: 上下文窗口字符数（短源忽略）。
-
-    Returns:
-        搜索结果列表。
-    """
-    if not keywords:
-        return []
-
-    from app.domain.audit.models import RollingSummary
-    from app.domain.chat.models import Session
-
-    stmt = (
-        select(
-            RollingSummary.session_id,
-            RollingSummary.turn_summaries,
-            Session.created_at,
-        )
-        .join(Session, Session.id == RollingSummary.session_id)
-        .where(
-            Session.child_user_id == child_user_id,
-            RollingSummary.turn_summaries.isnot(None),
-            Session.created_at >= start,
-            Session.created_at < end,
-        )
-    )
-    rows = (await db.execute(stmt)).all()
-
-    results: list[dict[str, Any]] = []
-    for row in rows:
-        sid = str(row.session_id)
-        summaries: list[TurnSummaryEntry] = row.turn_summaries or []
-        for entry in summaries:
-            summary = entry.summary
-            if not summary:
-                continue
-            if not _match_matched(summary, keywords):
-                continue
-            turn_num = entry.turn_number
-            ref = f"turn:{sid}#{turn_num}"
-            results.append(
-                _make_result(
-                    ref=ref,
-                    source="turn_summary",
-                    snippet=summary,
-                    occurred_at=None,  # turn_summaries 无精确时间戳
-                    matched=_match_matched(summary, keywords),
-                    locating=f"session {sid} 第 {turn_num} 轮",
-                )
-            )
-            if len(results) >= limit:
-                return results
-    return results
-
-
-async def search_session_notes(
-    db: AsyncSession,
-    child_user_id: str,
-    keywords: list[str],
-    start: date | None,
-    end: date | None,
-    limit: int,
-    context_chars: int,
-) -> list[dict[str, Any]]:
-    """对 ``rolling_summaries.session_notes`` 做关键词 OR 匹配。
-
-    Args:
-        db: 异步 DB session。
-        child_user_id: 孩子用户 UUID 字符串。
-        keywords: 关键词列表。
-        start: 起始日期（含）。
-        end: 结束日期（含）。
+        start: 带时区的起始日期（含）。
+        end: 带时区的结束日期（不含）。
         limit: 返回结果上限。
         context_chars: 上下文窗口字符数（_extract_snippet 使用）。
 
     Returns:
-        搜索结果列表。
+        搜索结果 ``SearchResult``。
     """
     if not keywords:
-        return []
+        return SearchResult(has_more=False, match_list=[])
 
     from app.domain.audit.models import RollingSummary
-    from app.domain.chat.models import Session
 
     stmt = (
-        select(
-            RollingSummary.session_id,
-            RollingSummary.session_notes,
-            RollingSummary.updated_at,
-            Session.created_at,
-        )
+        select(RollingSummary)
         .join(Session, Session.id == RollingSummary.session_id)
         .where(
             Session.child_user_id == child_user_id,
-            RollingSummary.session_notes.isnot(None),
-            RollingSummary.session_notes != "",
-            or_(start is None, Session.created_at >= start),  # type: ignore[arg-type]
-            or_(end is None, Session.created_at <= end),  # type: ignore[arg-type]
+            Session.created_at >= start,
+            Session.created_at < end,
+            or_(
+                *[
+                    RollingSummary.session_notes.ilike(f"%{_escape_like(kw)}%", escape="\\")
+                    for kw in keywords
+                ]
+            ),
         )
-        .order_by(Session.created_at.desc())
+        .distinct()
+        .order_by(RollingSummary.created_at.desc())
+        .limit(limit + 1)
     )
-    rows = (await db.execute(stmt)).all()
-
-    results: list[dict[str, Any]] = []
-    for row in rows:
-        sid = str(row.session_id)
-        notes: str = row.session_notes or ""
-        if not _match_matched(notes, keywords):
-            continue
-        snippet = _extract_snippet(notes, keywords, context_chars)
-        matched = _match_matched(notes, keywords)
-        time_range = await _get_session_time_range(db, sid)
-        locating_parts = [f"session {sid}"]
-        if time_range:
-            locating_parts.append(time_range)
-        results.append(
-            _make_result(
-                ref=f"notes:{sid}",
-                source="session_notes",
-                snippet=snippet,
-                occurred_at=str(row.updated_at) if row.updated_at else None,
-                matched=matched,
-                locating="; ".join(locating_parts),
-            )
+    scalars = (await db.execute(stmt)).scalars()
+    match_list = [
+        MatchItem(
+            ref=scalar.id,
+            source=SearchSourceType.SESSION_NOTES,
+            snippet=_extract_snippet(scalar.session_notes or "", keywords, context_chars),
+            occurred_at=scalar.updated_at,
+            locating=f"session: {scalar.session_id}",
         )
-        if len(results) >= limit:
-            return results
-    return results
+        for scalar in scalars
+    ]
+    return SearchResult(has_more=len(match_list) > limit, match_list=match_list[:limit])
 
 
 async def search_crisis_topics(
     db: AsyncSession,
-    child_user_id: str,
+    child_user_id: UUID,
     keywords: list[str],
-    start: date | None,
-    end: date | None,
+    start: datetime,
+    end: datetime,
     limit: int,
-) -> list[dict[str, Any]]:
-    """对 ``audit_records.crisis_topic`` 做关键词 OR 匹配。
+) -> SearchResult:
+    """对 ``audit_records.crisis_topic`` 做关键词 OR 匹配,每条 crisis 记录一条 MatchItem。
 
     Args:
         db: 异步 DB session。
-        child_user_id: 孩子用户 UUID 字符串。
+        child_user_id: 孩子用户 UUID。
         keywords: 关键词列表。
-        start: 起始日期（含）。
-        end: 结束日期（含）。
+        start: 带时区的起始日期（含）。
+        end: 带时区的结束日期（不含）。
         limit: 返回结果上限。
 
     Returns:
-        搜索结果列表。
+        搜索结果 ``SearchResult``。
     """
     if not keywords:
-        return []
-
-    from app.domain.audit.models import AuditRecord
-    from app.domain.chat.models import Session
+        return SearchResult(has_more=False, match_list=[])
 
     stmt = (
-        select(
-            AuditRecord.session_id,
-            AuditRecord.turn_number,
-            AuditRecord.crisis_topic,
-            AuditRecord.created_at,
-        )
+        select(AuditRecord)
         .join(Session, Session.id == AuditRecord.session_id)
         .where(
             Session.child_user_id == child_user_id,
-            AuditRecord.crisis_detected.is_(True),
+            Session.created_at >= start,
+            Session.created_at < end,
             AuditRecord.crisis_topic.isnot(None),
-            or_(start is None, AuditRecord.created_at >= start),  # type: ignore[arg-type]
-            or_(end is None, AuditRecord.created_at <= end),  # type: ignore[arg-type]
+            or_(
+                *[
+                    AuditRecord.crisis_topic.ilike(f"%{_escape_like(kw)}%", escape="\\")
+                    for kw in keywords
+                ]
+            ),
         )
+        .distinct()
         .order_by(AuditRecord.created_at.desc())
+        .limit(limit + 1)
     )
-    rows = (await db.execute(stmt)).all()
-
-    results: list[dict[str, Any]] = []
-    for row in rows:
-        sid = str(row.session_id)
-        topic: str = row.crisis_topic or ""
-        if not _match_matched(topic, keywords):
-            continue
-        matched = _match_matched(topic, keywords)
-        results.append(
-            _make_result(
-                ref=f"turn:{sid}#{row.turn_number}",
-                source="crisis_topic",
-                snippet=topic,
-                occurred_at=str(row.created_at) if row.created_at else None,
-                matched=matched,
-                locating=f"session {sid} 第 {row.turn_number} 轮（危机）",
-            )
+    scalars = (await db.execute(stmt)).scalars()
+    match_list = [
+        MatchItem(
+            ref=scalar.id,
+            source=SearchSourceType.CRISIS_TOPIC,
+            snippet=scalar.crisis_topic or "",
+            occurred_at=scalar.created_at,
+            locating=f"session: {scalar.session_id} turn: {scalar.turn_number}",
         )
-        if len(results) >= limit:
-            return results
-    return results
+        for scalar in scalars
+    ]
+    return SearchResult(has_more=len(match_list) > limit, match_list=match_list[:limit])
 
 
 # ---------------------------------------------------------------------------
 # DailyReport 6 列搜索:每行展开为 1..6 条 result(每列命中各一份)
 # ---------------------------------------------------------------------------
 
-SIX_SECTIONS: tuple[str, ...] = (
-    "today_overview",
-    "what_was_discussed",
-    "emotion_changes",
-    "noteworthy",
-    "suggestions",
-    "anomaly_periods",
+SIX_SECTIONS = (
+    DailyReport.today_overview,
+    DailyReport.what_was_discussed,
+    DailyReport.emotion_changes,
+    DailyReport.noteworthy,
+    DailyReport.suggestions,
+    DailyReport.anomaly_periods,
 )
 """daily_reports 的 6 段文本列名(与模型同序)。"""
 
 
 async def search_daily_reports(
     db: AsyncSession,
-    child_user_id: str,
+    child_user_id: UUID,
     keywords: list[str],
-    start_date: date | None,
-    end_date: date | None,
+    start_date: datetime,
+    end_date: datetime,
     limit: int,
     context_chars: int,
-    exclude_report_date: date | None = None,
-) -> list[dict[str, Any]]:
-    """跨 daily_reports 6 段文本列做 OR 匹配,每行展开为 1..6 条 result。
+) -> SearchResult:
+    """跨 daily_reports 6 段文本列做 OR 匹配,每条命中的 report 产生 1 条 MatchItem。
 
-    每行最多 6 条 result(对应 6 个命中列各出一份);实际返回总数可能 > limit。
-    ``limit`` 为行级上限(SQL ``LIMIT N``),展开后 ``total`` 可能 > ``limit``。
-    ``locating`` 字段标记命中的段名,LLM 可见结构。
+    行为变更(M11):旧版本按"每行 × 每命中列"展开为 1..6 条 result;
+    现版本合并 6 段为单一 full_text 后取一次 snippet,既保留跨段语境,
+    又把 LLM 可见结果数控制为"每日报 ≤ 1 条",避免重复刷屏。
+
+    当日 report 的排斥由调用方通过 ``start_date`` / ``end_date`` 窗口收紧来保证
+    (end_date 默认 = report_date - 1 日)。本函数不再单独接受 ``exclude_report_date``
+    参数(若产品后续要排除,沿用窗口过滤即可,无需新增签名)。
 
     Args:
         db: 异步 DB session。
-        child_user_id: 孩子用户 UUID 字符串。
+        child_user_id: 孩子用户 UUID。
         keywords: 关键词列表。
-        start_date: 起始日期（含）。
-        end_date: 结束日期（含）。
+        start_date: 带时区的起始日期（含）。
+        end_date: 带时区的结束日期（不含）。
         limit: 返回结果行级上限。
         context_chars: 上下文窗口字符数。
-        exclude_report_date: 排除的报告日期（通常是当天正在生成的报告日期）。
 
     Returns:
-        搜索结果列表,每行 1..6 条。
+        搜索结果 ``SearchResult``,每条命中的 daily_report 1 条 MatchItem。
     """
     if not keywords:
-        return []
-
-    from app.domain.expert.models import DailyReport
-
-    kw_patterns: list[str] = [f"%{_escape_like(kw)}%" for kw in keywords]
-    kw_array_expr: Any = func.array(kw_patterns)  # ARRAY[TEXT] 推导
-    sect_attrs = [getattr(DailyReport, c) for c in SIX_SECTIONS]
+        return SearchResult(has_more=False, match_list=[])
 
     stmt = (
-        select(
-            DailyReport.id,
-            DailyReport.report_date,
-            DailyReport.created_at,
-            DailyReport.today_overview,
-            DailyReport.what_was_discussed,
-            DailyReport.emotion_changes,
-            DailyReport.noteworthy,
-            DailyReport.suggestions,
-            DailyReport.anomaly_periods,
-        )
+        select(DailyReport)
         .where(
             DailyReport.child_user_id == child_user_id,
-            or_(start_date is None, DailyReport.report_date >= start_date),  # type: ignore[arg-type]
-            or_(end_date is None, DailyReport.report_date <= end_date),  # type: ignore[arg-type]
+            DailyReport.report_date >= start_date,
+            DailyReport.report_date < end_date,
             or_(
-                exclude_report_date is None,  # type: ignore[arg-type]
-                DailyReport.report_date != exclude_report_date,
-            ),
-            or_(
-                *[attr.ilike(any_(kw_array_expr), escape="\\") for attr in sect_attrs],
+                *[
+                    col.ilike(f"%{_escape_like(kw)}%", escape="\\")
+                    for kw in keywords
+                    for col in SIX_SECTIONS
+                ],
             ),
         )
+        .distinct()
         .order_by(DailyReport.report_date.desc())
-        .limit(limit)  # 行级 limit,每行最多 6 条 result
+        .limit(limit + 1)
     )
-    rows = (await db.execute(stmt)).all()
+    scalars = (await db.execute(stmt)).scalars()
+    match_list: list[MatchItem] = []
+    for scalar in scalars:
+        full_text = f"""\
+# 今日概览
+{scalar.today_overview}
 
-    results: list[dict[str, Any]] = []
-    for row in rows:
-        rid = str(row.id)
-        report_date_str = str(row.report_date)
-        for col in SIX_SECTIONS:
-            val: str = getattr(row, col) or ""
-            if not _match_matched(val, keywords):
-                continue
-            snippet = _extract_snippet(val, keywords, context_chars)
-            results.append(
-                _make_result(
-                    ref=f"report:{rid}",
-                    source="daily_report",
-                    snippet=snippet,
-                    occurred_at=str(row.created_at) if row.created_at else None,
-                    matched=_match_matched(val, keywords),
-                    locating=f"日报 {report_date_str} {col} 段",
-                )
+# 聊了什么
+{scalar.what_was_discussed}
+
+# 情绪变化
+{scalar.emotion_changes}
+
+# 值得关注
+{scalar.noteworthy}
+
+# 具体建议
+{scalar.suggestions}
+
+# 异常时段标注
+{scalar.anomaly_periods}"""
+        match_list.append(
+            MatchItem(
+                ref=scalar.id,
+                source=SearchSourceType.DAILY_REPORT,
+                snippet=_extract_snippet(full_text, keywords, context_chars),
+                occurred_at=scalar.updated_at,
+                locating=f"session: {scalar.session_id}",
             )
-    return results
+        )
+    return SearchResult(has_more=len(match_list) > limit, match_list=match_list[:limit])
 
 
 # ---------------------------------------------------------------------------
@@ -497,175 +421,124 @@ async def search_daily_reports(
 # ---------------------------------------------------------------------------
 
 
-async def fetch_turn(
+async def fetch_turn_messages(
     db: AsyncSession,
-    session_id: str,
-    turn_number: int,
+    child_user_id: UUID,
+    source: Literal[SearchSourceType.TURN_SUMMARY, SearchSourceType.CRISIS_TOPIC],
+    ref: UUID,
     context_turns: int = 0,
-) -> dict[str, Any] | None:
-    """返回 turn_summary + human/ai 消息 + crisis 标记。
-
-    以目标 turn 为中心，展开前后 context_turns 轮的消息原文。
+) -> str | None:
+    """按 ``(source, ref)`` 取目标轮所在上下文窗口内的 human/ai 消息原文。
 
     Args:
         db: 异步 DB session。
-        session_id: session UUID 字符串。
-        turn_number: 目标轮次编号。
-        context_turns: 展开前后各 N 轮（0-3）。
+        child_user_id: 孩子用户 UUID。messages 查询 join Session 二次过滤,
+            防止 ref 指向被另一 child 共享的(理论上不可能但防御)session。
+        source: ``SearchSourceType.TURN_SUMMARY`` 或 ``SearchSourceType.CRISIS_TOPIC``;
+            二者均产出 ``(session_id, turn_number)`` 锚点。
+        ref: 该锚点行主键 UUID。
+        context_turns: 上下展轮数 (0-3)。
 
     Returns:
-        包含 turn_summary、messages、crisis 标记的 dict；若不存在则返回 None。
+        ``list[FetchMessageResult]`` 的 JSON 字符串(便于直接喂回 LLM tool result)。
+        ref 找不到对应行 → None;跨 child 取值时,messages JOIN 把所有消息滤空,
+        返回 ``"[]"``(不返回 None,但内容空,不构成信息泄漏)。
     """
-    from app.domain.audit.models import AuditRecord, RollingSummary
-    from app.domain.chat.models import Message
 
-    # 1. 获取 turn_summary
-    ts_row = (
-        (await db.execute(select(RollingSummary).where(RollingSummary.session_id == session_id)))
-        .scalars()
-        .first()
-    )
-    if ts_row is None:
+    if source == SearchSourceType.TURN_SUMMARY:
+        scalar = await db.get(TurnSummary, ref)
+    elif source == SearchSourceType.CRISIS_TOPIC:
+        scalar = await db.get(AuditRecord, ref)
+
+    if scalar is None:
         return None
 
-    turn_summary: str | None = None
-    summaries = ts_row.turn_summaries
-    if summaries:
-        for entry in summaries:
-            if entry.turn_number == turn_number:
-                turn_summary = entry.summary
-                break
-
-    # 2. 获取 crisis 标记
-    crisis_row = (
-        (
-            await db.execute(
-                select(AuditRecord).where(
-                    AuditRecord.session_id == session_id,
-                    AuditRecord.turn_number == turn_number,
-                )
-            )
-        )
-        .scalars()
-        .first()
-    )
-
-    crisis_detected = crisis_row.crisis_detected if crisis_row else False
-    crisis_topic = crisis_row.crisis_topic if crisis_row else None
-
-    # 3. 获取目标轮附近的消息原文
-    min_turn = max(1, turn_number - context_turns)
+    session_id = scalar.session_id
+    turn_number = scalar.turn_number
+    min_turn = turn_number - context_turns
     max_turn = turn_number + context_turns
 
-    msg_rows = (
+    messages = (
         (
             await db.execute(
                 select(Message)
+                .join(Session, Session.id == Message.session_id)
                 .where(
                     Message.session_id == session_id,
+                    Session.child_user_id == child_user_id,
                     Message.turn_number.between(min_turn, max_turn),
-                    Message.status == "active",
+                    Message.status != MessageStatus.discarded,
+                    Message.role.in_([MessageRole.ai, MessageRole.human]),
                 )
-                .order_by(Message.turn_number, Message.created_at)
+                # desc + id desc:相同 created_at 时按 id 倒序固定次序,避免
+                # 同轮 H/A 的两个不同顺序出现,LLC 视角混乱。
+                .order_by(Message.created_at.desc(), Message.id.desc())
             )
         )
         .scalars()
         .all()
     )
+    adapter = TypeAdapter(list[FetchMessageResult])
+    fetch_result = adapter.dump_json(adapter.validate_python(messages)).decode()
 
-    messages: list[dict[str, Any]] = []
-    for m in msg_rows:
-        messages.append(
-            {
-                "role": m.role.value if hasattr(m.role, "value") else m.role,
-                "content": m.content,
-                "turn_number": m.turn_number,
-                "created_at": str(m.created_at) if m.created_at else None,
-            }
-        )
-
-    # 4. 获取 session 时间范围
-    time_range = await _get_session_time_range(db, session_id)
-
-    return {
-        "session_id": session_id,
-        "turn_number": turn_number,
-        "turn_summary": turn_summary,
-        "crisis_detected": crisis_detected,
-        "crisis_topic": crisis_topic,
-        "session_time_range": time_range,
-        "messages": messages,
-    }
+    return fetch_result
 
 
 async def fetch_notes(
     db: AsyncSession,
-    session_id: str,
-) -> dict[str, Any] | None:
-    """返回 rolling_summaries.session_notes 全文 + 元信息。
+    child_user_id: UUID,
+    rolling_summary_id: UUID,
+) -> str | None:
+    """按 ``RollingSummary.id`` 取整段 ``session_notes`` + 元信息。
 
     Args:
         db: 异步 DB session。
-        session_id: session UUID 字符串。
+        child_user_id: 孩子用户 UUID。query 中 join Session 做所有权校验,
+            跨 child 取值会被滤掉(handler 层无需再判)。
+        rolling_summary_id: ``RollingSummary`` 主键 UUID(由 SearchHistory 检索返回)。
 
     Returns:
-        包含 session_notes、last_turn、session_created_at 的 dict；
-        若不存在则返回 None。
+        ``FetchRollingSummaryResult`` 的 JSON 字符串;若不存在或跨 child 则 None。
     """
-    from app.domain.audit.models import RollingSummary
-    from app.domain.chat.models import Session
-
-    stmt = (
-        select(RollingSummary, Session.created_at)
-        .join(Session, RollingSummary.session_id == Session.id)
-        .where(RollingSummary.session_id == session_id)
+    scalar = await db.scalar(
+        select(RollingSummary)
+        .join(Session, Session.id == RollingSummary.session_id)
+        .where(RollingSummary.id == rolling_summary_id, Session.child_user_id == child_user_id)
     )
-    row = (await db.execute(stmt)).one_or_none()
-    if row is None:
+    if scalar is None:
         return None
 
-    rs_row, session_created_at = row
-    return {
-        "session_id": session_id,
-        "session_notes": rs_row.session_notes,
-        "last_turn": rs_row.last_turn,
-        "updated_at": str(rs_row.updated_at) if rs_row.updated_at else None,
-        "session_created_at": str(session_created_at) if session_created_at else None,
-    }
+    note = FetchRollingSummaryResult.model_validate(scalar).model_dump_json()
+
+    return note
 
 
 async def fetch_report(
     db: AsyncSession,
-    report_id: str,
-) -> dict[str, Any] | None:
-    """返回完整 daily_report 结构化 dict。generic,不加 child_user_id 过滤。
+    child_user_id: UUID,
+    report_id: UUID,
+) -> str | None:
+    """按 ``DailyReport.id`` 取整条结构化报告。
+
+    历史版本 ``generic,不加 child_user_id 过滤`` 由 tools 层手工校验;
+    现版本内联 join Session 做所有权校验,跨 child 取值被 SQL 滤掉。
 
     Args:
         db: 异步 DB session。
-        report_id: daily_report 的 UUID 字符串。
+        child_user_id: 孩子用户 UUID。
+        report_id: daily_report 的 UUID。
 
     Returns:
-        包含 report 全部字段的结构化 dict；不存在则返回 None。
+        ``FetchDailyReportResult`` 的 JSON 字符串;不存在或跨 child 则 None。
     """
-    from app.domain.expert.models import DailyReport
 
-    stmt = select(DailyReport).where(DailyReport.id == report_id)
-    row = (await db.execute(stmt)).scalar_one_or_none()
-    if row is None:
+    scalar = await db.scalar(
+        select(DailyReport)
+        .join(Session, Session.id == DailyReport.session_id)
+        .where(DailyReport.id == report_id, Session.child_user_id == child_user_id)
+    )
+    if scalar is None:
         return None
 
-    return {
-        "id": str(row.id),
-        "child_user_id": str(row.child_user_id),
-        "session_id": str(row.session_id),
-        "report_date": row.report_date.isoformat(),
-        "overall_status": row.overall_status.value,
-        "degraded": row.degraded,
-        "delivered_at": row.delivered_at.isoformat() if row.delivered_at else None,
-        "today_overview": row.today_overview,
-        "what_was_discussed": row.what_was_discussed,
-        "emotion_changes": row.emotion_changes,
-        "noteworthy": row.noteworthy,
-        "suggestions": row.suggestions,
-        "anomaly_periods": row.anomaly_periods,
-    }
+    fetch_result = FetchDailyReportResult.model_validate(scalar).model_dump_json()
+    return fetch_result

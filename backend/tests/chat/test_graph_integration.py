@@ -220,10 +220,11 @@ class TestCrisisTriggerPath:
         )
         db_session.add(post)
 
-        # Seed RollingSummary.crisis_locked_message_id
+        # Seed RollingSummary.crisis_locked_message_id(M11 后 turn_summaries 不再挂在
+        # RollingSummary 上,改为独立 turn_summaries 表,这里只 seed rolling 行本身)
         await db_session.execute(
-            text("INSERT INTO rolling_summaries (session_id, last_turn, crisis_locked_message_id, turn_summaries, session_notes, created_at) "
-                 "VALUES (:sid, 3, :mid, '[]', '', :now)"),
+            text("INSERT INTO rolling_summaries (session_id, last_turn, crisis_locked_message_id, session_notes, created_at) "
+                 "VALUES (:sid, 3, :mid, '', :now)"),
             {"sid": sid, "mid": target_mid, "now": now},
         )
 

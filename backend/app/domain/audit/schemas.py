@@ -9,7 +9,6 @@ LLM tool 用 `ReplaceInNotes` 由 LangChain `bind_tools()` 消费,
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -96,7 +95,8 @@ class AuditDimensionScores(BaseModel):
 class TurnSummaryEntry(BaseModel):
     """单轮对话的客观中立短摘要。
 
-    审查图每轮 append 一条到 `rolling_summaries.turn_summaries`;
+    审查图每轮由 ``audit.usecase.write_audit_results`` 落 ``turn_summaries`` 表
+    一行(取代旧的 ``rolling_summaries.turn_summaries`` JSONB 字段,后者已下线);
     摘要口吻严格客观中立,禁带风控判断。
 
     `frozen=True` 防止原地修改绕过 SQLAlchemy 脏检测。
@@ -104,28 +104,12 @@ class TurnSummaryEntry(BaseModel):
     Attributes:
         turn_number: 对话轮次编号,与 ai_turn_counter 对齐。
         summary: 单行摘要,≤100 字符。
-        created_at: ISO-8601 格式 UTC 时间戳。
     """
 
     model_config = ConfigDict(frozen=True)
 
     turn_number: int = Field(description="对话轮次编号，与 ai_turn_counter 对齐")
     summary: str = Field(max_length=100, description="单行摘要，≤100 字符")
-    created_at: str = Field(description="ISO-8601 格式 UTC 时间戳")
-
-    @field_validator("created_at")
-    @classmethod
-    def _valid_iso8601(cls, v: str) -> str:
-        """校验 created_at 字段为合法 ISO-8601 字符串。
-
-        Args:
-            v: 原始字段值。
-
-        Returns:
-            原值(校验通过后透传)。
-        """
-        datetime.fromisoformat(v)
-        return v
 
 
 class AuditOutputSchema(BaseModel):

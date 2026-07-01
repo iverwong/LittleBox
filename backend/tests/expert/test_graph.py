@@ -26,7 +26,11 @@ from app.domain.expert.graph import (
     route_after_tools,
     write_results,
 )
-from app.domain.expert.schemas import DailyDimensionSummary, ExpertReportSchema
+from app.domain.expert.schemas import (
+    DailyDimensionSummary,
+    ExpertReportSchema,
+    SearchSourceType,
+)
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 # 注意：pytest.mark.asyncio 只在需要 async 的类上单独标注
@@ -96,7 +100,10 @@ _TC_OUTPUT = _tc(
 )
 
 _TC_SEARCH = _tc("SearchHistoryInput", {"keywords": ["游戏", "学校"]})
-_TC_FETCH = _tc("FetchByRefInput", {"ref": f"turn:{SID}#3"})
+_TC_FETCH = _tc(
+    "FetchByRefInput",
+    {"search_source": SearchSourceType.TURN_SUMMARY.value, "ref": str(uuid.uuid4())},
+)
 
 
 def _make_mock_db() -> MagicMock:
@@ -106,6 +113,12 @@ def _make_mock_db() -> MagicMock:
     result_mock = MagicMock()
     result_mock.fetchall.return_value = []
     mock_db.execute = AsyncMock(return_value=result_mock)
+    # ``_fetch_today_materials`` 走 ``db.scalar`` 与 ``db.scalars``:
+    # 都需要返回空集(None 或空迭代器)以与"无数据"路径对齐
+    mock_db.scalar = AsyncMock(return_value=None)
+    scalars_iter = MagicMock()
+    scalars_iter.__iter__.return_value = iter([])
+    mock_db.scalars = AsyncMock(return_value=scalars_iter)
     mock_db.commit = AsyncMock()
     return mock_db
 

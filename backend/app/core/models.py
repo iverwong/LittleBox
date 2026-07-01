@@ -1,8 +1,8 @@
 """全栈 ORM 聚合点。
 
 显式 import 五个业务域（accounts / chat / audit / expert / notifications）
-共 13 张表，与 `Base` / `BaseMixin` 一起再导出。`alembic/env.py` 必须
-`from app.core.models import Base`，否则 alembic 看不到全部 13 张表，
+共 14 张表，与 `Base` / `BaseMixin` 一起再导出。`alembic/env.py` 必须
+`from app.core.models import Base`，否则 alembic 看不到全部 14 张表，
 `alembic check` 会产 DROP。
 
 D-1 边界：本模块是零业务逻辑的纯聚合，不引任何 API 路由 / use case /
@@ -24,7 +24,7 @@ from app.domain.accounts.models import (
     FamilyMember,
     User,
 )
-from app.domain.audit.models import AuditRecord, RollingSummary
+from app.domain.audit.models import AuditRecord, RollingSummary, TurnSummary
 from app.domain.chat.models import Message, Session
 from app.domain.expert.models import DailyReport
 from app.domain.notifications.models import Notification
@@ -40,9 +40,10 @@ __all__ = [
     "AuthToken",
     "DeviceToken",
     "DataDeletionRequest",
-    # audit(2)
+    # audit(3)
     "AuditRecord",
     "RollingSummary",
+    "TurnSummary",
     # chat(2)
     "Session",
     "Message",
